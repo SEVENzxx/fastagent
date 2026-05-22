@@ -2,21 +2,22 @@
 
 from datetime import datetime
 
-from pydantic import BaseModel, EmailStr, field_validator
+from pydantic import ConfigDict, EmailStr, field_validator
 
 from app.config import settings
+from app.schemas.base import CamelModel
 
 
 # ── 请求 Schema ───────────────────────────────────────────────────────────
 
-class LoginRequest(BaseModel):
+class LoginRequest(CamelModel):
     """登录请求"""
 
     email: EmailStr
     password: str
 
 
-class RegisterRequest(BaseModel):
+class RegisterRequest(CamelModel):
     """注册请求 — 创建租户 + 管理员"""
 
     company_name: str
@@ -39,7 +40,7 @@ class RegisterRequest(BaseModel):
         return v
 
 
-class RefreshRequest(BaseModel):
+class RefreshRequest(CamelModel):
     """刷新令牌请求"""
 
     refresh_token: str
@@ -47,7 +48,7 @@ class RefreshRequest(BaseModel):
 
 # ── 响应 Schema ───────────────────────────────────────────────────────────
 
-class TokenResponse(BaseModel):
+class TokenResponse(CamelModel):
     """JWT 令牌响应"""
 
     access_token: str
@@ -56,10 +57,14 @@ class TokenResponse(BaseModel):
     expires_in: int = settings.JWT_EXPIRE_MINUTES * 60
 
 
-class UserResponse(BaseModel):
+class UserResponse(CamelModel):
     """当前用户信息"""
 
-    model_config = {"from_attributes": True}
+    model_config = ConfigDict(
+        alias_generator=CamelModel.model_config["alias_generator"],
+        populate_by_name=True,
+        from_attributes=True,
+    )
 
     id: int
     email: str

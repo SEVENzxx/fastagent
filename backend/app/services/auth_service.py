@@ -17,12 +17,12 @@ from app.core.security import (
 )
 from app.models.employee import Employee
 from app.models.tenant import Tenant
+from app.utils.id_generator import generate_id
 
 
 def _slugify(name: str) -> str:
     """生成 URL slug：英文转小写，中文转拼音，混合处理"""
     if not name or not name.strip():
-        from app.utils.id_generator import generate_id
         return f"tenant-{generate_id()}"
 
     pinyin_list = lazy_pinyin(name)
@@ -30,7 +30,6 @@ def _slugify(name: str) -> str:
     slug = re.sub(r"[^a-z0-9-]+", "-", slug.lower())
     slug = re.sub(r"-+", "-", slug).strip("-")
     if not slug:
-        from app.utils.id_generator import generate_id
         return f"tenant-{generate_id()}"
 
     return slug
