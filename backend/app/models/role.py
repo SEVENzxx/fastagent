@@ -2,13 +2,17 @@
 
 from datetime import datetime
 from enum import Enum
+from typing import TYPE_CHECKING
 
 from sqlalchemy import BigInteger, DateTime, ForeignKey, Index, String, Text
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
 
 from app.models.base import Base
 from app.utils.id_generator import generate_id
+
+if TYPE_CHECKING:
+    pass
 
 
 # ── 角色 ──────────────────────────────────────────────────────────────────
@@ -45,6 +49,14 @@ class Role(Base):
         comment="更新时间",
     )
 
+    # ── 关联 ──
+    role_permissions: Mapped[list["RolePermission"]] = relationship(
+        "RolePermission", back_populates="role", cascade="all, delete-orphan"
+    )
+    employee_roles: Mapped[list["EmployeeRole"]] = relationship(
+        "EmployeeRole", back_populates="role", cascade="all, delete-orphan"
+    )
+
     __table_args__ = (
         Index("idx_roles_tenant_name", "tenant_id", "name", unique=True),
         {"comment": "角色表"},
@@ -54,11 +66,65 @@ class Role(Base):
 # ── 权限码枚举 ───────────────────────────────────────────────────────────
 
 class PermissionCode(str, Enum):
+    # ── 会话 ──
+    VIEW_ASSIGNED_CHATS = "view_assigned_chats"
     VIEW_ALL_CHATS = "view_all_chats"
-    EXPORT_DATA = "export_data"
+    MANAGE_CONVERSATIONS = "manage_conversations"
+
+    # ── 客户/联系人 ──
+    VIEW_CONTACTS = "view_contacts"
+    MANAGE_CONTACTS = "manage_contacts"
+    EXPORT_CONTACTS = "export_contacts"
+
+    # ── 商品 ──
+    VIEW_PRODUCTS = "view_products"
+    MANAGE_PRODUCTS = "manage_products"
+
+    # ── 订单 ──
+    VIEW_ORDERS = "view_orders"
+    MANAGE_ORDERS = "manage_orders"
+    UPDATE_ORDER_STATUS = "update_order_status"
+
+    # ── 知识库 ──
+    VIEW_KB = "view_kb"
     MANAGE_KB = "manage_kb"
-    MANAGE_TEAM = "manage_team"
-    MANAGE_DATABASE = "manage_database"
+
+    # ── 营销资料 ──
+    VIEW_MARKETING = "view_marketing"
+    MANAGE_MARKETING = "manage_marketing"
+
+    # ── 图片库 ──
+    VIEW_IMAGES = "view_images"
+    MANAGE_IMAGES = "manage_images"
+
+    # ── 员工/团队 ──
+    VIEW_EMPLOYEES = "view_employees"
+    MANAGE_EMPLOYEES = "manage_employees"
+    MANAGE_ROLES = "manage_roles"
+
+    # ── 计费与用量 ──
+    VIEW_BILLING = "view_billing"
+    MANAGE_BILLING = "manage_billing"
+
+    # ── 数据分析 ──
+    VIEW_ANALYTICS = "view_analytics"
+    EXPORT_ANALYTICS = "export_analytics"
+
+    # ── 渠道配置 ──
+    VIEW_CHANNELS = "view_channels"
+    MANAGE_CHANNELS = "manage_channels"
+
+    # ── LLM 与 AI ──
+    MANAGE_LLM_CONFIG = "manage_llm_config"
+    MANAGE_SENSITIVE_WORDS = "manage_sensitive_words"
+
+    # ── Admin/超管 ──
+    MANAGE_TENANTS = "manage_tenants"
+    MANAGE_PLANS = "manage_plans"
+    VIEW_AUDIT_LOGS = "view_audit_logs"
+    MANAGE_BACKUPS = "manage_backups"
+    MANAGE_SYSTEM_SETTINGS = "manage_system_settings"
+    EXPORT_DATA = "export_data"
 
 
 # ── 权限 ──────────────────────────────────────────────────────────────────
@@ -114,6 +180,9 @@ class RolePermission(Base):
         comment="权限 ID",
     )
 
+    role: Mapped["Role"] = relationship("Role", back_populates="role_permissions")
+    permission: Mapped["Permission"] = relationship("Permission")
+
     __table_args__ = (
         Index("idx_role_permissions_permission", "permission_id"),
         {"comment": "角色-权限关联表"},
@@ -139,6 +208,8 @@ class EmployeeRole(Base):
         primary_key=True,
         comment="角色 ID",
     )
+
+    role: Mapped["Role"] = relationship("Role", back_populates="employee_roles")
 
     __table_args__ = (
         Index("idx_employee_roles_role", "role_id"),

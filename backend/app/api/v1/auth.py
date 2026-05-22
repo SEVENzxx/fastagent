@@ -14,6 +14,7 @@ from app.schemas import (
     UserResponse,
 )
 from app.services.auth_service import login, refresh_token, register_tenant
+from app.services.role_service import get_employee_permission_codes
 
 router = APIRouter(prefix="/auth", tags=["认证"])
 
@@ -60,5 +61,10 @@ async def refresh_route(payload: RefreshRequest, db: AsyncSession = Depends(get_
 # ── 当前用户 ─────────────────────────────────────────────────────────────
 
 @router.get("/me", response_model=UserResponse)
-async def me(current_user: Employee = Depends(get_current_user)):
-    return UserResponse.model_validate(current_user)
+async def me(
+    current_user: Employee = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    result = UserResponse.model_validate(current_user)
+    result.permissions = list(await get_employee_permission_codes(db, current_user))
+    return result

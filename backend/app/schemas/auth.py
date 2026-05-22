@@ -72,3 +72,4 @@ class UserResponse(CamelModel):
     is_superuser: bool
     tenant_id: int
     created_at: datetime
+    permissions: list[str] = []

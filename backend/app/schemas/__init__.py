@@ -7,6 +7,15 @@ from app.schemas.auth import (
     TokenResponse,
     UserResponse,
 )
+from app.schemas.role import (
+    PermissionGroupedResponse,
+    PermissionResponse,
+    RoleCreate,
+    RoleDetailResponse,
+    RolePermissionAssign,
+    RoleResponse,
+    RoleUpdate,
+)
 
 __all__ = [
     "LoginRequest",
@@ -14,4 +23,11 @@ __all__ = [
     "RefreshRequest",
     "TokenResponse",
     "UserResponse",
+    "PermissionGroupedResponse",
+    "PermissionResponse",
+    "RoleCreate",
+    "RoleDetailResponse",
+    "RolePermissionAssign",
+    "RoleResponse",
+    "RoleUpdate",
 ]

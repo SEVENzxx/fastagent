@@ -2,9 +2,12 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.v1.auth import router as auth_router
+from app.api.v1.permissions import router as permissions_router
+from app.api.v1.roles import router as roles_router
 from app.config import settings
 from app.database import check_db_connection
-from app.redis import check_redis_connection
+from app.redis_client import check_redis_connection
+import uvicorn
 
 app = FastAPI(
     title=settings.APP_NAME,
@@ -23,6 +26,8 @@ app.add_middleware(
 
 # ── 路由注册 ─────────────────────────────────────────────────────────────
 app.include_router(auth_router, prefix="/api/v1")
+app.include_router(permissions_router, prefix="/api/v1")
+app.include_router(roles_router, prefix="/api/v1")
 
 # ── 健康检查 ─────────────────────────────────────────────────────────────
 @app.get("/health")
@@ -36,3 +41,10 @@ async def health():
         "redis": "connected" if redis_ok else "disconnected",
     }
 
+if __name__ == "__main__":
+    uvicorn.run(
+        "app.main:app",
+        host="0.0.0.0",
+        port=8000,
+        reload=True,  # 开发模式自动重载
+    )

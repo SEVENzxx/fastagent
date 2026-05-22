@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.security import decode_token
 from app.database import get_db
 from app.models.employee import Employee
+from app.services.role_service import get_employee_permission_codes
 
 _bearer_scheme = HTTPBearer()
 
@@ -15,17 +16,10 @@ _bearer_scheme = HTTPBearer()
 async def get_current_user(
     credentials: HTTPAuthorizationCredentials = Depends(_bearer_scheme),
     db: AsyncSession = Depends(get_db),
-) -> type[Employee]:
-    """从 Authorization header 中解析 JWT，返回当前登录员工。
-
-    用法：
-        @app.get("/me")
-        async def me(current_user = Depends(get_current_user)):
-            return current_user
-    """
+) -> Employee:
+    """从 Authorization header 中解析 JWT，返回当前登录员工。"""
     token = credentials.credentials
 
-    # 解码 JWT
     try:
         payload = decode_token(token)
     except JWTError:
@@ -34,7 +28,6 @@ async def get_current_user(
             detail="令牌无效或已过期",
         )
 
-    # 查询员工
     employee_id = int(payload["sub"])
     employee = await db.get(Employee, employee_id)
 
@@ -45,3 +38,36 @@ async def get_current_user(
         )
 
     return employee
+
+
+def require_permission(code: str):
+    """要求当前员工拥有指定权限码。超管自动放行。"""
+
+    async def checker(
+        current_user: Employee = Depends(get_current_user),
+        db: AsyncSession = Depends(get_db),
+    ) -> Employee:
+        if current_user.is_superuser:
+            return current_user
+
+        codes = await get_employee_permission_codes(db, current_user)
+        if code not in codes:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"缺少权限: {code}",
+            )
+        return current_user
+
+    return checker
+
+
+async def require_superuser(
+    current_user: Employee = Depends(get_current_user),
+) -> Employee:
+    """要求当前用户为平台超级管理员。"""
+    if not current_user.is_superuser:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="需要超级管理员权限",
+        )
+    return current_user
