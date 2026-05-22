@@ -1,24 +1,23 @@
 """租户模型"""
 
-import uuid
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Index, String, Text
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Index, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import func, text
 
 from app.models.base import Base
+from app.utils.id_generator import generate_id
 
 
 class Tenant(Base):
     __tablename__ = "tenants"
 
     # ── 主键 ──────────────────────────────────────────────────────────────
-    id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
+    id: Mapped[int] = mapped_column(
+        BigInteger,
         primary_key=True,
-        server_default=text("uuid_generate_v4()"),
+        default=generate_id,
         comment="主键",
     )
 
@@ -29,8 +28,8 @@ class Tenant(Base):
     )
 
     # ── 套餐关联 ──────────────────────────────────────────────────────────
-    plan_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("plans.id"), comment="当前套餐"
+    plan_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("plans.id"), comment="当前套餐"
     )
     plan_expires_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), comment="套餐到期时间"

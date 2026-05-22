@@ -1,30 +1,29 @@
 """员工 / 坐席模型"""
 
-import uuid
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, JSON, String
-from sqlalchemy.dialects.postgresql import UUID
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Index, Integer, JSON, String
+from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql import func, text
 
 from app.models.base import Base
+from app.utils.id_generator import generate_id
 
 
 class Employee(Base):
     __tablename__ = "employees"
 
     # ── 主键 ──────────────────────────────────────────────────────────────
-    id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
+    id: Mapped[int] = mapped_column(
+        BigInteger,
         primary_key=True,
-        server_default=text("uuid_generate_v4()"),
+        default=generate_id,
         comment="主键",
     )
 
     # ── 租户关联 ──────────────────────────────────────────────────────────
-    tenant_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
+    tenant_id: Mapped[int] = mapped_column(
+        BigInteger,
         ForeignKey("tenants.id"),
         nullable=False,
         comment="所属租户",

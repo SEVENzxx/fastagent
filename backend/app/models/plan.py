@@ -1,24 +1,23 @@
 """订阅套餐模型"""
 
-import uuid
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Integer, JSON, String, Text
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy import BigInteger, Boolean, DateTime, Integer, JSON, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql import func, text
 
 from app.models.base import Base
+from app.utils.id_generator import generate_id
 
 
 class Plan(Base):
     __tablename__ = "plans"
 
     # ── 主键 ──────────────────────────────────────────────────────────────
-    id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
+    id: Mapped[int] = mapped_column(
+        BigInteger,
         primary_key=True,
-        server_default=text("uuid_generate_v4()"),
+        default=generate_id,
         comment="主键",
     )
 

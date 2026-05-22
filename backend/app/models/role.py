@@ -1,15 +1,14 @@
 """角色与权限模型"""
 
-import uuid
 from datetime import datetime
 from enum import Enum
 
-from sqlalchemy import DateTime, ForeignKey, Index, String, Text
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy import BigInteger, DateTime, ForeignKey, Index, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
-from sqlalchemy.sql import func, text
+from sqlalchemy.sql import func
 
 from app.models.base import Base
+from app.utils.id_generator import generate_id
 
 
 # ── 角色 ──────────────────────────────────────────────────────────────────
@@ -19,14 +18,14 @@ class Role(Base):
 
     __tablename__ = "roles"
 
-    id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
+    id: Mapped[int] = mapped_column(
+        BigInteger,
         primary_key=True,
-        server_default=text("uuid_generate_v4()"),
+        default=generate_id,
         comment="主键",
     )
-    tenant_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
+    tenant_id: Mapped[int] = mapped_column(
+        BigInteger,
         ForeignKey("tenants.id"),
         nullable=False,
         comment="所属租户",
@@ -69,10 +68,10 @@ class Permission(Base):
 
     __tablename__ = "permissions"
 
-    id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
+    id: Mapped[int] = mapped_column(
+        BigInteger,
         primary_key=True,
-        server_default=text("uuid_generate_v4()"),
+        default=generate_id,
         comment="主键",
     )
     code: Mapped[str] = mapped_column(
@@ -102,14 +101,14 @@ class RolePermission(Base):
 
     __tablename__ = "role_permissions"
 
-    role_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
+    role_id: Mapped[int] = mapped_column(
+        BigInteger,
         ForeignKey("roles.id"),
         primary_key=True,
         comment="角色 ID",
     )
-    permission_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
+    permission_id: Mapped[int] = mapped_column(
+        BigInteger,
         ForeignKey("permissions.id"),
         primary_key=True,
         comment="权限 ID",
@@ -128,14 +127,14 @@ class EmployeeRole(Base):
 
     __tablename__ = "employee_roles"
 
-    employee_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
+    employee_id: Mapped[int] = mapped_column(
+        BigInteger,
         ForeignKey("employees.id"),
         primary_key=True,
         comment="员工 ID",
     )
-    role_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
+    role_id: Mapped[int] = mapped_column(
+        BigInteger,
         ForeignKey("roles.id"),
         primary_key=True,
         comment="角色 ID",
