@@ -19,9 +19,24 @@ const router = createRouter({
           component: () => import('../views/admin/RoleListPage.vue'),
         },
         {
+          path: 'admin/employees',
+          name: 'admin-employees',
+          component: () => import('../views/admin/EmployeeListPage.vue'),
+        },
+        {
           path: 'admin/permissions',
           name: 'admin-permissions',
           component: () => import('../views/admin/PermissionListPage.vue'),
+        },
+        {
+          path: 'profile',
+          name: 'profile',
+          component: () => import('../views/profile/ProfilePage.vue'),
+        },
+        {
+          path: 'profile/password',
+          name: 'profile-password',
+          component: () => import('../views/profile/ChangePasswordPage.vue'),
         },
       ],
     },

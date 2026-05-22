@@ -2,7 +2,7 @@
 
 from datetime import datetime
 
-from pydantic import ConfigDict, EmailStr, field_validator
+from pydantic import ConfigDict, EmailStr, field_serializer, field_validator
 
 from app.config import settings
 from app.schemas.base import CamelModel
@@ -73,3 +73,7 @@ class UserResponse(CamelModel):
     tenant_id: int
     created_at: datetime
     permissions: list[str] = []
+
+    @field_serializer("id", "tenant_id")
+    def serialize_bigint_id(self, value: int) -> str:
+        return str(value)

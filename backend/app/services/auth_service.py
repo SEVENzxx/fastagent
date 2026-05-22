@@ -16,8 +16,21 @@ from app.core.security import (
     verify_password,
 )
 from app.models.employee import Employee
+from app.models.role import EmployeeRole, Permission, PermissionCode, Role, RolePermission
 from app.models.tenant import Tenant
 from app.utils.id_generator import generate_id
+
+
+AGENT_PERMISSION_CODES = {
+    PermissionCode.VIEW_ASSIGNED_CHATS.value,
+    PermissionCode.MANAGE_CONVERSATIONS.value,
+    PermissionCode.VIEW_CONTACTS.value,
+    PermissionCode.VIEW_PRODUCTS.value,
+    PermissionCode.VIEW_ORDERS.value,
+    PermissionCode.VIEW_KB.value,
+    PermissionCode.VIEW_MARKETING.value,
+    PermissionCode.VIEW_IMAGES.value,
+}
 
 
 def _slugify(name: str) -> str:
@@ -73,6 +86,27 @@ async def register_tenant(
     )
     db.add(employee)
     await db.flush()
+
+    permissions = list((await db.execute(select(Permission))).scalars().all())
+    admin_role = Role(
+        tenant_id=tenant.id,
+        name="管理员",
+        description="默认管理员角色，拥有全部权限",
+    )
+    agent_role = Role(
+        tenant_id=tenant.id,
+        name="坐席",
+        description="默认坐席角色，拥有基础业务权限",
+    )
+    db.add_all([admin_role, agent_role])
+    await db.flush()
+
+    for permission in permissions:
+        db.add(RolePermission(role_id=admin_role.id, permission_id=permission.id))
+        if permission.code in AGENT_PERMISSION_CODES:
+            db.add(RolePermission(role_id=agent_role.id, permission_id=permission.id))
+
+    db.add(EmployeeRole(employee_id=employee.id, role_id=admin_role.id))
 
     await db.commit()
     await db.refresh(tenant)

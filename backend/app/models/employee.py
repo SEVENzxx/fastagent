@@ -38,6 +38,7 @@ class Employee(Base):
     # ── 个人资料 ──────────────────────────────────────────────────────────
     display_name: Mapped[str | None] = mapped_column(String(100), comment="显示名称")
     avatar_url: Mapped[str | None] = mapped_column(String(500), comment="头像")
+    phone: Mapped[str | None] = mapped_column(String(50), comment="联系电话")
 
     # ── 权限与限额 ────────────────────────────────────────────────────────
     is_superuser: Mapped[bool] = mapped_column(

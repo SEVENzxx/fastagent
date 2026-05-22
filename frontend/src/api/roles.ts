@@ -12,13 +12,16 @@ export interface PermissionGroupedResponse {
   permissions: PermissionResponse[]
 }
 
-export interface RoleDetailResponse {
+export interface RoleResponse {
   id: string
   tenantId: string
   name: string
   description: string | null
   createdAt: string
   updatedAt: string
+}
+
+export interface RoleDetailResponse extends RoleResponse {
   permissions: PermissionResponse[]
 }
 

@@ -19,6 +19,18 @@ const quickLinks = computed(() => {
       path: '/admin/roles',
       show: permStore.hasPermission('manage_roles') || isSuperuser.value,
     },
+    {
+      title: '员工管理',
+      description: '创建员工并分配角色',
+      path: '/admin/employees',
+      show: permStore.hasPermission('manage_employees') || isSuperuser.value,
+    },
+    {
+      title: '个人资料',
+      description: '更新姓名、头像和技能',
+      path: '/profile',
+      show: true,
+    },
   ]
   return links.filter((link) => link.show)
 })

@@ -20,11 +20,11 @@ export interface TokenResponse {
 }
 
 export interface User {
-  id: number
+  id: string
   email: string
   displayName: string | null
   isSuperuser: boolean
-  tenantId: number
+  tenantId: string
   createdAt: string
   permissions: string[]
 }

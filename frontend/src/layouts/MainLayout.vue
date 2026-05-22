@@ -10,6 +10,21 @@ const permStore = usePermissionStore()
 
 const username = computed(() => authStore.user?.displayName || authStore.user?.email || '已登录用户')
 const isSuperuser = computed(() => authStore.user?.isSuperuser ?? false)
+const userInitial = computed(() => username.value.slice(0, 1).toUpperCase())
+
+function handleUserCommand(command: string) {
+  if (command === 'profile') {
+    router.push('/profile')
+    return
+  }
+  if (command === 'password') {
+    router.push('/profile/password')
+    return
+  }
+  if (command === 'logout') {
+    authStore.logout()
+  }
+}
 
 onMounted(async () => {
   if (authStore.isAuthenticated && !authStore.user) {
@@ -42,6 +57,12 @@ onMounted(async () => {
             <span>角色管理</span>
           </el-menu-item>
         </template>
+        <template v-if="permStore.hasPermission('manage_employees') || isSuperuser">
+          <el-menu-item index="/admin/employees">
+            <span class="nav-icon nav-icon-team" />
+            <span>员工管理</span>
+          </el-menu-item>
+        </template>
       </el-menu>
     </aside>
 
@@ -53,8 +74,20 @@ onMounted(async () => {
         </div>
         <div class="user-actions">
           <el-tag v-if="isSuperuser" type="danger" effect="light">超级管理员</el-tag>
-          <span class="username">{{ username }}</span>
-          <el-button size="small" @click="authStore.logout()">退出</el-button>
+          <el-dropdown trigger="click" @command="handleUserCommand">
+            <button class="user-menu" type="button">
+              <el-avatar :size="30">{{ userInitial }}</el-avatar>
+              <span class="username">{{ username }}</span>
+              <span class="chevron">⌄</span>
+            </button>
+            <template #dropdown>
+              <el-dropdown-menu>
+                <el-dropdown-item command="profile">个人资料</el-dropdown-item>
+                <el-dropdown-item command="password">修改密码</el-dropdown-item>
+                <el-dropdown-item divided command="logout">退出登录</el-dropdown-item>
+              </el-dropdown-menu>
+            </template>
+          </el-dropdown>
         </div>
       </header>
 
@@ -133,9 +166,39 @@ onMounted(async () => {
 
 .nav-icon {
   width: 20px;
+  height: 20px;
   display: inline-flex;
+  align-items: center;
   justify-content: center;
   margin-right: 8px;
+}
+
+.nav-icon-team {
+  position: relative;
+}
+
+.nav-icon-team::before,
+.nav-icon-team::after {
+  content: '';
+  position: absolute;
+  border: 1.6px solid currentColor;
+  border-radius: 999px;
+}
+
+.nav-icon-team::before {
+  top: 3px;
+  left: 7px;
+  width: 6px;
+  height: 6px;
+}
+
+.nav-icon-team::after {
+  left: 4px;
+  bottom: 3px;
+  width: 12px;
+  height: 7px;
+  border-top-left-radius: 7px;
+  border-top-right-radius: 7px;
 }
 
 .workspace {
@@ -184,6 +247,32 @@ onMounted(async () => {
   white-space: nowrap;
   color: var(--text-strong);
   font-weight: 500;
+}
+
+.user-menu {
+  height: 38px;
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  padding: 3px 8px 3px 4px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-strong);
+  cursor: pointer;
+}
+
+.user-menu:hover,
+.user-menu:focus-visible {
+  border-color: var(--border);
+  background: var(--surface-soft);
+  outline: none;
+}
+
+.chevron {
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1;
 }
 
 .main-content {
