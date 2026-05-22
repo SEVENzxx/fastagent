@@ -1,0 +1,59 @@
+import { createRouter, createWebHistory } from 'vue-router'
+import { useAuthStore } from '@/stores/useAuthStore'
+
+const router = createRouter({
+  history: createWebHistory(),
+  routes: [
+    {
+      path: '/',
+      component: () => import('../layouts/MainLayout.vue'),
+      children: [
+        {
+          path: '',
+          name: 'home',
+          component: () => import('../views/HomeView.vue'),
+        },
+        {
+          path: 'admin/roles',
+          name: 'admin-roles',
+          component: () => import('../views/admin/RoleListPage.vue'),
+        },
+        {
+          path: 'admin/permissions',
+          name: 'admin-permissions',
+          component: () => import('../views/admin/PermissionListPage.vue'),
+        },
+      ],
+    },
+    {
+      path: '/login',
+      name: 'login',
+      meta: { public: true },
+      component: () => import('../views/auth/LoginView.vue'),
+    },
+    {
+      path: '/register',
+      name: 'register',
+      meta: { public: true },
+      component: () => import('../views/auth/RegisterView.vue'),
+    },
+  ],
+})
+
+router.beforeEach((to) => {
+  const authStore = useAuthStore()
+  const isPublicRoute = to.meta.public === true
+
+  if (!authStore.isAuthenticated && !isPublicRoute) {
+    return {
+      path: '/login',
+      query: { redirect: to.fullPath },
+    }
+  }
+
+  if (authStore.isAuthenticated && isPublicRoute) {
+    return { path: '/' }
+  }
+})
+
+export default router
