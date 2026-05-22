@@ -1,4 +1,4 @@
-"""Async Alembic migration environment."""
+"""异步 Alembic 迁移环境"""
 
 import asyncio
 import sys
@@ -6,12 +6,12 @@ from logging.config import fileConfig
 from pathlib import Path
 
 from alembic import context
-from sqlalchemy import MetaData
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.config import settings
 from app.database import engine
+from app.models import Base
 
 config = context.config
 
@@ -20,9 +20,8 @@ if config.config_file_name is not None:
 
 config.set_main_option("sqlalchemy.url", settings.DATABASE_URL_SYNC)
 
-# Empty metadata keeps `alembic revision --autogenerate` valid until ORM models
-# are introduced. Replace this with Base.metadata when models are added.
-target_metadata = MetaData()
+# 使用 ORM 模型的联合元数据，让 autogenerate 自动检测变更
+target_metadata = Base.metadata
 
 
 def run_migrations_offline() -> None:
