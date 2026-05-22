@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.api.v1.auth import router as auth_router
 from app.config import settings
 from app.database import check_db_connection
 from app.redis import check_redis_connection
@@ -19,6 +20,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+# ── 路由注册 ─────────────────────────────────────────────────────────────
+app.include_router(auth_router, prefix="/api/v1")
 
 # ── 健康检查 ─────────────────────────────────────────────────────────────
 @app.get("/health")
