@@ -157,6 +157,12 @@ async def delete_employee(
     if employee_id == current_user.id:
         raise HTTPException(status_code=400, detail="不能删除当前登录员工")
 
+    target = await employee_service.get_employee(db, employee_id, current_user.tenant_id)
+    if not target:
+        raise HTTPException(status_code=404, detail="员工不存在")
+    if target.is_superuser:
+        raise HTTPException(status_code=400, detail="不能删除超级管理员")
+
     ok = await employee_service.delete_employee(db, employee_id, current_user.tenant_id)
     if not ok:
         raise HTTPException(status_code=404, detail="员工不存在")

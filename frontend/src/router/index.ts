@@ -29,6 +29,16 @@ const router = createRouter({
           component: () => import('../views/admin/PermissionListPage.vue'),
         },
         {
+          path: 'products',
+          name: 'products',
+          component: () => import('../views/products/ProductListView.vue'),
+        },
+        {
+          path: 'products/categories',
+          name: 'products-categories',
+          component: () => import('../views/products/CategoryManagePage.vue'),
+        },
+        {
           path: 'profile',
           name: 'profile',
           component: () => import('../views/profile/ProfilePage.vue'),

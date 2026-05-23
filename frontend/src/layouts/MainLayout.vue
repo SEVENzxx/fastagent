@@ -63,6 +63,16 @@ onMounted(async () => {
             <span>员工管理</span>
           </el-menu-item>
         </template>
+        <template v-if="permStore.hasPermission('manage_employees') || isSuperuser">
+          <el-menu-item index="/products/categories">
+            <span class="nav-icon nav-icon-folder" />
+            <span>分类管理</span>
+          </el-menu-item>
+        </template>
+        <el-menu-item index="/products">
+          <span class="nav-icon">📦</span>
+          <span>商品管理</span>
+        </el-menu-item>
       </el-menu>
     </aside>
 
@@ -199,6 +209,24 @@ onMounted(async () => {
   height: 7px;
   border-top-left-radius: 7px;
   border-top-right-radius: 7px;
+}
+
+.nav-icon-folder {
+  position: relative;
+  width: 20px;
+  height: 20px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-right: 8px;
+}
+
+.nav-icon-folder::before {
+  content: '';
+  width: 14px;
+  height: 12px;
+  border: 1.6px solid currentColor;
+  border-radius: 3px;
 }
 
 .workspace {
