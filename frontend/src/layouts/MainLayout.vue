@@ -47,13 +47,13 @@ onMounted(async () => {
 
       <el-menu :default-active="router.currentRoute.value.path" router class="sidebar-menu">
         <el-menu-item index="/">
-          <span class="nav-icon">⌂</span>
-          <span>工作台</span>
+          <span class="nav-icon nav-icon-workbench" />
+          <span>会话工作台</span>
         </el-menu-item>
 
         <template v-if="permStore.hasPermission('manage_roles') || isSuperuser">
           <el-menu-item index="/admin/roles">
-            <span class="nav-icon">⚙</span>
+            <span class="nav-icon nav-icon-role" />
             <span>角色管理</span>
           </el-menu-item>
         </template>
@@ -70,7 +70,7 @@ onMounted(async () => {
           </el-menu-item>
         </template>
         <el-menu-item index="/products">
-          <span class="nav-icon">📦</span>
+          <span class="nav-icon nav-icon-product" />
           <span>商品管理</span>
         </el-menu-item>
         <el-menu-item index="/contacts">
@@ -181,20 +181,55 @@ onMounted(async () => {
 .nav-icon {
   width: 20px;
   height: 20px;
+  position: relative;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   margin-right: 8px;
+  flex: 0 0 20px;
+  color: currentColor;
 }
 
-.nav-icon-team {
-  position: relative;
+.nav-icon::before,
+.nav-icon::after {
+  content: '';
+  position: absolute;
+  box-sizing: border-box;
+}
+
+.nav-icon-workbench::before {
+  width: 15px;
+  height: 12px;
+  border: 1.6px solid currentColor;
+  border-radius: 3px;
+}
+
+.nav-icon-workbench::after {
+  width: 7px;
+  height: 1.6px;
+  left: 6px;
+  top: 9px;
+  background: currentColor;
+  box-shadow: 0 -4px 0 currentColor;
+}
+
+.nav-icon-role::before {
+  width: 14px;
+  height: 14px;
+  border: 1.6px solid currentColor;
+  border-radius: 999px;
+}
+
+.nav-icon-role::after {
+  width: 5px;
+  height: 5px;
+  border: 1.6px solid currentColor;
+  border-radius: 999px;
+  background: var(--surface);
 }
 
 .nav-icon-team::before,
 .nav-icon-team::after {
-  content: '';
-  position: absolute;
   border: 1.6px solid currentColor;
   border-radius: 999px;
 }
@@ -215,32 +250,25 @@ onMounted(async () => {
   border-top-right-radius: 7px;
 }
 
-.nav-icon-folder {
-  position: relative;
-  width: 20px;
-  height: 20px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  margin-right: 8px;
-}
-
 .nav-icon-folder::before {
-  content: '';
   width: 14px;
   height: 12px;
   border: 1.6px solid currentColor;
   border-radius: 3px;
 }
 
-.nav-icon-contact {
-  position: relative;
+.nav-icon-folder::after {
+  width: 7px;
+  height: 4px;
+  left: 4px;
+  top: 4px;
+  border-top: 1.6px solid currentColor;
+  border-left: 1.6px solid currentColor;
+  border-top-left-radius: 2px;
 }
 
 .nav-icon-contact::before,
 .nav-icon-contact::after {
-  content: '';
-  position: absolute;
   border: 1.6px solid currentColor;
 }
 
@@ -258,6 +286,23 @@ onMounted(async () => {
   width: 12px;
   height: 8px;
   border-radius: 7px 7px 3px 3px;
+}
+
+.nav-icon-product::before {
+  width: 14px;
+  height: 12px;
+  border: 1.6px solid currentColor;
+  border-radius: 3px;
+  transform: translateY(1px);
+}
+
+.nav-icon-product::after {
+  width: 7px;
+  height: 5px;
+  top: 3px;
+  border: 1.6px solid currentColor;
+  border-bottom: 0;
+  border-radius: 4px 4px 0 0;
 }
 
 .workspace {

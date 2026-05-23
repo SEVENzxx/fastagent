@@ -3,6 +3,7 @@
 from app.models.base import Base
 from app.models.category import Category
 from app.models.contact import Contact
+from app.models.conversation import Conversation, Message
 from app.models.plan import Plan
 from app.models.product import Product
 from app.models.tenant import Tenant
@@ -13,6 +14,8 @@ __all__ = [
     "Base",
     "Category",
     "Contact",
+    "Conversation",
+    "Message",
     "Plan",
     "Product",
     "Tenant",
