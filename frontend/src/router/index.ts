@@ -39,6 +39,16 @@ const router = createRouter({
           component: () => import('../views/products/CategoryManagePage.vue'),
         },
         {
+          path: 'contacts',
+          name: 'contacts',
+          component: () => import('../views/contacts/ContactListView.vue'),
+        },
+        {
+          path: 'contacts/:id',
+          name: 'contact-detail',
+          component: () => import('../views/contacts/ContactDetailPage.vue'),
+        },
+        {
           path: 'profile',
           name: 'profile',
           component: () => import('../views/profile/ProfilePage.vue'),

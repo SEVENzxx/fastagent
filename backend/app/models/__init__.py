@@ -2,6 +2,7 @@
 
 from app.models.base import Base
 from app.models.category import Category
+from app.models.contact import Contact
 from app.models.plan import Plan
 from app.models.product import Product
 from app.models.tenant import Tenant
@@ -11,6 +12,7 @@ from app.models.role import Role, Permission, RolePermission, EmployeeRole, Perm
 __all__ = [
     "Base",
     "Category",
+    "Contact",
     "Plan",
     "Product",
     "Tenant",

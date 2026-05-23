@@ -73,6 +73,10 @@ onMounted(async () => {
           <span class="nav-icon">📦</span>
           <span>商品管理</span>
         </el-menu-item>
+        <el-menu-item index="/contacts">
+          <span class="nav-icon nav-icon-contact" />
+          <span>联系人管理</span>
+        </el-menu-item>
       </el-menu>
     </aside>
 
@@ -227,6 +231,33 @@ onMounted(async () => {
   height: 12px;
   border: 1.6px solid currentColor;
   border-radius: 3px;
+}
+
+.nav-icon-contact {
+  position: relative;
+}
+
+.nav-icon-contact::before,
+.nav-icon-contact::after {
+  content: '';
+  position: absolute;
+  border: 1.6px solid currentColor;
+}
+
+.nav-icon-contact::before {
+  top: 3px;
+  left: 7px;
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+}
+
+.nav-icon-contact::after {
+  left: 4px;
+  bottom: 3px;
+  width: 12px;
+  height: 8px;
+  border-radius: 7px 7px 3px 3px;
 }
 
 .workspace {
