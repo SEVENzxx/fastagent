@@ -10,7 +10,7 @@ from app.core.websocket_manager import manager
 from app.database import AsyncSessionLocal
 from app.models.employee import Employee
 from app.schemas.conversation import MessageCreate
-from app.services import conversation_service
+from app.services import conversation_service, outbound_message_service
 
 router = APIRouter(tags=["WebSocket"])
 
@@ -100,7 +100,7 @@ async def websocket_endpoint(websocket: WebSocket, conversation_id: int, token: 
                 continue
 
             async with AsyncSessionLocal() as db:
-                _, message = await conversation_service.create_message(
+                conversation, message = await conversation_service.create_message(
                     db,
                     conversation_id,
                     employee.tenant_id,
@@ -110,6 +110,7 @@ async def websocket_endpoint(websocket: WebSocket, conversation_id: int, token: 
                         content=content,
                     ),
                 )
+                message = await outbound_message_service.deliver_message(db, conversation, message)
                 await manager.publish(
                     conversation_id,
                     {"type": "message.created", "message": _message_payload(message)},

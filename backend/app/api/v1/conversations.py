@@ -18,7 +18,7 @@ from app.schemas.conversation import (
     MessageListResponse,
     MessageResponse,
 )
-from app.services import conversation_service
+from app.services import conversation_service, outbound_message_service
 
 router = APIRouter(prefix="/conversations", tags=["会话"])
 
@@ -234,12 +234,13 @@ async def create_message(
     当前接口只负责消息落库和实时推送；真实客户入站与 AI 回复会在后续渠道/AI 管线中接入。
     """
     try:
-        _, message = await conversation_service.create_message(
+        conversation, message = await conversation_service.create_message(
             db,
             conversation_id,
             current_user.tenant_id,
             body,
         )
+        message = await outbound_message_service.deliver_message(db, conversation, message)
         await _broadcast_message(message)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
