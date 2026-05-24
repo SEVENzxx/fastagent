@@ -22,6 +22,7 @@ const statusFilter = ref<string | null>(null)
 const createContactId = ref<string | null>(null)
 const createEmployeeId = ref<string | null>(null)
 const createHandlingType = ref('ai_only')
+let refreshTimer: number | undefined
 
 const activeId = computed(() => activeConversation.value?.id ?? null)
 const selectedCreateContact = computed(
@@ -169,9 +170,15 @@ watch([keyword, statusFilter], () => {
 
 onMounted(async () => {
   await Promise.all([loadContacts(), loadEmployees(), loadConversations()])
+  // 事件驱动：WebSocket 推送 message.created / conversation.updated 时自动刷新列表
+  // 30s 兜底轮询：覆盖「未选中会话时期 WebSocket 断开」导致的漏更新（如 webhook 新建会话）
+  refreshTimer = window.setInterval(() => {
+    loadConversations()
+  }, 30000)
 })
 
 onBeforeUnmount(() => {
+  if (refreshTimer) window.clearInterval(refreshTimer)
   ws.close()
 })
 </script>

@@ -5,6 +5,7 @@ from app.models.category import Category
 from app.models.contact import Contact
 from app.models.conversation import Conversation, Message
 from app.models.plan import Plan
+from app.models.platform import Platform
 from app.models.product import Product
 from app.models.tenant import Tenant
 from app.models.employee import Employee
@@ -17,6 +18,7 @@ __all__ = [
     "Conversation",
     "Message",
     "Plan",
+    "Platform",
     "Product",
     "Tenant",
     "Employee",

@@ -49,6 +49,21 @@ const router = createRouter({
           component: () => import('../views/contacts/ContactDetailPage.vue'),
         },
         {
+          path: 'settings/wechat',
+          name: 'settings-wechat',
+          component: () => import('../views/settings/WeChatSettings.vue'),
+        },
+        {
+          path: 'tools/batch-add-wechat',
+          name: 'tools-batch-add-wechat',
+          component: () => import('../views/tools/BatchAddWeChat.vue'),
+        },
+        {
+          path: 'tools/account-binding',
+          name: 'tools-account-binding',
+          component: () => import('../views/tools/AccountBinding.vue'),
+        },
+        {
           path: 'profile',
           name: 'profile',
           component: () => import('../views/profile/ProfilePage.vue'),

@@ -28,7 +28,7 @@ class Conversation(Base):
         BigInteger, ForeignKey("employees.id"), nullable=True, comment="分配坐席ID"
     )
     platform_id: Mapped[int | None] = mapped_column(
-        BigInteger, nullable=True, comment="来源渠道ID"
+        BigInteger, ForeignKey("platforms.id"), nullable=True, comment="来源渠道ID"
     )
     status: Mapped[str] = mapped_column(
         String(20),
