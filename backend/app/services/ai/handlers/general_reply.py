@@ -2,16 +2,21 @@
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
+
 from app.config import settings
 from app.integrations.llm_client import LLMClient, LLMClientError
 from app.services.ai.intent.types import RoutedIntent
 
 
-async def handle_general_reply(routed: RoutedIntent) -> str:
-    """用平台托管的小模型生成通用回复。
+async def handle_general_reply(routed: RoutedIntent) -> AsyncIterator[str]:
+    """用平台托管的小模型流式生成通用回复。
 
     GENERAL_REPLY 处理闲聊、跑题、未知意图和澄清类问题。这里优先调用
-    `.env` 中配置的小模型；服务异常时返回固定兜底话术，保证会话链路不中断。
+    `.env` 中配置的小模型，并通过 SSE 流式返回；服务异常时返回固定兜底话术。
+
+    上层通过 ``async for chunk in handle_general_reply(routed):`` 消费，
+    每个 chunk 是模型实时输出的片段。
     """
     user_text = _build_user_text(routed)
     task_hint = (
@@ -27,19 +32,21 @@ async def handle_general_reply(routed: RoutedIntent) -> str:
         {"role": "user", "content": user_text},
     ]
     try:
-        reply = await LLMClient().chat(
+        has_output = False
+        async for chunk in LLMClient().stream(
             messages,
             model=settings.AI_GENERAL_REPLY_MODEL or settings.AI_LLM_MODEL,
-            max_new_tokens=settings.AI_GENERAL_REPLY_MAX_TOKENS,
             temperature=settings.AI_GENERAL_REPLY_TEMPERATURE,
-        )
+        ):
+            has_output = True
+            yield chunk
+        if not has_output:
+            yield _fallback(routed)
     except LLMClientError:
-        if routed.need_clarification:
-            return "我还需要再确认一下你的具体需求，可以补充说明吗？"
-        return "我先帮你确认一下，可以再描述具体需求吗？"
+        yield _fallback(routed)
 
-    if reply:
-        return reply
+
+def _fallback(routed: RoutedIntent) -> str:
     if routed.need_clarification:
         return "我还需要再确认一下你的具体需求，可以补充说明吗？"
     return "我先帮你确认一下，可以再描述具体需求吗？"

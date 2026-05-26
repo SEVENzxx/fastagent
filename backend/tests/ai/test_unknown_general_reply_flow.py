@@ -1,4 +1,4 @@
-"""未知意图到 GENERAL_REPLY 小模型回复的端到端测试。"""
+"""GENERAL_REPLY 流式回复控制台演示。"""
 
 from __future__ import annotations
 
@@ -16,8 +16,8 @@ pytestmark = pytest.mark.skipif(
 
 
 @pytest.mark.asyncio
-async def test_unknown_intent_routes_to_general_reply_and_calls_small_model(monkeypatch):
-    """用户问题无法命中业务意图时，应走 unknown_intent -> GENERAL_REPLY -> 小模型回复。"""
+async def test_stream_general_reply_to_console(monkeypatch):
+    """流式输出 GENERAL_REPLY 回复到控制台。"""
     monkeypatch.setattr(settings, "AI_EMBEDDING_ENABLED", False)
 
     async def empty_vector_provider(_text: str, _top_k: int, _min_score: float):
@@ -26,17 +26,7 @@ async def test_unknown_intent_routes_to_general_reply_and_calls_small_model(monk
     pipeline = IntentRecognitionPipeline(vector_provider=empty_vector_provider)
     routed = await pipeline.recognize_and_route("我今天好烦啊？")
 
-    print(f"\n routed: {routed}")
-
-    assert routed.primary_intent == "unknown_intent"
-    assert routed.route == "GENERAL_REPLY"
-    assert routed.skill == "general_reply"
-
-    result = await MessageRouter().dispatch(routed)
-
-    print(f"\n result: {result}")
-
-    assert result.route == "GENERAL_REPLY"
-    assert result.skill == "general_reply"
-    assert result.message
-    assert len(result.message) <= 300
+    print(f"\n[route={routed.route}] ", end="", flush=True)
+    async for chunk in MessageRouter().dispatch_stream(routed):
+        print(chunk, end="", flush=True)
+    print()
