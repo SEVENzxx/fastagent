@@ -39,6 +39,23 @@ class Settings(BaseSettings):
     REDIS_URL: str
     REDIS_PASSWORD: str
 
+    # AI model services
+    AI_LLM_PROVIDER: str = "http"
+    AI_LLM_API_KEY: str = ""
+    AI_LLM_BASE_URL: str = "http://127.0.0.1:8003"
+    AI_LLM_MODEL: str = "qwen2.5-0.5b-local"
+    AI_INTENT_JUDGE_MODEL: str = ""
+    AI_GENERAL_REPLY_MODEL: str = ""
+    AI_LLM_TIMEOUT_SECONDS: float = 30.0
+    AI_LLM_MAX_TOKENS: int = 128
+    AI_INTENT_JUDGE_MAX_TOKENS: int = 64
+    AI_GENERAL_REPLY_MAX_TOKENS: int = 128
+    AI_INTENT_JUDGE_TEMPERATURE: float = 0.0
+    AI_GENERAL_REPLY_TEMPERATURE: float = 0.2
+    AI_EMBEDDING_ENABLED: bool = True
+    AI_EMBEDDING_BASE_URL: str = "http://127.0.0.1:8001"
+    AI_EMBEDDING_TIMEOUT_SECONDS: float = 5.0
+
     # Security
     SECRET_KEY: str
     JWT_ALGORITHM: str
