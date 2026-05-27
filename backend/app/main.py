@@ -5,14 +5,9 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
+from app.logging_config import setup_logging
 
-for handler in logging.root.handlers[:]:
-    logging.root.removeHandler(handler)
-
-logging.basicConfig(
-    level=logging.DEBUG if settings.APP_DEBUG else logging.INFO,
-    format="%(asctime)s %(levelname)-8s %(name)s | %(message)s",
-)
+setup_logging()
 
 logger = logging.getLogger(__name__)
 
@@ -95,4 +90,5 @@ if __name__ == "__main__":
         port=8000,
         reload=True,
         access_log=False,  # 关闭 uvicorn 自带的 access log，改用自定义中间件
+        log_config=None,  # 避免 uvicorn 二次覆盖应用日志配置
     )

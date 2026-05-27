@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 import asyncio
+import logging
+import time
 from collections.abc import AsyncIterator
 from typing import Any
 
 import httpx
 
 from app.config import settings
+
+logger = logging.getLogger(__name__)
 
 
 class LLMClientError(RuntimeError):
@@ -47,20 +51,32 @@ class LLMClient:
         temperature: float | None = None,
     ) -> str:
         """非流式聊天补全，Intent Judge 默认使用这个入口。"""
+        call_started = time.perf_counter()
+        selected_model = model or self.model
         if self.provider == "http":
-            return await self._http_openai_complete(
+            text = await self._http_openai_complete(
                 messages,
-                model=model or self.model,
+                model=selected_model,
                 max_tokens=max_tokens or settings.AI_LLM_MAX_TOKENS,
                 temperature=temperature,
             )
-        return await self._acompletion_text(
-            messages,
-            model=model or self.model,
-            max_tokens=max_tokens or settings.AI_LLM_MAX_TOKENS,
-            temperature=temperature,
-            stream=False,
+        else:
+            text = await self._acompletion_text(
+                messages,
+                model=selected_model,
+                max_tokens=max_tokens or settings.AI_LLM_MAX_TOKENS,
+                temperature=temperature,
+                stream=False,
+            )
+        logger.info(
+            "LLM 补全调用完成：provider=%s model=%s messages=%s output_len=%s elapsed_ms=%.0f",
+            self.provider,
+            selected_model,
+            len(messages),
+            len(text),
+            (time.perf_counter() - call_started) * 1000,
         )
+        return text
 
     async def chat(
         self,
@@ -71,18 +87,30 @@ class LLMClient:
         model: str | None = None,
     ) -> str:
         """通用对话补全，GENERAL_REPLY 默认使用这个入口。"""
+        call_started = time.perf_counter()
+        selected_model = model or self.model
         if self.provider == "http":
-            return await self._http_chat(
+            text = await self._http_chat(
                 messages,
                 max_new_tokens=max_new_tokens or settings.AI_LLM_MAX_TOKENS,
                 temperature=temperature,
             )
-        return await self.complete(
-            messages,
-            model=model,
-            max_tokens=max_new_tokens or settings.AI_LLM_MAX_TOKENS,
-            temperature=temperature,
+        else:
+            text = await self.complete(
+                messages,
+                model=selected_model,
+                max_tokens=max_new_tokens or settings.AI_LLM_MAX_TOKENS,
+                temperature=temperature,
+            )
+        logger.info(
+            "LLM 对话调用完成：provider=%s model=%s messages=%s output_len=%s elapsed_ms=%.0f",
+            self.provider,
+            selected_model,
+            len(messages),
+            len(text),
+            (time.perf_counter() - call_started) * 1000,
         )
+        return text
 
     async def generate(
         self,
@@ -93,18 +121,30 @@ class LLMClient:
         model: str | None = None,
     ) -> str:
         """单轮 prompt 补全；内部转成 user message，保持业务接口兼容。"""
+        call_started = time.perf_counter()
+        selected_model = model or self.model
         if self.provider == "http":
-            return await self._http_generate(
+            text = await self._http_generate(
                 prompt,
                 max_new_tokens=max_new_tokens or settings.AI_LLM_MAX_TOKENS,
                 temperature=temperature,
             )
-        return await self.chat(
-            [{"role": "user", "content": prompt}],
-            max_new_tokens=max_new_tokens,
-            temperature=temperature,
-            model=model,
+        else:
+            text = await self.chat(
+                [{"role": "user", "content": prompt}],
+                max_new_tokens=max_new_tokens,
+                temperature=temperature,
+                model=selected_model,
+            )
+        logger.info(
+            "LLM 生成调用完成：provider=%s model=%s prompt_len=%s output_len=%s elapsed_ms=%.0f",
+            self.provider,
+            selected_model,
+            len(prompt),
+            len(text),
+            (time.perf_counter() - call_started) * 1000,
         )
+        return text
 
     async def stream(
         self,
@@ -115,27 +155,49 @@ class LLMClient:
         temperature: float | None = None,
     ) -> AsyncIterator[str]:
         """流式聊天补全；厂商不支持或异常时由上层决定兜底。"""
+        call_started = time.perf_counter()
+        selected_model = model or self.model
         if self.provider == "http":
-            yield await self.complete(
+            text = await self.complete(
                 messages,
-                model=model,
+                model=selected_model,
                 max_tokens=max_tokens,
                 temperature=temperature,
             )
+            logger.info(
+                "LLM 流式调用完成（HTTP 非流式兼容）：provider=%s model=%s output_len=%s elapsed_ms=%.0f",
+                self.provider,
+                selected_model,
+                len(text),
+                (time.perf_counter() - call_started) * 1000,
+            )
+            yield text
             return
 
         response = await self._acompletion(
             messages,
-            model=model or self.model,
+            model=selected_model,
             max_tokens=max_tokens or settings.AI_LLM_MAX_TOKENS,
             temperature=temperature,
             stream=True,
         )
+        chunks = 0
+        output_len = 0
         try:
             async for chunk in response:
                 text = self._extract_stream_delta(chunk)
                 if text:
+                    chunks += 1
+                    output_len += len(text)
                     yield text
+            logger.info(
+                "LLM 流式调用完成：provider=%s model=%s chunks=%s output_len=%s elapsed_ms=%.0f",
+                self.provider,
+                selected_model,
+                chunks,
+                output_len,
+                (time.perf_counter() - call_started) * 1000,
+            )
         except TypeError as exc:
             raise LLMClientError("litellm stream response is not async iterable") from exc
 
@@ -189,11 +251,20 @@ class LLMClient:
             kwargs["api_base"] = self.base_url
 
         try:
+            started = time.perf_counter()
             return await asyncio.wait_for(
                 acompletion(**kwargs),
                 timeout=self.timeout_seconds + 1,
             )
         except Exception as exc:
+            logger.warning(
+                "LiteLLM 补全调用失败：provider=%s model=%s stream=%s elapsed_ms=%.0f error=%s",
+                self.provider,
+                model,
+                stream,
+                (time.perf_counter() - started) * 1000,
+                exc,
+            )
             raise LLMClientError(f"litellm completion error: {exc}") from exc
 
     async def _http_openai_complete(
@@ -248,18 +319,38 @@ class LLMClient:
             raise LLMClientError("AI_LLM_BASE_URL 不能为空")
 
         url = f"{self.base_url.rstrip('/')}{path}"
+        started = time.perf_counter()
         try:
             async with httpx.AsyncClient(timeout=self.timeout_seconds, trust_env=False) as client:
                 response = await client.post(url, json=payload)
                 response.raise_for_status()
                 data = response.json()
         except httpx.HTTPError as exc:
+            logger.warning(
+                "HTTP LLM 请求失败：provider=%s path=%s elapsed_ms=%.0f error=%s",
+                self.provider,
+                path,
+                (time.perf_counter() - started) * 1000,
+                exc,
+            )
             raise LLMClientError(f"http llm error: {exc}") from exc
         except ValueError as exc:
+            logger.warning(
+                "HTTP LLM 返回非 JSON：provider=%s path=%s elapsed_ms=%.0f",
+                self.provider,
+                path,
+                (time.perf_counter() - started) * 1000,
+            )
             raise LLMClientError("http llm response is not valid json") from exc
 
         if not isinstance(data, dict):
             raise LLMClientError("http llm response must be a json object")
+        logger.info(
+            "HTTP LLM 请求完成：provider=%s path=%s elapsed_ms=%.0f",
+            self.provider,
+            path,
+            (time.perf_counter() - started) * 1000,
+        )
         return data
 
     def _extract_message_content(self, response: Any) -> str:

@@ -6,6 +6,9 @@
 
 from __future__ import annotations
 
+import logging
+import time
+
 from app.services.ai.config.intent_config import DEFAULT_INTENT_CONFIG, IntentRecognitionConfig
 from app.services.ai.intent.ambiguity import AmbiguityDetector
 from app.services.ai.intent.context_state import ContextStateResolver
@@ -18,6 +21,8 @@ from app.services.ai.intent.rule_matcher import RuleMatcher
 from app.services.ai.intent.segmenter import MessageSegmenter
 from app.services.ai.intent.types import AmbiguityDecision, IntentHit, IntentResult, PendingIntentState, RoutedIntent
 from app.services.ai.intent.vector_retriever import VectorIntentRetriever, VectorProvider
+
+logger = logging.getLogger(__name__)
 
 
 PIPELINE_STEPS: tuple[tuple[int, str, str], ...] = (
@@ -62,14 +67,23 @@ class IntentRecognitionPipeline:
         pending_state: PendingIntentState | None = None,
     ) -> IntentResult:
         """识别意图，返回 IntentResult。"""
+        started = time.perf_counter()
         # Step 1: TextNormalizer
         original = str(text or "")
         normalized = self.normalizer.normalize(original)
+        logger.info("意图识别流水线开始：text_len=%s normalized_len=%s", len(original), len(normalized))
 
         # Step 2: RuleMatcher
         # 强规则只处理明确、高风险诉求；命中 HUMAN/SILENT 时直接停止后续向量和 LLM。
         strong_hit = self.rule_matcher.match(normalized)
         if strong_hit is not None and strong_hit.route in {"HUMAN", "SILENT"}:
+            logger.info(
+                "意图识别命中强规则并提前结束：intent=%s route=%s confidence=%.4f elapsed_ms=%.0f",
+                strong_hit.intent,
+                strong_hit.route,
+                strong_hit.confidence,
+                (time.perf_counter() - started) * 1000,
+            )
             return IntentResult(
                 original_text=original,
                 normalized_text=normalized,
@@ -91,6 +105,13 @@ class IntentRecognitionPipeline:
         # 如果上一轮正在等待订单号/手机号等槽位，这里优先把当前输入当作槽位补全处理。
         context_hit = self.context_state.resolve(normalized, signals, pending_state)
         if context_hit is not None:
+            logger.info(
+                "意图识别通过待补槽状态完成：intent=%s route=%s confidence=%.4f elapsed_ms=%.0f",
+                context_hit.intent,
+                context_hit.route,
+                context_hit.confidence,
+                (time.perf_counter() - started) * 1000,
+            )
             return IntentResult(
                 original_text=original,
                 normalized_text=normalized,
@@ -111,15 +132,20 @@ class IntentRecognitionPipeline:
             enable_multi_intent=self.config.enable_multi_intent,
         )
         if not segments:
+            logger.info(
+                "意图识别返回未知意图：reason=empty_segments elapsed_ms=%.0f",
+                (time.perf_counter() - started) * 1000,
+            )
             return self._unknown_result(original, normalized, "空文本或无法拆分")
 
+        logger.info("意图识别拆句完成：segments=%s", len(segments))
         hits: list[IntentHit] = []
         for segment in segments:
             hits.append(await self._recognize_segment(segment, normalized, signals))
 
         primary_hit = max(hits, key=lambda item: item.confidence) if hits else None
         candidates = [candidate for hit in hits for candidate in hit.candidates]
-        return IntentResult(
+        result = IntentResult(
             original_text=original,
             normalized_text=normalized,
             primary_intent=primary_hit.intent if primary_hit else "unknown_intent",
@@ -131,6 +157,18 @@ class IntentRecognitionPipeline:
             source=self._source_for_hits(hits),
             reason="多意图识别完成" if len(hits) > 1 else (primary_hit.reason if primary_hit else "无候选"),
         )
+        logger.info(
+            "意图识别流水线完成：primary_intent=%s confidence=%.4f hits=%s candidates=%s multi=%s clarify=%s source=%s elapsed_ms=%.0f",
+            result.primary_intent,
+            result.confidence,
+            len(result.hits),
+            len(result.candidates),
+            result.is_multi_intent,
+            result.need_clarification,
+            result.source,
+            (time.perf_counter() - started) * 1000,
+        )
+        return result
 
     async def recognize_and_route(
         self,
@@ -140,7 +178,17 @@ class IntentRecognitionPipeline:
     ) -> RoutedIntent:
         """识别并路由，返回 RoutedIntent。"""
         # Step 10: IntentRouter
-        return self.router.route(await self.recognize(text, pending_state=pending_state))
+        result = await self.recognize(text, pending_state=pending_state)
+        routed = self.router.route(result)
+        logger.info(
+            "意图路由完成：primary_intent=%s route=%s skill=%s confidence=%.4f hits=%s",
+            routed.primary_intent,
+            routed.route,
+            routed.skill,
+            routed.confidence,
+            len(routed.hits),
+        )
+        return routed
 
     async def _recognize_segment(
         self,
@@ -161,6 +209,15 @@ class IntentRecognitionPipeline:
         )
         # Step 8: AmbiguityDetector
         decision = self.ambiguity_detector.detect(fused)
+        logger.info(
+            "意图片段打分完成：segment_len=%s candidates=%s selected=%s confidence=%.4f ambiguous=%s need_llm=%s",
+            len(segment),
+            len(decision.candidates),
+            decision.intent,
+            decision.confidence,
+            decision.ambiguous,
+            decision.need_llm,
+        )
 
         # Step 9: LLMIntentJudge
         # 只有低置信/歧义时才调用，且只能从 candidates 中选择。
@@ -168,6 +225,12 @@ class IntentRecognitionPipeline:
             judged = await self.llm_judge.judge(segment, decision.candidates)
             if judged is not None:
                 selected = self._candidate_decision(judged.primary_intent, decision)
+                logger.info(
+                    "意图片段已由 LLM 精判：selected=%s secondary=%s clarify=%s",
+                    judged.primary_intent,
+                    judged.secondary_intents,
+                    judged.need_clarification,
+                )
                 return self._hit_from_decision(
                     segment,
                     selected,

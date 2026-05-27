@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 
@@ -10,6 +11,8 @@ from app.services.ai.handlers.general_reply import handle_general_reply
 from app.services.ai.handlers.human import handle_human
 from app.services.ai.handlers.silent import handle_silent
 from app.services.ai.intent.types import RoutedIntent
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -26,6 +29,13 @@ class MessageRouter:
 
     async def dispatch(self, routed: RoutedIntent) -> MessageRouterResult:
         """根据 route 返回非流式处理结果。"""
+        logger.info(
+            "消息路由器开始调度：route=%s skill=%s intent=%s confidence=%.4f",
+            routed.route,
+            routed.skill,
+            routed.primary_intent,
+            routed.confidence,
+        )
         if routed.route == "HUMAN":
             return MessageRouterResult(routed.route, routed.skill, await handle_human(routed))
         if routed.route == "SILENT":
@@ -45,6 +55,12 @@ class MessageRouter:
         上层通过 ``async for chunk in router.dispatch_stream(routed):`` 消费，
         每个 chunk 通过 WebSocket 发送 ``message.chunk`` 事件，流结束后发送 ``message.created``。
         """
+        logger.info(
+            "消息路由器开始流式调度：route=%s skill=%s intent=%s",
+            routed.route,
+            routed.skill,
+            routed.primary_intent,
+        )
         if routed.route == "GENERAL_REPLY":
             async for chunk in handle_general_reply(routed):
                 yield chunk

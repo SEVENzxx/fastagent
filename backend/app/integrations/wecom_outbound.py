@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import logging
 import time
 from typing import Any
 
 import httpx
+
+logger = logging.getLogger(__name__)
 
 
 class WeComOutboundError(RuntimeError):
@@ -43,9 +46,18 @@ class WeComOutboundClient:
             "safe": 0,
             "enable_duplicate_check": 0,
         }
+        logger.info("企业微信 message.send 开始调用：to_user=%s agentid=%s content_len=%s", to_user, agentid, len(content))
         data = await self._post_json("/cgi-bin/message/send", {"access_token": access_token}, payload)
         if int(data.get("errcode", -1)) != 0:
+            logger.warning(
+                "企业微信 message.send 被拒绝：to_user=%s agentid=%s errcode=%s errmsg=%s",
+                to_user,
+                agentid,
+                data.get("errcode"),
+                data.get("errmsg"),
+            )
             raise WeComOutboundError(self._format_error("发送消息失败", data))
+        logger.info("企业微信 message.send 调用完成：to_user=%s agentid=%s", to_user, agentid)
         return {
             "ok": True,
             "api": "message.send",
@@ -66,38 +78,60 @@ class WeComOutboundClient:
         now = time.time()
         cached = _TOKEN_CACHE.get(cache_key)
         if cached and cached[1] > now:
+            logger.info("企业微信 access_token 命中缓存：base_url=%s corpid_len=%s", self.base_url, len(corpid))
             return cached[0]
 
+        logger.info("开始请求企业微信 access_token：base_url=%s corpid_len=%s", self.base_url, len(corpid))
         data = await self._get_json(
             "/cgi-bin/gettoken",
             {"corpid": corpid, "corpsecret": corpsecret},
         )
         if int(data.get("errcode", -1)) != 0 or not data.get("access_token"):
+            logger.warning(
+                "企业微信 access_token 请求被拒绝：base_url=%s errcode=%s errmsg=%s",
+                self.base_url,
+                data.get("errcode"),
+                data.get("errmsg"),
+            )
             raise WeComOutboundError(self._format_error("获取 token 失败", data))
 
         expires_in = int(data.get("expires_in") or 7200)
         # 提前 5 分钟过期，避免边界情况下的 token 失效
         _TOKEN_CACHE[cache_key] = (str(data["access_token"]), now + max(expires_in - 300, 60))
+        logger.info(
+            "企业微信 access_token 已缓存：base_url=%s corpid_len=%s expires_in=%s",
+            self.base_url,
+            len(corpid),
+            expires_in,
+        )
         return str(data["access_token"])
 
     async def _get_json(self, path: str, params: dict[str, str]) -> dict:
         url = f"{self.base_url}{path}"
+        started = time.perf_counter()
         try:
             async with httpx.AsyncClient(timeout=10) as client:
                 response = await client.get(url, params=params)
                 response.raise_for_status()
-                return response.json()
+                data = response.json()
+                logger.info("企业微信 GET 请求完成：path=%s elapsed_ms=%.0f", path, (time.perf_counter() - started) * 1000)
+                return data
         except httpx.HTTPError as exc:
+            logger.warning("企业微信 GET 请求失败：path=%s elapsed_ms=%.0f error=%s", path, (time.perf_counter() - started) * 1000, exc)
             raise WeComOutboundError(f"wecom http error: {exc}") from exc
 
     async def _post_json(self, path: str, params: dict[str, str], payload: dict) -> dict:
         url = f"{self.base_url}{path}"
+        started = time.perf_counter()
         try:
             async with httpx.AsyncClient(timeout=10) as client:
                 response = await client.post(url, params=params, json=payload)
                 response.raise_for_status()
-                return response.json()
+                data = response.json()
+                logger.info("企业微信 POST 请求完成：path=%s elapsed_ms=%.0f", path, (time.perf_counter() - started) * 1000)
+                return data
         except httpx.HTTPError as exc:
+            logger.warning("企业微信 POST 请求失败：path=%s elapsed_ms=%.0f error=%s", path, (time.perf_counter() - started) * 1000, exc)
             raise WeComOutboundError(f"wecom http error: {exc}") from exc
 
     @staticmethod

@@ -1,5 +1,6 @@
 """渠道消息路由服务。"""
 
+import logging
 from datetime import datetime, timezone
 
 from sqlalchemy import select
@@ -13,6 +14,8 @@ from app.models.platform import Platform
 from app.schemas.conversation import ConversationCreate, MessageCreate
 from app.services import conversation_service
 from app.services.ai.processor import process_customer_message_with_ai
+
+logger = logging.getLogger(__name__)
 
 
 def _message_payload(message) -> dict:
@@ -61,6 +64,19 @@ async def _get_or_create_contact(
             contact.updated_at = datetime.now(timezone.utc)
             await db.commit()
             await db.refresh(contact)
+            logger.info(
+                "企业微信联系人已更新：tenant_id=%s contact_id=%s external_userid=%s",
+                tenant_id,
+                contact.id,
+                message.external_userid,
+            )
+        else:
+            logger.info(
+                "企业微信联系人已匹配：tenant_id=%s contact_id=%s external_userid=%s",
+                tenant_id,
+                contact.id,
+                message.external_userid,
+            )
         return contact
 
     contact = Contact(
@@ -73,6 +89,12 @@ async def _get_or_create_contact(
     db.add(contact)
     await db.commit()
     await db.refresh(contact)
+    logger.info(
+        "企业微信联系人已创建：tenant_id=%s contact_id=%s external_userid=%s",
+        tenant_id,
+        contact.id,
+        message.external_userid,
+    )
     return contact
 
 
@@ -89,6 +111,15 @@ async def route_wecom_message(
     - 同一联系人复用同一个会话；关闭会话会被重新打开并接着聊。
     - CUSTOMER 消息落库后广播到该会话频道，工作台几秒内可见。
     """
+    logger.info(
+        "开始路由企业微信消息：tenant_id=%s platform_id=%s external_userid=%s msg_id=%s content_type=%s content_len=%s",
+        platform.tenant_id,
+        platform.id,
+        message.external_userid,
+        message.msg_id,
+        message.content_type,
+        len(message.content or ""),
+    )
     contact = await _get_or_create_contact(db, platform.tenant_id, message)
     conversation = await conversation_service.create_conversation(
         db,
@@ -101,6 +132,14 @@ async def route_wecom_message(
             handling_type="human" if contact.assigned_employee_id else "ai_only",
             tags=["企业微信"],
         ),
+    )
+    logger.info(
+        "企业微信会话已解析：tenant_id=%s conversation_id=%s contact_id=%s status=%s handling_type=%s",
+        platform.tenant_id,
+        conversation.id,
+        contact.id,
+        conversation.status,
+        conversation.handling_type,
     )
     conversation, saved_message = await conversation_service.create_message(
         db,
@@ -117,6 +156,13 @@ async def route_wecom_message(
             },
         ),
     )
+    logger.info(
+        "企业微信客户消息已保存：tenant_id=%s conversation_id=%s message_id=%s msg_id=%s",
+        platform.tenant_id,
+        conversation.id,
+        saved_message.id,
+        message.msg_id,
+    )
     await manager.publish(
         conversation.id,
         {"type": "message.created", "message": _message_payload(saved_message)},
@@ -129,4 +175,10 @@ async def route_wecom_message(
         },
     )
     await process_customer_message_with_ai(db, conversation, saved_message)
+    logger.info(
+        "企业微信消息路由完成：tenant_id=%s conversation_id=%s message_id=%s",
+        platform.tenant_id,
+        conversation.id,
+        saved_message.id,
+    )
     return conversation, saved_message

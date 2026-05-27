@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import AsyncIterator
 
 from app.config import settings
 from app.integrations.llm_client import LLMClient, LLMClientError
 from app.services.ai.intent.types import RoutedIntent
+
+logger = logging.getLogger(__name__)
 
 
 async def handle_general_reply(routed: RoutedIntent) -> AsyncIterator[str]:
@@ -19,6 +22,13 @@ async def handle_general_reply(routed: RoutedIntent) -> AsyncIterator[str]:
     每个 chunk 是模型实时输出的片段。
     """
     user_text = _build_user_text(routed)
+    logger.info(
+        "通用回复开始生成：intent=%s confidence=%.4f clarify=%s user_text_len=%s",
+        routed.primary_intent,
+        routed.confidence,
+        routed.need_clarification,
+        len(user_text),
+    )
     task_hint = (
         "用户意图不明确，请先礼貌说明你还需要更多信息，并引导用户补充商品、订单、物流或发票等业务细节。"
         if routed.need_clarification
@@ -33,16 +43,22 @@ async def handle_general_reply(routed: RoutedIntent) -> AsyncIterator[str]:
     ]
     try:
         has_output = False
+        chunks = 0
         async for chunk in LLMClient().stream(
             messages,
             model=settings.AI_GENERAL_REPLY_MODEL or settings.AI_LLM_MODEL,
             temperature=settings.AI_GENERAL_REPLY_TEMPERATURE,
         ):
             has_output = True
+            chunks += 1
             yield chunk
         if not has_output:
+            logger.warning("通用回复模型返回空内容，使用兜底回复")
             yield _fallback(routed)
-    except LLMClientError:
+        else:
+            logger.info("通用回复生成完成：chunks=%s", chunks)
+    except LLMClientError as exc:
+        logger.warning("通用回复模型调用失败，使用兜底回复：error=%s", exc)
         yield _fallback(routed)
 
 

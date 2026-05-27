@@ -19,6 +19,7 @@ class Settings(BaseSettings):
     APP_NAME: str
     APP_ENV: str
     APP_DEBUG: bool
+    LOG_LEVEL: str = ""
     SQL_ECHO: bool = False
 
     # Server

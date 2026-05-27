@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import math
 from collections.abc import Awaitable, Callable, Sequence
 from difflib import SequenceMatcher
@@ -11,6 +12,8 @@ from app.integrations.embedding_client import EmbeddingClient, EmbeddingClientEr
 from app.services.ai.config.intent_config import DEFAULT_INTENT_CONFIG, IntentRecognitionConfig
 from app.services.ai.config.intent_examples import DEFAULT_INTENT_EXAMPLES, IntentExample
 from app.services.ai.intent.types import IntentCandidate
+
+logger = logging.getLogger(__name__)
 
 
 VectorProvider = Callable[[str, int, float], Awaitable[Sequence[IntentCandidate]]]
@@ -38,16 +41,38 @@ class VectorIntentRetriever:
         """返回 top_k 且不低于 min_score 的候选列表。"""
         if self.provider is not None:
             provided = await self.provider(segment, self.config.vector_top_k, self.config.vector_min_score)
-            return self._filter_candidates(list(provided or []))
+            candidates = self._filter_candidates(list(provided or []))
+            logger.info(
+                "向量候选召回完成（自定义 provider）：segment_len=%s candidates=%s",
+                len(segment),
+                len(candidates),
+            )
+            return candidates
 
         if self.embedding_client is not None:
             try:
-                return await self._retrieve_by_embedding(segment)
-            except EmbeddingClientError:
+                candidates = await self._retrieve_by_embedding(segment)
+                logger.info(
+                    "向量候选召回完成（Embedding）：segment_len=%s candidates=%s",
+                    len(segment),
+                    len(candidates),
+                )
+                return candidates
+            except EmbeddingClientError as exc:
                 # Embedding 服务异常不能阻断客服主链路，降级到本地轻量相似度。
-                pass
+                logger.warning(
+                    "Embedding 召回失败，降级到文本相似度：segment_len=%s error=%s",
+                    len(segment),
+                    exc,
+                )
 
-        return self._retrieve_by_text_similarity(segment)
+        candidates = self._retrieve_by_text_similarity(segment)
+        logger.info(
+            "向量候选召回完成（文本相似度）：segment_len=%s candidates=%s",
+            len(segment),
+            len(candidates),
+        )
+        return candidates
 
     async def _retrieve_by_embedding(self, segment: str) -> list[IntentCandidate]:
         query_embedding = await self.embedding_client.embed(segment)
@@ -67,6 +92,7 @@ class VectorIntentRetriever:
 
     async def _get_example_embeddings(self) -> list[list[float]]:
         if self._example_embeddings is None:
+            logger.info("开始向量化意图样本：examples=%s", len(self.examples))
             self._example_embeddings = await self.embedding_client.embed_many(
                 [example.example_text for example in self.examples]
             )

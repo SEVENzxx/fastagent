@@ -45,7 +45,7 @@ async def _process_wecom_background(platform_id: int, payload: dict) -> None:
         try:
             platform = await platform_service.get_active_wecom_by_guid(db, platform_id)
             if platform is None:
-                logger.warning("Platform %s not found in background task", platform_id)
+                logger.warning("后台任务未找到渠道配置：platform_id=%s", platform_id)
                 return
             body_str = payload.get("raw", "")
             body_bytes = body_str.encode("utf-8") if body_str else b""
@@ -53,7 +53,7 @@ async def _process_wecom_background(platform_id: int, payload: dict) -> None:
             message = wecom.parse_encrypted_xml(body_bytes, config)
             await webhook_processor.process_wecom_message(db, platform, message)
         except Exception:
-            logger.exception("Failed to process WeCom message for platform %s", platform_id)
+            logger.exception("处理企业微信消息失败：platform_id=%s", platform_id)
 
 
 @router.post("/wecom/{guid}")
@@ -72,13 +72,13 @@ async def receive_wecom_webhook(
     """
     platform = await platform_service.get_active_wecom_by_guid(db, guid)
     if platform is None:
-        logger.warning("WeCom POST guid=%s: platform not found", guid)
+        logger.warning("企业微信 POST 回调未找到渠道：guid=%s", guid)
         raise HTTPException(status_code=404, detail="企业微信渠道不存在或未启用")
 
     config = platform.config or {}
     body_bytes = await request.body()
     body_str = body_bytes.decode("utf-8", errors="ignore") if body_bytes else ""
-    logger.info("WeCom POST guid=%s body_len=%s ct=%s", guid, len(body_bytes), request.headers.get("content-type", ""))
+    logger.info("收到企业微信 POST 回调：guid=%s body_len=%s ct=%s", guid, len(body_bytes), request.headers.get("content-type", ""))
 
     # 签名需要的是 <Encrypt> 标签内容，不是整个 XML body
     sign_content = wecom.extract_encrypt_for_signature(body_str)
@@ -86,12 +86,12 @@ async def receive_wecom_webhook(
     if not wecom.verify_signature(token, timestamp, nonce, msg_signature, sign_content):
         computed = wecom.compute_signature(token, timestamp, nonce, sign_content)
         logger.warning(
-            "WeCom POST guid=%s: signature failed (expected=%s, computed=%s, token_len=%s, content_preview=%s)",
+            "企业微信 POST 签名校验失败：guid=%s expected=%s computed=%s token_len=%s content_preview=%s",
             guid, msg_signature, computed, len(token), sign_content[:80],
         )
         raise HTTPException(status_code=403, detail="签名校验失败")
 
-    logger.info("WeCom POST guid=%s: signature ok, queuing background task", guid)
+    logger.info("企业微信 POST 签名校验通过，加入后台任务：guid=%s", guid)
     payload = {"raw": body_str}
     background_tasks.add_task(_process_wecom_background, guid, payload)
     return {"ok": True, "mode": "accepted"}

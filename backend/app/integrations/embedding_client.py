@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import logging
+import time
 from typing import Any
 
 import httpx
 
 from app.config import settings
+
+logger = logging.getLogger(__name__)
 
 
 class EmbeddingClientError(RuntimeError):
@@ -43,15 +47,32 @@ class EmbeddingClient:
         if not clean_texts:
             return []
 
+        started = time.perf_counter()
         data = await self._post_json("/embed", {"texts": clean_texts})
         embeddings = self._extract_embeddings(data)
         if len(embeddings) == len(clean_texts):
+            logger.info(
+                "Embedding 请求完成：texts=%s vectors=%s elapsed_ms=%.0f",
+                len(clean_texts),
+                len(embeddings),
+                (time.perf_counter() - started) * 1000,
+            )
             return embeddings
 
         # 兼容只支持单条 text 的服务实现。
         if len(clean_texts) == 1 and len(embeddings) == 1:
+            logger.info(
+                "Embedding 请求完成：texts=1 vectors=1 elapsed_ms=%.0f",
+                (time.perf_counter() - started) * 1000,
+            )
             return embeddings
 
+        logger.warning(
+            "Embedding 返回数量不匹配：expected=%s actual=%s elapsed_ms=%.0f",
+            len(clean_texts),
+            len(embeddings),
+            (time.perf_counter() - started) * 1000,
+        )
         raise EmbeddingClientError(
             f"embedding count mismatch: expected={len(clean_texts)}, actual={len(embeddings)}"
         )
@@ -61,18 +82,35 @@ class EmbeddingClient:
             raise EmbeddingClientError("AI_EMBEDDING_BASE_URL 不能为空")
 
         url = f"{self.base_url}{path}"
+        started = time.perf_counter()
         try:
             async with httpx.AsyncClient(timeout=self.timeout_seconds, trust_env=False) as client:
                 response = await client.post(url, json=payload)
                 response.raise_for_status()
                 data = response.json()
         except httpx.HTTPError as exc:
+            logger.warning(
+                "Embedding HTTP 请求失败：path=%s elapsed_ms=%.0f error=%s",
+                path,
+                (time.perf_counter() - started) * 1000,
+                exc,
+            )
             raise EmbeddingClientError(f"embedding http error: {exc}") from exc
         except ValueError as exc:
+            logger.warning(
+                "Embedding 返回非 JSON：path=%s elapsed_ms=%.0f",
+                path,
+                (time.perf_counter() - started) * 1000,
+            )
             raise EmbeddingClientError("embedding response is not valid json") from exc
 
         if not isinstance(data, dict):
             raise EmbeddingClientError("embedding response must be a json object")
+        logger.info(
+            "Embedding HTTP 请求完成：path=%s elapsed_ms=%.0f",
+            path,
+            (time.perf_counter() - started) * 1000,
+        )
         return data
 
     def _extract_embeddings(self, data: dict[str, Any]) -> list[list[float]]:
