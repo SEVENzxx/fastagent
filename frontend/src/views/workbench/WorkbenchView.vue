@@ -22,6 +22,8 @@ const statusFilter = ref<string | null>(null)
 const createContactId = ref<string | null>(null)
 const createEmployeeId = ref<string | null>(null)
 const createHandlingType = ref('ai_only')
+const aiTyping = ref(false)
+const streamingText = ref('')
 let refreshTimer: number | undefined
 
 const activeId = computed(() => activeConversation.value?.id ?? null)
@@ -37,7 +39,19 @@ const ws = useWebSocket(
       if (!messages.value.some((item) => item.id === message.id)) {
         messages.value.push(message)
       }
+      if (message.senderType === 'AI') {
+        aiTyping.value = false
+        streamingText.value = ''
+      }
       loadConversations()
+    }
+    if (payload.type === 'ai.typing') {
+      aiTyping.value = Boolean(payload.typing)
+      if (!aiTyping.value) streamingText.value = ''
+    }
+    if (payload.type === 'ai.message.chunk') {
+      aiTyping.value = true
+      streamingText.value += String(payload.content || '')
     }
     if (payload.type === 'message.recalled' && payload.message) {
       const message = payload.message as MessageResponse
@@ -93,6 +107,8 @@ async function loadMessages(conversationId: string) {
 async function selectConversation(conversation: ConversationResponse) {
   activeConversation.value = conversation
   messages.value = []
+  aiTyping.value = false
+  streamingText.value = ''
   ws.close()
   await loadMessages(conversation.id)
   ws.connect()
@@ -215,6 +231,8 @@ onBeforeUnmount(() => {
         :conversation="activeConversation"
         :messages="messages"
         :connected="ws.connected.value"
+        :ai-typing="aiTyping"
+        :streaming-text="streamingText"
         @send="sendMessage"
         @status-change="updateStatus"
       />

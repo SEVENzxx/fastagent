@@ -2,11 +2,14 @@
 import { nextTick, ref, watch } from 'vue'
 import type { ConversationResponse, MessageResponse } from '@/api/conversations'
 import MessageBubble from './MessageBubble.vue'
+import StreamingText from './StreamingText.vue'
 
 const props = defineProps<{
   conversation: ConversationResponse | null
   messages: MessageResponse[]
   connected: boolean
+  aiTyping?: boolean
+  streamingText?: string
 }>()
 
 const emit = defineEmits<{
@@ -18,7 +21,7 @@ const draft = ref('')
 const listRef = ref<HTMLElement | null>(null)
 
 watch(
-  () => props.messages.length,
+  () => [props.messages.length, props.streamingText],
   async () => {
     await nextTick()
     if (listRef.value) {
@@ -67,6 +70,7 @@ function handleSend() {
 
     <main ref="listRef" class="message-list">
       <MessageBubble v-for="message in messages" :key="message.id" :message="message" />
+      <StreamingText v-if="aiTyping || streamingText" :content="streamingText || ''" />
       <el-empty v-if="!messages.length" description="暂无消息" />
     </main>
 

@@ -6,6 +6,9 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
 
+for handler in logging.root.handlers[:]:
+    logging.root.removeHandler(handler)
+
 logging.basicConfig(
     level=logging.DEBUG if settings.APP_DEBUG else logging.INFO,
     format="%(asctime)s %(levelname)-8s %(name)s | %(message)s",
@@ -14,6 +17,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 from app.api.v1.auth import router as auth_router
+from app.api.v1.ai_stream import router as ai_stream_router
 from app.api.v1.categories import router as categories_router
 from app.api.v1.contacts import router as contacts_router
 from app.api.v1.conversations import router as conversations_router
@@ -60,6 +64,7 @@ async def log_requests(request: Request, call_next):
 
 # ── 路由注册 ─────────────────────────────────────────────────────────────
 app.include_router(auth_router, prefix="/api/v1")
+app.include_router(ai_stream_router, prefix="/api/v1")
 app.include_router(categories_router, prefix="/api/v1")
 app.include_router(contacts_router, prefix="/api/v1")
 app.include_router(conversations_router, prefix="/api/v1")

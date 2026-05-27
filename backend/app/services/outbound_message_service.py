@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 async def deliver_message(db: AsyncSession, conversation: Conversation, message: Message) -> Message:
     """尝试将本地创建的消息发送到对应的外部渠道。"""
-    if message.sender_type not in {"AGENT", "AI"} or message.content_type != "text":
+    if message.sender_type not in {"AGENT", "AI", "SYSTEM"} or message.content_type != "text":
         return message
     if conversation.platform_id is None:
         return message
