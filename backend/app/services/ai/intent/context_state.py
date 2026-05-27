@@ -47,6 +47,11 @@ class ContextStateResolver:
         if not filled:
             return None
 
+        # 只补了部分槽位时不算完成，让流水线继续处理（pending state 保持不变，
+        # 下一轮用户补充剩余槽位时仍能被 context_state 命中）。
+        if len(filled) < len(missing):
+            return None
+
         route = self.config.route_for(pending_state.intent)
         label = self.config.label_for(pending_state.intent)
         matched_text = ", ".join(f"{key}={value}" for key, value in filled.items())
