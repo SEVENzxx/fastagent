@@ -8,7 +8,7 @@ from typing import Any
 
 from app.config import settings
 from app.integrations.llm_client import LLMClient, LLMClientError
-from app.services.ai.intent.types import IntentCandidate, LLMJudgeResult
+from app.services.ai.intent.types import IntentCandidate
 from app.services.ai.prompts.intent_judge import INTENT_JUDGE_SYSTEM_PROMPT, build_intent_judge_user_prompt
 
 
@@ -26,8 +26,13 @@ class LLMIntentJudge:
         self.client = client or LLMClient()
         self.completion = completion or self._complete_with_http
 
-    async def judge(self, text: str, candidates: list[IntentCandidate]) -> LLMJudgeResult | None:
-        """执行 LLM 精判；模型服务异常时返回 None，让上层沿用融合打分结果。"""
+    async def judge(
+        self, text: str, candidates: list[IntentCandidate]
+    ) -> tuple[str, list[str], bool, str] | None:
+        """执行 LLM 精判，返回 (primary_intent, secondary_intents, need_clarification, reason)。
+
+        模型服务异常或解析失败时返回 None，让上层沿用融合打分结果。
+        """
         if not candidates:
             return None
 
@@ -51,11 +56,11 @@ class LLMIntentJudge:
             for item in parsed.get("secondary_intents", [])
             if str(item).strip() in candidate_intents and str(item).strip() != primary
         ]
-        return LLMJudgeResult(
-            primary_intent=primary,
-            secondary_intents=secondary,
-            need_clarification=bool(parsed.get("need_clarification", False)),
-            reason=str(parsed.get("reason") or "LLM 从候选意图中精判").strip(),
+        return (
+            primary,
+            secondary,
+            bool(parsed.get("need_clarification", False)),
+            str(parsed.get("reason") or "LLM 从候选意图中精判").strip(),
         )
 
     def _parse(self, raw: str | dict[str, Any]) -> dict[str, Any]:

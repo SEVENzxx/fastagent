@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections import defaultdict
 
 from app.services.ai.config.intent_config import DEFAULT_INTENT_CONFIG, IntentRecognitionConfig
-from app.services.ai.intent.types import FusedIntent, IntentCandidate, KeywordEntityResult
+from app.services.ai.intent.types import IntentCandidate, KeywordEntityResult
 
 
 class IntentFusionScorer:
@@ -21,8 +21,8 @@ class IntentFusionScorer:
         *,
         segment: str,
         full_text: str,
-    ) -> list[FusedIntent]:
-        """按 intent 聚合候选并融合分数。"""
+    ) -> list[IntentCandidate]:
+        """按 intent 聚合候选并融合分数，返回按融合分数降序排列的候选列表。"""
         grouped: dict[str, list[IntentCandidate]] = defaultdict(list)
         for candidate in candidates:
             grouped[candidate.intent].append(candidate)
@@ -40,31 +40,28 @@ class IntentFusionScorer:
                     )
                 )
 
-        fused: list[FusedIntent] = []
+        fused: list[IntentCandidate] = []
         for intent, items in grouped.items():
             best_score = max(item.score for item in items)
             keyword_boost = signals.intent_boosts.get(intent, 0.0)
             context_boost = self._context_boost(intent, segment, full_text)
             final_score = min(best_score + keyword_boost + context_boost, 1.0)
             matched_examples = [item.matched_text for item in items if item.matched_text]
+
             fused.append(
-                FusedIntent(
+                IntentCandidate(
                     intent=intent,
                     label=self.config.label_for(intent),
-                    final_score=final_score,
-                    best_score=best_score,
-                    hit_count=len(items),
-                    matched_examples=matched_examples,
-                    candidates=items,
-                    keyword_boost=keyword_boost,
-                    context_boost=context_boost,
+                    score=final_score,
+                    source="fusion",
+                    matched_text=", ".join(matched_examples) if matched_examples else None,
+                    reason=f"best={best_score:.2f} kw={keyword_boost:.2f} ctx={context_boost:.2f} hits={len(items)}",
                 )
             )
 
-        return sorted(fused, key=lambda item: item.final_score, reverse=True)
+        return sorted(fused, key=lambda item: item.score, reverse=True)
 
     def _context_boost(self, intent: str, segment: str, full_text: str) -> float:
-        """上下文加权先保持保守，只处理明显多问题上下文。"""
         if intent == "delivery_time" and "发货" in full_text and "订单" in full_text:
             return 0.04
         if intent == "order_status" and "订单" in full_text:
