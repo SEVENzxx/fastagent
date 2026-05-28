@@ -57,6 +57,17 @@ class Settings(BaseSettings):
     AI_EMBEDDING_BASE_URL: str = "http://127.0.0.1:8001"
     AI_EMBEDDING_TIMEOUT_SECONDS: float = 5.0
 
+    # Phase 9 Agent runtime
+    AI_AGENT_ENABLED: bool = True
+    AI_AGENT_MODEL: str = ""
+    AI_AGENT_MAX_TOKENS: int = 512
+    AI_AGENT_TEMPERATURE: float = 0.2
+    AI_AGENT_MAX_TOOL_CALLS: int = 3
+    AI_AGENT_TIMEOUT_SECONDS: float = 30.0
+    AI_AGENT_RECENT_MESSAGE_LIMIT: int = 20
+    AI_AGENT_ENABLE_HITL: bool = False
+    AI_AGENT_ENABLE_MCP_STUBS: bool = True
+
     # Security
     SECRET_KEY: str
     JWT_ALGORITHM: str

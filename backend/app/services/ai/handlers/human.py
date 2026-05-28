@@ -2,9 +2,45 @@
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
+from typing import TYPE_CHECKING
+
+from app.services.ai.handlers.registry import register_handler
 from app.services.ai.intent.types import RoutedIntent
+
+if TYPE_CHECKING:
+    from app.services.ai.agent.types import AgentContext
 
 
 async def handle_human(routed: RoutedIntent) -> str:
     """人工处理占位：后续接人工队列和 WebSocket 通知。"""
-    return f"已转人工处理: {routed.primary_intent or 'unknown'}"
+    return "您已接入人工客服，请稍候，客服人员将尽快为您服务。"
+
+
+@register_handler("HUMAN")
+class HumanHandler:
+    """HUMAN 路由处理器。"""
+
+    route = "HUMAN"
+    reply_sender_type = "SYSTEM"
+    clear_pending_state = True
+    transfer_to_human = True
+    send_ai_greeting = False
+    show_typing = False
+    requires_agent_context = False
+
+    async def handle(
+        self,
+        routed: RoutedIntent,
+        *,
+        agent_context: AgentContext | None = None,
+    ) -> str:
+        return await handle_human(routed)
+
+    async def stream(
+        self,
+        routed: RoutedIntent,
+        *,
+        agent_context: AgentContext | None = None,
+    ) -> AsyncIterator[str]:
+        yield await self.handle(routed)

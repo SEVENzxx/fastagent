@@ -3,13 +3,11 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import AsyncIterator
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
-from app.services.ai.handlers.agent import handle_agent
-from app.services.ai.handlers.general_reply import handle_general_reply
-from app.services.ai.handlers.human import handle_human
-from app.services.ai.handlers.silent import handle_silent
+from app.services.ai.agent.types import AgentContext
+from app.services.ai.handlers.registry import RouteHandler, get_handler
 from app.services.ai.intent.types import RoutedIntent
 
 logger = logging.getLogger(__name__)
@@ -17,17 +15,38 @@ logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True, slots=True)
 class MessageRouterResult:
-    """轻量调度结果，后续可替换为真实 handler 输出。"""
+    """轻量调度结果。"""
 
     route: str
     skill: str | None
     message: str
 
 
-class MessageRouter:
-    """Phase 8 调度入口。"""
+ChunkCallback = Callable[[str], Awaitable[None]]
 
-    async def dispatch(self, routed: RoutedIntent) -> MessageRouterResult:
+
+class MessageRouter:
+
+    def resolve(self, routed: RoutedIntent) -> RouteHandler:
+        """根据 routed intent 获取对应处理器。"""
+
+        handler = get_handler(routed.route)
+        logger.info(
+            "消息路由器解析处理器：route=%s handler=%s sender_type=%s transfer=%s typing=%s",
+            routed.route,
+            handler.__class__.__name__,
+            handler.reply_sender_type,
+            handler.transfer_to_human,
+            handler.show_typing,
+        )
+        return handler
+
+    async def dispatch(
+        self,
+        routed: RoutedIntent,
+        *,
+        agent_context: AgentContext | None = None,
+    ) -> MessageRouterResult:
         """根据 route 返回非流式处理结果。"""
         logger.info(
             "消息路由器开始调度：route=%s skill=%s intent=%s confidence=%.4f",
@@ -36,34 +55,29 @@ class MessageRouter:
             routed.primary_intent,
             routed.confidence,
         )
-        if routed.route == "HUMAN":
-            return MessageRouterResult(routed.route, routed.skill, await handle_human(routed))
-        if routed.route == "SILENT":
-            return MessageRouterResult(routed.route, routed.skill, await handle_silent(routed))
-        if routed.route == "AGENT":
-            return MessageRouterResult(routed.route, routed.skill, await handle_agent(routed))
-        # GENERAL_REPLY 走流式收集结果
-        chunks: list[str] = []
-        async for chunk in handle_general_reply(routed):
-            chunks.append(chunk)
-        return MessageRouterResult(routed.route, routed.skill, "".join(chunks))
+        handler = self.resolve(routed)
+        message = await self.render(routed, handler=handler, agent_context=agent_context)
+        return MessageRouterResult(routed.route, routed.skill, message)
 
-    async def dispatch_stream(self, routed: RoutedIntent) -> AsyncIterator[str]:
-        """根据 route 流式返回回复片段。
+    async def render(
+        self,
+        routed: RoutedIntent,
+        *,
+        handler: RouteHandler | None = None,
+        agent_context: AgentContext | None = None,
+        on_chunk: ChunkCallback | None = None,
+    ) -> str:
+        """执行 route handler 并返回完整文本。
 
-        GENERAL_REPLY 走 LLM 流式生成，逐 chunk 输出；其余 route 固定话术一次输出。
-        上层通过 ``async for chunk in router.dispatch_stream(routed):`` 消费，
-        每个 chunk 通过 WebSocket 发送 ``message.chunk`` 事件，流结束后发送 ``message.created``。
+        如果传入 ``on_chunk``，每个流式片段会同步回调给上层用于 WebSocket 推送。
         """
-        logger.info(
-            "消息路由器开始流式调度：route=%s skill=%s intent=%s",
-            routed.route,
-            routed.skill,
-            routed.primary_intent,
-        )
-        if routed.route == "GENERAL_REPLY":
-            async for chunk in handle_general_reply(routed):
-                yield chunk
-        else:
-            result = await self.dispatch(routed)
-            yield result.message
+
+        selected_handler = handler or self.resolve(routed)
+        chunks: list[str] = []
+        async for chunk in selected_handler.stream(routed, agent_context=agent_context):
+            chunks.append(chunk)
+            if on_chunk is not None:
+                await on_chunk(chunk)
+        return "".join(chunks)
+
+

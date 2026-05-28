@@ -7,6 +7,7 @@ from app.models.conversation import Conversation, Message
 from app.models.plan import Plan
 from app.models.platform import Platform
 from app.models.product import Product
+from app.models.sales_memory import SalesMemory
 from app.models.tenant import Tenant
 from app.models.employee import Employee
 from app.models.role import Role, Permission, RolePermission, EmployeeRole, PermissionCode
@@ -20,6 +21,7 @@ __all__ = [
     "Plan",
     "Platform",
     "Product",
+    "SalesMemory",
     "Tenant",
     "Employee",
     "Role",

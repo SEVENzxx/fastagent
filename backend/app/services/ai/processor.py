@@ -14,6 +14,7 @@ from app.services import conversation_service, outbound_message_service
 from app.services.ai.intent.pending_state_store import PendingStateStore
 from app.services.ai.intent.pipeline import IntentRecognitionPipeline
 from app.services.ai.message_router import MessageRouter
+from app.services.ai.agent.types import AgentContext
 
 logger = logging.getLogger(__name__)
 
@@ -137,17 +138,23 @@ async def process_customer_message_with_ai(
         },
     )
 
-    if result.route == "SILENT":
+    router = MessageRouter()
+    handler = router.resolve(result)
+
+    if handler.reply_sender_type is None:
         logger.info(
-            "AI 静默处理完成：conversation_id=%s message_id=%s elapsed_ms=%.0f",
+            "AI 路由无需回复：conversation_id=%s message_id=%s route=%s elapsed_ms=%.0f",
             conversation.id,
             customer_message.id,
+            result.route,
             (time.perf_counter() - started) * 1000,
         )
         return
 
-    if result.route == "HUMAN":
+    if handler.clear_pending_state:
         await pending_store.delete(conversation.tenant_id, conversation.id)
+
+    if handler.transfer_to_human:
         logger.warning(
             "AI 路由到人工：tenant_id=%s conversation_id=%s message_id=%s intent=%s reason=%s",
             conversation.tenant_id,
@@ -157,16 +164,9 @@ async def process_customer_message_with_ai(
             result.reason,
         )
         await _mark_pending_human(db, conversation, result.reason or result.primary_intent or "需要人工处理")
-        await _create_and_broadcast_system_message(
-            db,
-            conversation,
-            "您已接入人工客服，请稍候，客服人员将尽快为您服务。",
-            metadata={"ai_route": "HUMAN", "intent": result.primary_intent},
-        )
-        return
 
     # 首次 AI 对话时，发送系统提示告知客户
-    if "ai_greeting_sent" not in (conversation.tags or []):
+    if handler.send_ai_greeting and "ai_greeting_sent" not in (conversation.tags or []):
         await _create_and_broadcast_system_message(
             db,
             conversation,
@@ -175,37 +175,45 @@ async def process_customer_message_with_ai(
         )
         conversation.tags = (conversation.tags or []) + ["ai_greeting_sent"]
 
-    router = MessageRouter()
-    if result.route == "GENERAL_REPLY":
+    agent_ctx = (
+        AgentContext(
+            db=db,
+            tenant_id=conversation.tenant_id,
+            conversation_id=conversation.id,
+            contact_id=conversation.contact_id,
+        )
+        if handler.requires_agent_context
+        else None
+    )
+
+    if handler.show_typing:
         await _publish_typing(conversation, True)
-        chunks: list[str] = []
-        stream_started = time.perf_counter()
-        try:
-            async for chunk in router.dispatch_stream(result):
-                chunks.append(chunk)
-                await manager.publish(conversation.id, {"type": "ai.message.chunk", "content": chunk})
-        finally:
+
+    dispatch_started = time.perf_counter()
+    try:
+        content = (
+            await router.render(
+                result,
+                handler=handler,
+                agent_context=agent_ctx,
+                on_chunk=lambda chunk: manager.publish(
+                    conversation.id,
+                    {"type": "ai.message.chunk", "content": chunk},
+                ),
+            )
+        ).strip()
+    finally:
+        if handler.show_typing:
             await _publish_typing(conversation, False)
-        content = "".join(chunks).strip()
-        logger.info(
-            "AI 通用回复生成完成：conversation_id=%s chunks=%s content_len=%s elapsed_ms=%.0f",
-            conversation.id,
-            len(chunks),
-            len(content),
-            (time.perf_counter() - stream_started) * 1000,
-        )
-    else:
-        dispatch_started = time.perf_counter()
-        routed_result = await router.dispatch(result)
-        content = routed_result.message.strip()
-        logger.info(
-            "AI 处理器调度完成：conversation_id=%s route=%s skill=%s content_len=%s elapsed_ms=%.0f",
-            conversation.id,
-            result.route,
-            result.skill,
-            len(content),
-            (time.perf_counter() - dispatch_started) * 1000,
-        )
+
+    logger.info(
+        "AI 回复生成完成：conversation_id=%s route=%s sender_type=%s content_len=%s elapsed_ms=%.0f",
+        conversation.id,
+        result.route,
+        handler.reply_sender_type,
+        len(content),
+        (time.perf_counter() - dispatch_started) * 1000,
+    )
 
     if not content:
         logger.warning(
@@ -217,10 +225,11 @@ async def process_customer_message_with_ai(
         )
         return
 
-    await _create_deliver_and_broadcast_ai_message(
+    await _create_deliver_and_broadcast_reply_message(
         db,
         conversation,
         content,
+        sender_type=handler.reply_sender_type or "AI",
         metadata={
             "ai_route": result.route,
             "skill": result.skill,
@@ -287,24 +296,26 @@ async def _create_and_broadcast_system_message(
     await manager.publish(conversation.id, {"type": "message.created", "message": message_payload(message)})
 
 
-async def _create_deliver_and_broadcast_ai_message(
+async def _create_deliver_and_broadcast_reply_message(
     db: AsyncSession,
     conversation: Conversation,
     content: str,
     *,
+    sender_type: str,
     metadata: dict,
 ) -> None:
     conversation, message = await conversation_service.create_message(
         db,
         conversation.id,
         conversation.tenant_id,
-        MessageCreate(sender_type="AI", content_type="text", content=content, metadata=metadata),
+        MessageCreate(sender_type=sender_type, content_type="text", content=content, metadata=metadata),
     )
     message = await outbound_message_service.deliver_message(db, conversation, message)
     logger.info(
-        "AI 消息已创建：conversation_id=%s message_id=%s content_len=%s metadata=%s",
+        "AI 回复消息已创建：conversation_id=%s message_id=%s sender_type=%s content_len=%s metadata=%s",
         conversation.id,
         message.id,
+        sender_type,
         len(content),
         metadata,
     )

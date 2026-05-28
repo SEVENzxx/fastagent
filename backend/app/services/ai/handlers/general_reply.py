@@ -5,9 +5,15 @@ from __future__ import annotations
 import logging
 from collections.abc import AsyncIterator
 
+from typing import TYPE_CHECKING
+
 from app.config import settings
 from app.integrations.llm_client import LLMClient, LLMClientError
+from app.services.ai.handlers.registry import register_handler
 from app.services.ai.intent.types import RoutedIntent
+
+if TYPE_CHECKING:
+    from app.services.ai.agent.types import AgentContext
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +66,28 @@ async def handle_general_reply(routed: RoutedIntent) -> AsyncIterator[str]:
     except LLMClientError as exc:
         logger.warning("通用回复模型调用失败，使用兜底回复：error=%s", exc)
         yield _fallback(routed)
+
+
+@register_handler("GENERAL_REPLY")
+class GeneralReplyHandler:
+    """GENERAL_REPLY 路由处理器。"""
+
+    route = "GENERAL_REPLY"
+    reply_sender_type = "AI"
+    clear_pending_state = False
+    transfer_to_human = False
+    send_ai_greeting = True
+    show_typing = True
+    requires_agent_context = False
+
+    async def stream(
+        self,
+        routed: RoutedIntent,
+        *,
+        agent_context: AgentContext | None = None,
+    ) -> AsyncIterator[str]:
+        async for chunk in handle_general_reply(routed):
+            yield chunk
 
 
 def _fallback(routed: RoutedIntent) -> str:

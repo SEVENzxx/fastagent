@@ -1,21 +1,62 @@
-"""AGENT 路由处理器。"""
+"""AGENT 路由处理器 — Phase 9 LangGraph Agent。"""
 
 from __future__ import annotations
 
 import logging
+from collections.abc import AsyncIterator
 
+from app.services.ai.agent.types import AgentContext
+from app.services.ai.handlers.registry import register_handler
 from app.services.ai.intent.types import RoutedIntent
 
 logger = logging.getLogger(__name__)
 
 
-async def handle_agent(routed: RoutedIntent) -> str:
-    """业务技能占位：Phase 9 接 LangGraph/Skill Registry。"""
+async def handle_agent(
+    routed: RoutedIntent,
+    *,
+    agent_context: AgentContext | None = None,
+) -> str:
+    """通过 LangGraph Agent 处理 AGENT 路由。"""
     logger.info(
-        "AGENT 处理器 stub 被调用：intent=%s skill=%s confidence=%.4f hits=%s",
+        "AGENT handler 调用 LangGraph Agent：tenant_id=%s conversation_id=%s intent=%s skill=%s confidence=%.4f",
+        agent_context.tenant_id,
+        agent_context.conversation_id,
         routed.primary_intent,
         routed.skill,
         routed.confidence,
-        len(routed.hits),
     )
-    return f"调用业务能力: {routed.skill or routed.primary_intent or 'unknown'}"
+
+    from app.services.ai.agent import run_agent
+
+    reply = await run_agent(agent_context, routed)
+    return reply
+
+
+@register_handler("AGENT")
+class AgentHandler:
+    """AGENT 路由处理器。"""
+
+    route = "AGENT"
+    reply_sender_type = "AI"
+    clear_pending_state = False
+    transfer_to_human = False
+    send_ai_greeting = True
+    show_typing = True
+    requires_agent_context = True
+
+    async def handle(
+        self,
+        routed: RoutedIntent,
+        *,
+        agent_context: AgentContext | None = None,
+    ) -> str:
+        return await handle_agent(routed, agent_context=agent_context)
+
+    async def stream(
+        self,
+        routed: RoutedIntent,
+        *,
+        agent_context: AgentContext | None = None,
+    ) -> AsyncIterator[str]:
+        yield await self.handle(routed, agent_context=agent_context)
