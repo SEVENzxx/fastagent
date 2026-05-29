@@ -225,18 +225,25 @@ async def process_customer_message_with_ai(
         )
         return
 
+    metadata: dict = {
+        "ai_route": result.route,
+        "skill": result.skill,
+        "intent": result.primary_intent,
+        "confidence": result.confidence,
+        "is_multi_intent": result.is_multi_intent,
+    }
+
+    # 附带 order card 数据（来自 Skill 工具调用结果）
+    order_cards = _extract_order_cards(handler)
+    if order_cards:
+        metadata["order_cards"] = order_cards
+
     await _create_deliver_and_broadcast_reply_message(
         db,
         conversation,
         content,
         sender_type=handler.reply_sender_type or "AI",
-        metadata={
-            "ai_route": result.route,
-            "skill": result.skill,
-            "intent": result.primary_intent,
-            "confidence": result.confidence,
-            "is_multi_intent": result.is_multi_intent,
-        },
+        metadata=metadata,
     )
     logger.info(
         "AI 处理完成：tenant_id=%s conversation_id=%s message_id=%s route=%s elapsed_ms=%.0f",
@@ -331,3 +338,25 @@ async def _publish_typing(conversation: Conversation, typing: bool) -> None:
             "conversationId": str(conversation.id),
         },
     )
+
+
+def _extract_order_cards(handler) -> list[dict] | None:
+    """从 handler 的 tool_results 中提取订单卡片数据。"""
+    tool_results: list[dict] = getattr(handler, "last_tool_results", []) or []
+    cards: list[dict] = []
+    order_skills = {"create_order", "confirm_order", "manage_order"}
+    for r in tool_results:
+        if r.get("skill_name") in order_skills and r.get("ok"):
+            result_data = r.get("result")
+            if isinstance(result_data, dict):
+                cards.append({
+                    "skill_name": r["skill_name"],
+                    "order_id": result_data.get("order_id"),
+                    "status": result_data.get("status"),
+                    "status_label": result_data.get("status_label"),
+                    "total_amount": result_data.get("total_amount"),
+                    "payable_amount": result_data.get("payable_amount"),
+                    "items": result_data.get("items"),
+                    "message": result_data.get("message"),
+                })
+    return cards or None

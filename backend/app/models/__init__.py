@@ -6,6 +6,7 @@ from app.models.contact import Contact
 from app.models.conversation import Conversation, Message
 from app.models.plan import Plan
 from app.models.platform import Platform
+from app.models.order import Order, OrderItem
 from app.models.product import Product
 from app.models.sales_memory import SalesMemory
 from app.models.tenant import Tenant
@@ -21,6 +22,8 @@ __all__ = [
     "Plan",
     "Platform",
     "Product",
+    "Order",
+    "OrderItem",
     "SalesMemory",
     "Tenant",
     "Employee",

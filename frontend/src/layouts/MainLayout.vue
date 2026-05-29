@@ -77,6 +77,10 @@ onMounted(async () => {
           <span class="nav-icon nav-icon-contact" />
           <span>联系人管理</span>
         </el-menu-item>
+        <el-menu-item index="/orders">
+          <span class="nav-icon nav-icon-order" />
+          <span>订单管理</span>
+        </el-menu-item>
         <el-menu-item index="/settings/wechat">
           <span class="nav-icon nav-icon-channel" />
           <span>企微设置</span>
@@ -364,6 +368,23 @@ onMounted(async () => {
 .nav-icon-link::after {
   right: 2px;
   transform: rotate(-32deg);
+}
+
+.nav-icon-order::before {
+  width: 13px;
+  height: 14px;
+  border: 1.6px solid currentColor;
+  border-radius: 2px;
+}
+
+.nav-icon-order::after {
+  width: 6px;
+  height: 5px;
+  top: 4px;
+  left: 4px;
+  border-bottom: 1.6px solid currentColor;
+  border-right: 1.6px solid currentColor;
+  transform: rotate(45deg);
 }
 
 .workspace {

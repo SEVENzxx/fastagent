@@ -49,6 +49,11 @@ const router = createRouter({
           component: () => import('../views/contacts/ContactDetailPage.vue'),
         },
         {
+          path: 'orders',
+          name: 'orders',
+          component: () => import('../views/orders/OrderListView.vue'),
+        },
+        {
           path: 'settings/wechat',
           name: 'settings-wechat',
           component: () => import('../views/settings/WeChatSettings.vue'),

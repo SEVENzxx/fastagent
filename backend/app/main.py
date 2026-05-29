@@ -18,6 +18,7 @@ from app.api.v1.conversations import router as conversations_router
 from app.api.v1.employees import router as employees_router
 from app.api.v1.permissions import router as permissions_router
 from app.api.v1.platforms import router as platforms_router
+from app.api.v1.orders import router as orders_router
 from app.api.v1.products import router as products_router
 from app.api.v1.roles import router as roles_router
 from app.api.v1.webhooks import router as webhooks_router
@@ -64,6 +65,7 @@ app.include_router(conversations_router, prefix="/api/v1")
 app.include_router(permissions_router, prefix="/api/v1")
 app.include_router(platforms_router, prefix="/api/v1")
 app.include_router(products_router, prefix="/api/v1")
+app.include_router(orders_router, prefix="/api/v1")
 app.include_router(roles_router, prefix="/api/v1")
 app.include_router(employees_router, prefix="/api/v1")
 app.include_router(webhooks_router, prefix="/api/v1")

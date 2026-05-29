@@ -1,8 +1,14 @@
 <script setup lang="ts">
+import { computed } from 'vue'
 import type { MessageResponse } from '@/api/conversations'
+import OrderCard from '@/components/orders/OrderCard.vue'
 
-defineProps<{
+const props = defineProps<{
   message: MessageResponse
+}>()
+
+const emit = defineEmits<{
+  orderStatusChange: [orderId: string, toStatus: string]
 }>()
 
 function senderLabel(senderType: string) {
@@ -14,6 +20,12 @@ function senderLabel(senderType: string) {
   }
   return map[senderType] ?? senderType
 }
+
+const orderCards = computed(() => {
+  const cards = props.message.metadata?.order_cards
+  if (!Array.isArray(cards) || !cards.length) return null
+  return cards.filter((c: Record<string, any>) => c.order_id)
+})
 </script>
 
 <template>
@@ -23,7 +35,17 @@ function senderLabel(senderType: string) {
         <span>{{ senderLabel(message.senderType) }}</span>
         <time>{{ new Date(message.createdAt).toLocaleTimeString() }}</time>
       </div>
-      <p>{{ message.isRecalled ? '消息已撤回' : message.content }}</p>
+      <p v-if="message.isRecalled">消息已撤回</p>
+      <template v-else>
+        <p>{{ message.content }}</p>
+        <OrderCard
+          v-for="card in orderCards"
+          :key="card.order_id"
+          :order="card"
+          compact
+          @status-change="(orderId: any, toStatus: any) => emit('orderStatusChange', orderId, toStatus)"
+        />
+      </template>
     </div>
   </div>
 </template>

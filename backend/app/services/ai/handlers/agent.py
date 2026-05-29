@@ -16,8 +16,8 @@ async def handle_agent(
     routed: RoutedIntent,
     *,
     agent_context: AgentContext | None = None,
-) -> str:
-    """通过 LangGraph Agent 处理 AGENT 路由。"""
+) -> dict:
+    """通过 LangGraph Agent 处理 AGENT 路由，返回 {"reply": str, "tool_results": list}。"""
     logger.info(
         "AGENT handler 调用 LangGraph Agent：tenant_id=%s conversation_id=%s intent=%s skill=%s confidence=%.4f",
         agent_context.tenant_id,
@@ -29,8 +29,8 @@ async def handle_agent(
 
     from app.services.ai.agent import run_agent
 
-    reply = await run_agent(agent_context, routed)
-    return reply
+    result = await run_agent(agent_context, routed)
+    return result
 
 
 @register_handler("AGENT")
@@ -45,13 +45,18 @@ class AgentHandler:
     show_typing = True
     requires_agent_context = True
 
+    def __init__(self):
+        self.last_tool_results: list[dict] = []
+
     async def handle(
         self,
         routed: RoutedIntent,
         *,
         agent_context: AgentContext | None = None,
     ) -> str:
-        return await handle_agent(routed, agent_context=agent_context)
+        result = await handle_agent(routed, agent_context=agent_context)
+        self.last_tool_results = result.get("tool_results", [])
+        return result["reply"]
 
     async def stream(
         self,

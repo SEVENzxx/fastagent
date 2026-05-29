@@ -79,8 +79,8 @@ def build_agent_graph() -> StateGraph:
 _agent_graph = build_agent_graph()
 
 
-async def run_agent(ctx: AgentContext, routed_intent: RoutedIntent) -> str:
-    """执行 Agent 图，返回 final_reply 字符串。
+async def run_agent(ctx: AgentContext, routed_intent: RoutedIntent) -> dict:
+    """执行 Agent 图，返回 {"reply": str, "tool_results": list[dict]}。
 
     这是外部调用的主入口。
     """
@@ -99,6 +99,7 @@ async def run_agent(ctx: AgentContext, routed_intent: RoutedIntent) -> str:
     )
     result = await _agent_graph.ainvoke({}, config=config)
     reply = result.get("final_reply", "") or ""
+    tool_results = result.get("tool_results", [])
     logger.info(
         "[graph] 执行完成：mode=%s reply_len=%s tool_calls=%s error=%s",
         result.get("execution_mode"),
@@ -106,4 +107,4 @@ async def run_agent(ctx: AgentContext, routed_intent: RoutedIntent) -> str:
         result.get("tool_call_count"),
         result.get("error"),
     )
-    return reply
+    return {"reply": reply, "tool_results": tool_results}

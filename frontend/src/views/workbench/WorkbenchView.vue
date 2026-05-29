@@ -4,6 +4,7 @@ import { ElMessage } from 'element-plus'
 import * as conversationsApi from '@/api/conversations'
 import * as contactsApi from '@/api/contacts'
 import * as employeesApi from '@/api/employees'
+import * as ordersApi from '@/api/orders'
 import type { ConversationResponse, MessageResponse } from '@/api/conversations'
 import type { ContactResponse } from '@/api/contacts'
 import type { EmployeeDetailResponse } from '@/api/employees'
@@ -180,6 +181,15 @@ async function createConversation() {
   }
 }
 
+async function handleOrderStatusChange(orderId: string, toStatus: string) {
+  try {
+    await ordersApi.transitionOrderStatus(orderId, toStatus)
+    ElMessage.success('订单状态已更新')
+  } catch (err: any) {
+    ElMessage.error(err?.response?.data?.detail || '操作失败')
+  }
+}
+
 watch([keyword, statusFilter], () => {
   loadConversations()
 })
@@ -235,6 +245,7 @@ onBeforeUnmount(() => {
         :streaming-text="streamingText"
         @send="sendMessage"
         @status-change="updateStatus"
+        @order-status-change="handleOrderStatusChange"
       />
     </section>
 

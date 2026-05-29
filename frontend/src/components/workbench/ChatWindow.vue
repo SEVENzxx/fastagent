@@ -15,6 +15,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   send: [content: string]
   statusChange: [status: string]
+  orderStatusChange: [orderId: string, toStatus: string]
 }>()
 
 const draft = ref('')
@@ -69,7 +70,9 @@ function handleSend() {
     </header>
 
     <main ref="listRef" class="message-list">
-      <MessageBubble v-for="message in messages" :key="message.id" :message="message" />
+      <MessageBubble v-for="message in messages" :key="message.id" :message="message"
+        @order-status-change="(orderId, toStatus) => emit('orderStatusChange', orderId, toStatus)"
+      />
       <StreamingText v-if="aiTyping || streamingText" :content="streamingText || ''" />
       <el-empty v-if="!messages.length" description="暂无消息" />
     </main>
