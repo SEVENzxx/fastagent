@@ -93,7 +93,7 @@ async def route_wecom_message(
 
     ── 处理步骤 ──
       1. 联系人匹配：external_userid 查已有联系人，不存在则自动创建
-      2. 会话复用：同一联系人复用同一个会话；有坐席→pending_human，无坐席→ai_processing
+      2. 会话复用：同一联系人复用同一个会话；有坐席→STATUS_PENDING_HUMAN，无坐席→STATUS_AI_PROCESSING
       3. 消息落库：CUSTOMER 消息写入 messages 表
       4. WebSocket 广播：message.created + conversation.updated 推送到坐席工作台
       5. AI 处理：意图识别 → 路由 → 自动回复
@@ -109,8 +109,8 @@ async def route_wecom_message(
             contact_id=contact.id,
             employee_id=contact.assigned_employee_id,
             platform_id=platform.id,
-            status="pending_human" if contact.assigned_employee_id else "ai_processing",
-            handling_type="human" if contact.assigned_employee_id else "ai_only",
+            status=Conversation.STATUS_PENDING_HUMAN if contact.assigned_employee_id else Conversation.STATUS_AI_PROCESSING,
+            handling_type=Conversation.HANDLING_HUMAN if contact.assigned_employee_id else Conversation.HANDLING_AI_ONLY,
             tags=["企业微信"],
         ),
     )
@@ -121,7 +121,7 @@ async def route_wecom_message(
         conversation.id,
         platform.tenant_id,
         MessageCreate(
-            sender_type="CUSTOMER",
+            sender_type=Conversation.SENDER_CUSTOMER,
             content_type=message.content_type,
             content=message.content,
             metadata={

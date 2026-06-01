@@ -1,4 +1,4 @@
-"""Phase 8 意图识别配置。
+"""意图识别配置 — 强规则 / 路由映射 / 关键词加权。
 
 当前先使用代码内配置，后续可以替换为 YAML/DB/管理后台。
 """
@@ -7,17 +7,23 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from app.services.ai.intent.types import RouteType
+from app.services.ai.intent import types as it
+
+
+# ══ 配置数据结构 ══
 
 
 @dataclass(frozen=True, slots=True)
 class StrongRuleConfig:
-    """强规则配置。"""
+    """强规则 — 关键词命中后直接决定路由，跳过 LLM。
+
+    should_stop=True 时命中即停止流水线，不继续向量 / LLM 步骤。
+    """
 
     intent: str
     label: str
     keywords: tuple[str, ...]
-    route: RouteType
+    route: it.RouteType
     skill: str | None = None
     confidence: float = 1.0
     should_stop: bool = True
@@ -26,7 +32,7 @@ class StrongRuleConfig:
 
 @dataclass(frozen=True, slots=True)
 class KeywordBoostConfig:
-    """关键词到 intent 的加权配置。"""
+    """关键词加权 — 命中后给对应 intent 加分，不直接决定路由。"""
 
     keyword: str
     intent: str
@@ -36,16 +42,16 @@ class KeywordBoostConfig:
 
 @dataclass(frozen=True, slots=True)
 class IntentRouteConfig:
-    """intent 到 route/skill 的映射配置。"""
+    """intent → (route, skill, label) 映射。"""
 
-    route: RouteType
+    route: it.RouteType
     skill: str | None = None
     label: str = ""
 
 
 @dataclass(frozen=True, slots=True)
 class IntentRecognitionConfig:
-    """意图识别主配置。"""
+    """意图识别流水线总配置。"""
 
     vector_top_k: int = 20
     vector_min_score: float = 0.75
@@ -58,155 +64,97 @@ class IntentRecognitionConfig:
     intent_route_map: dict[str, IntentRouteConfig] = field(default_factory=dict)
 
     def route_for(self, intent: str) -> IntentRouteConfig:
-        """返回 intent 路由配置；未知意图默认走 GENERAL_REPLY。"""
-        return self.intent_route_map.get(intent, self.intent_route_map["unknown_intent"])
+        """查 intent → route/skill；未注册兜底为 unknown_intent。"""
+        return self.intent_route_map.get(intent, self.intent_route_map[it.INTENT_UNKNOWN])
 
     def label_for(self, intent: str) -> str:
-        """返回 intent 展示标签；未知时返回原始 intent。"""
+        """查 intent → 中文标签。"""
         route = self.intent_route_map.get(intent)
         return route.label if route and route.label else intent
 
 
+# ══ 平台默认配置 ══
+
+# ── intent → (route, skill) 映射 ──
 DEFAULT_INTENT_ROUTE_MAP: dict[str, IntentRouteConfig] = {
-    "transfer_request": IntentRouteConfig("HUMAN", "human_service", "转人工"),
-    "complaint": IntentRouteConfig("HUMAN", "human_service", "投诉"),
-    "abuse": IntentRouteConfig("HUMAN", "human_service", "辱骂攻击"),
-    "legal_threat": IntentRouteConfig("HUMAN", "human_service", "法律威胁"),
-    "unsubscribe": IntentRouteConfig("HUMAN", "human_service", "退订"),
-    "exit": IntentRouteConfig("HUMAN", "human_service", "退出"),
-    "cancel": IntentRouteConfig("HUMAN", "human_service", "取消"),
-    "delete_account": IntentRouteConfig("HUMAN", "human_service", "删除账号"),
-    "return_refund": IntentRouteConfig("HUMAN", "human_service", "退货退款"),
-    "product_price": IntentRouteConfig("AGENT", "product_price", "商品价格"),
-    "product_stock": IntentRouteConfig("AGENT", "product_stock", "商品库存"),
-    "delivery_time": IntentRouteConfig("AGENT", "delivery_time", "发货时效"),
-    "order_status": IntentRouteConfig("AGENT", "order_status", "订单状态"),
-    "logistics_status": IntentRouteConfig("AGENT", "logistics_status", "物流状态"),
-    "invoice": IntentRouteConfig("AGENT", "invoice", "发票"),
-    "product_search": IntentRouteConfig("AGENT", "search_products", "商品搜索"),
-    "product_inquiry": IntentRouteConfig("AGENT", "search_products", "商品咨询"),
-    "return_refund": IntentRouteConfig("HUMAN", "human_service", "退货退款"),
-    "unknown_intent": IntentRouteConfig("GENERAL_REPLY", "general_reply", "未知意图"),
-    "chitchat": IntentRouteConfig("GENERAL_REPLY", "general_reply", "闲聊"),
-    "silent_empty": IntentRouteConfig("SILENT", None, "空消息"),
-    "silent_noise": IntentRouteConfig("SILENT", None, "噪音消息"),
-    "silent_ack": IntentRouteConfig("SILENT", None, "确认类短句"),
-    "silent_thanks": IntentRouteConfig("SILENT", None, "感谢类短句"),
+    # HUMAN（9 个）
+    it.INTENT_TRANSFER_REQUEST: IntentRouteConfig(it.ROUTE_HUMAN, it.SKILL_HUMAN_SERVICE, "转人工"),
+    it.INTENT_COMPLAINT: IntentRouteConfig(it.ROUTE_HUMAN, it.SKILL_HUMAN_SERVICE, "投诉"),
+    it.INTENT_ABUSE: IntentRouteConfig(it.ROUTE_HUMAN, it.SKILL_HUMAN_SERVICE, "辱骂攻击"),
+    it.INTENT_LEGAL_THREAT: IntentRouteConfig(it.ROUTE_HUMAN, it.SKILL_HUMAN_SERVICE, "法律威胁"),
+    it.INTENT_UNSUBSCRIBE: IntentRouteConfig(it.ROUTE_HUMAN, it.SKILL_HUMAN_SERVICE, "退订"),
+    it.INTENT_EXIT: IntentRouteConfig(it.ROUTE_HUMAN, it.SKILL_HUMAN_SERVICE, "退出"),
+    it.INTENT_CANCEL: IntentRouteConfig(it.ROUTE_HUMAN, it.SKILL_HUMAN_SERVICE, "取消"),
+    it.INTENT_DELETE_ACCOUNT: IntentRouteConfig(it.ROUTE_HUMAN, it.SKILL_HUMAN_SERVICE, "删除账号"),
+    it.INTENT_RETURN_REFUND: IntentRouteConfig(it.ROUTE_HUMAN, it.SKILL_HUMAN_SERVICE, "退货退款"),
+    # AGENT（8 个）
+    it.INTENT_PRODUCT_PRICE: IntentRouteConfig(it.ROUTE_AGENT, it.SKILL_PRODUCT_PRICE, "商品价格"),
+    it.INTENT_PRODUCT_STOCK: IntentRouteConfig(it.ROUTE_AGENT, it.SKILL_PRODUCT_STOCK, "商品库存"),
+    it.INTENT_DELIVERY_TIME: IntentRouteConfig(it.ROUTE_AGENT, it.SKILL_DELIVERY_TIME, "发货时效"),
+    it.INTENT_ORDER_STATUS: IntentRouteConfig(it.ROUTE_AGENT, it.SKILL_ORDER_STATUS, "订单状态"),
+    it.INTENT_LOGISTICS_STATUS: IntentRouteConfig(it.ROUTE_AGENT, it.SKILL_LOGISTICS_STATUS, "物流状态"),
+    it.INTENT_INVOICE: IntentRouteConfig(it.ROUTE_AGENT, it.SKILL_INVOICE, "发票"),
+    it.INTENT_PRODUCT_SEARCH: IntentRouteConfig(it.ROUTE_AGENT, it.SKILL_SEARCH_PRODUCTS, "商品搜索"),
+    it.INTENT_PRODUCT_INQUIRY: IntentRouteConfig(it.ROUTE_AGENT, it.SKILL_SEARCH_PRODUCTS, "商品咨询"),
+    # GENERAL_REPLY（2 个）
+    it.INTENT_UNKNOWN: IntentRouteConfig(it.ROUTE_GENERAL_REPLY, it.SKILL_GENERAL_REPLY, "未知意图"),
+    it.INTENT_CHITCHAT: IntentRouteConfig(it.ROUTE_GENERAL_REPLY, it.SKILL_GENERAL_REPLY, "闲聊"),
+    # SILENT（4 个）
+    it.INTENT_SILENT_EMPTY: IntentRouteConfig(it.ROUTE_SILENT, None, "空消息"),
+    it.INTENT_SILENT_NOISE: IntentRouteConfig(it.ROUTE_SILENT, None, "噪音消息"),
+    it.INTENT_SILENT_ACK: IntentRouteConfig(it.ROUTE_SILENT, None, "确认类短句"),
+    it.INTENT_SILENT_THANKS: IntentRouteConfig(it.ROUTE_SILENT, None, "感谢类短句"),
 }
 
-
+# ── 强规则 — 按风险降序，命中即停止 ──
 DEFAULT_RULES: tuple[StrongRuleConfig, ...] = (
-    # ═══════════════════════ HUMAN：必须转人工（按风险降序）══════════════════
-    StrongRuleConfig(
-        "transfer_request",
-        "转人工",
+    # ══ HUMAN（7 个）══
+    StrongRuleConfig(it.INTENT_TRANSFER_REQUEST, "转人工",
         ("转人工", "人工客服", "真人客服", "找客服", "我要人工", "人工", "给我转人工"),
-        "HUMAN",
-        "human_service",
-        1.0,
-        True,
-        "用户明确要求人工介入",
-    ),
-    StrongRuleConfig(
-        "abuse",
-        "辱骂攻击",
+        it.ROUTE_HUMAN, it.SKILL_HUMAN_SERVICE, 1.0, True, "用户明确要求人工介入"),
+    StrongRuleConfig(it.INTENT_ABUSE, "辱骂攻击",
         ("傻逼", "草泥马", "你妈", "操你", "去死", "垃圾东西"),
-        "HUMAN",
-        "human_service",
-        1.0,
-        True,
-        "辱骂/攻击性言论，需人工安抚",
-    ),
-    StrongRuleConfig(
-        "legal_threat",
-        "法律威胁",
+        it.ROUTE_HUMAN, it.SKILL_HUMAN_SERVICE, 1.0, True, "辱骂/攻击性言论"),
+    StrongRuleConfig(it.INTENT_LEGAL_THREAT, "法律威胁",
         ("起诉", "工商局", "12315", "报警", "律师函", "法院", "消协", "投诉你们公司"),
-        "HUMAN",
-        "human_service",
-        1.0,
-        True,
-        "法律/监管投诉，风险升级",
-    ),
-    StrongRuleConfig(
-        "complaint",
-        "投诉",
+        it.ROUTE_HUMAN, it.SKILL_HUMAN_SERVICE, 1.0, True, "法律/监管投诉"),
+    StrongRuleConfig(it.INTENT_COMPLAINT, "投诉",
         ("投诉", "举报", "差评", "严重不满", "太差了", "太坑了"),
-        "HUMAN",
-        "human_service",
-        0.98,
-        True,
-        "投诉类高风险场景",
-    ),
-    StrongRuleConfig(
-        "delete_account",
-        "删除账号",
+        it.ROUTE_HUMAN, it.SKILL_HUMAN_SERVICE, 0.98, True, "投诉类高风险场景"),
+    StrongRuleConfig(it.INTENT_DELETE_ACCOUNT, "删除账号",
         ("删除账号", "注销账号", "销号", "注销", "删除账户", "把账号删了", "怎么注销", "想注销"),
-        "HUMAN",
-        "human_service",
-        0.98,
-        True,
-        "账号删除需要人工确认",
-    ),
-    StrongRuleConfig(
-        "return_refund",
-        "退货退款",
+        it.ROUTE_HUMAN, it.SKILL_HUMAN_SERVICE, 0.98, True, "账号删除需人工确认"),
+    StrongRuleConfig(it.INTENT_RETURN_REFUND, "退货退款",
         ("退款", "退货", "我要退", "申请退款", "退钱", "怎么退", "给我退了", "不想要了"),
-        "HUMAN",
-        "human_service",
-        0.96,
-        True,
-        "退换货诉求需人工处理",
-    ),
-    StrongRuleConfig(
-        "unsubscribe",
-        "退订",
+        it.ROUTE_HUMAN, it.SKILL_HUMAN_SERVICE, 0.96, True, "退换货需人工处理"),
+    StrongRuleConfig(it.INTENT_UNSUBSCRIBE, "退订",
         ("退订", "别发了", "不要推送", "别再发了"),
-        "HUMAN",
-        "human_service",
-        0.96,
-        True,
-        "退订类诉求需要人工确认",
-    ),
+        it.ROUTE_HUMAN, it.SKILL_HUMAN_SERVICE, 0.96, True, "退订需人工确认"),
 
-    # ═══════════════════ SILENT：不需要回复（按频率降序）══════════════════
-    StrongRuleConfig(
-        "silent_ack",
-        "确认类短句",
+    # ══ SILENT（2 个）══
+    StrongRuleConfig(it.INTENT_SILENT_ACK, "确认类短句",
         ("好的", "知道了", "嗯", "哦", "OK", "ok", "收到", "明白", "行", "好"),
-        "SILENT",
-        None,
-        1.0,
-        True,
-        "纯确认/收到类短句，无需回复",
-    ),
-    StrongRuleConfig(
-        "silent_thanks",
-        "感谢类短句",
+        it.ROUTE_SILENT, None, 1.0, True, "纯确认/收到"),
+    StrongRuleConfig(it.INTENT_SILENT_THANKS, "感谢类短句",
         ("谢谢", "多谢", "感谢", "谢谢啦", "3Q", "thx"),
-        "SILENT",
-        None,
-        1.0,
-        True,
-        "纯感谢类短句，无需回复",
-    ),
-
+        it.ROUTE_SILENT, None, 1.0, True, "纯感谢"),
 )
 
-
+# ── 关键词加权 — 命中后给 intent 加分，配合向量召回使用 ──
 DEFAULT_KEYWORD_BOOSTS: tuple[KeywordBoostConfig, ...] = (
-    KeywordBoostConfig("订单", "order_status", 0.16, "订单关键词提高订单状态意图"),
-    KeywordBoostConfig("物流", "logistics_status", 0.18, "物流关键词提高物流状态意图"),
-    KeywordBoostConfig("快递", "logistics_status", 0.18, "快递关键词提高物流状态意图"),
-    KeywordBoostConfig("发货", "delivery_time", 0.2, "发货关键词提高发货时效意图"),
-    KeywordBoostConfig("今天能发", "delivery_time", 0.24, "明确询问当天发货"),
-    KeywordBoostConfig("发票", "invoice", 0.22, "发票关键词提高发票意图"),
-    KeywordBoostConfig("多少钱", "product_price", 0.24, "价格关键词提高商品价格意图"),
-    KeywordBoostConfig("价格", "product_price", 0.2, "价格关键词提高商品价格意图"),
-    KeywordBoostConfig("有货", "product_stock", 0.24, "库存关键词提高商品库存意图"),
-    KeywordBoostConfig("库存", "product_stock", 0.2, "库存关键词提高商品库存意图"),
+    KeywordBoostConfig("订单", it.INTENT_ORDER_STATUS, 0.16),
+    KeywordBoostConfig("物流", it.INTENT_LOGISTICS_STATUS, 0.18),
+    KeywordBoostConfig("快递", it.INTENT_LOGISTICS_STATUS, 0.18),
+    KeywordBoostConfig("发货", it.INTENT_DELIVERY_TIME, 0.20),
+    KeywordBoostConfig("今天能发", it.INTENT_DELIVERY_TIME, 0.24),
+    KeywordBoostConfig("发票", it.INTENT_INVOICE, 0.22),
+    KeywordBoostConfig("多少钱", it.INTENT_PRODUCT_PRICE, 0.24),
+    KeywordBoostConfig("价格", it.INTENT_PRODUCT_PRICE, 0.20),
+    KeywordBoostConfig("有货", it.INTENT_PRODUCT_STOCK, 0.24),
+    KeywordBoostConfig("库存", it.INTENT_PRODUCT_STOCK, 0.20),
 )
 
-
+# ── 聚合为平台默认配置 ──
 DEFAULT_INTENT_CONFIG = IntentRecognitionConfig(
     rules=DEFAULT_RULES,
     keyword_boosts=DEFAULT_KEYWORD_BOOSTS,
@@ -221,7 +169,7 @@ def build_intent_config(
     intent_route_map: dict[str, IntentRouteConfig] | None = None,
     **overrides,
 ) -> IntentRecognitionConfig:
-    """构建意图识别配置，支持租户级覆盖（当前使用默认值，后续从 DB 读取）。
+    """构建意图识别配置，支持租户级覆盖。
 
     覆盖规则：传入的参数覆盖默认值，未传入的使用平台默认。
     """

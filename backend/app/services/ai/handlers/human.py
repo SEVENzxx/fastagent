@@ -6,7 +6,7 @@ from collections.abc import AsyncIterator
 from typing import TYPE_CHECKING
 
 from app.services.ai.handlers.registry import register_handler
-from app.services.ai.intent.types import RoutedIntent
+from app.services.ai.intent.types import ROUTE_HUMAN, RoutedIntent
 
 if TYPE_CHECKING:
     from app.services.ai.agent.types import AgentContext
@@ -17,11 +17,11 @@ async def handle_human(routed: RoutedIntent) -> str:
     return "您已接入人工客服，请稍候，客服人员将尽快为您服务。"
 
 
-@register_handler("HUMAN")
+@register_handler(ROUTE_HUMAN)
 class HumanHandler:
     """HUMAN 路由处理器。"""
 
-    route = "HUMAN"
+    route = ROUTE_HUMAN
     reply_sender_type = "SYSTEM"
     clear_pending_state = True
     transfer_to_human = True

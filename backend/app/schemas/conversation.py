@@ -4,17 +4,25 @@ from datetime import datetime
 
 from pydantic import Field, field_serializer, field_validator
 
+from app.models.conversation import Conversation
 from app.schemas.base import CamelModel
 
 CONVERSATION_STATUSES = {
-    "ai_processing",
-    "pending_human",
-    "human_processing",
-    "closed",
-    "followup",
+    Conversation.STATUS_AI_PROCESSING,
+    Conversation.STATUS_PENDING_HUMAN,
+    Conversation.STATUS_HUMAN_PROCESSING,
+    Conversation.STATUS_CLOSED,
 }
-HANDLING_TYPES = {"ai_only", "human", "collaboration"}
-SENDER_TYPES = {"AI", "AGENT", "CUSTOMER", "SYSTEM"}
+HANDLING_TYPES = {
+    Conversation.HANDLING_AI_ONLY,
+    Conversation.HANDLING_HUMAN,
+}
+SENDER_TYPES = {
+    Conversation.SENDER_AI,
+    Conversation.SENDER_AGENT,
+    Conversation.SENDER_CUSTOMER,
+    Conversation.SENDER_SYSTEM,
+}
 CONTENT_TYPES = {"text", "image", "voice", "file", "card", "event"}
 
 
@@ -22,8 +30,8 @@ class ConversationCreate(CamelModel):
     contact_id: int
     employee_id: int | None = None
     platform_id: int | None = None
-    status: str = "ai_processing"
-    handling_type: str = "ai_only"
+    status: str = Conversation.STATUS_AI_PROCESSING
+    handling_type: str = Conversation.HANDLING_AI_ONLY
     tags: list[str] = Field(default_factory=list)
     idle_timeout_seconds: int = 1800
 
@@ -102,7 +110,7 @@ class ConversationListResponse(CamelModel):
 
 
 class MessageCreate(CamelModel):
-    sender_type: str = "AGENT"
+    sender_type: str = Conversation.SENDER_AGENT
     content_type: str = "text"
     content: str
     metadata: dict | None = None

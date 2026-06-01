@@ -74,7 +74,7 @@ async def attach_conversation_extras(db: AsyncSession, conversations: list[Conve
             .where(
                 Message.conversation_id.in_(conversation_ids),
                 Message.is_read.is_(False),
-                Message.sender_type == "CUSTOMER",
+                Message.sender_type == Conversation.SENDER_CUSTOMER,
             )
             .group_by(Message.conversation_id)
         )
@@ -184,7 +184,7 @@ async def create_conversation(
         .limit(1)
     )
     if existing is not None:
-        if existing.status == "closed":
+        if existing.status == Conversation.STATUS_CLOSED:
             # “打开会话”是明确的恢复动作；与普通状态下拉不同，它允许把 closed 会话接着聊。
             employee_id = body.employee_id if body.employee_id is not None else contact.assigned_employee_id
             await _ensure_employee(db, tenant_id, employee_id)
@@ -240,16 +240,16 @@ async def update_conversation(
         return None
     data = body.model_dump(exclude_unset=True)
     if (
-        conversation.status == "closed"
+        conversation.status == Conversation.STATUS_CLOSED
         and "status" in data
-        and data["status"] != "closed"
+        and data["status"] != Conversation.STATUS_CLOSED
     ):
         raise ValueError("会话已关闭，不能重新打开")
     if "employee_id" in data:
         await _ensure_employee(db, tenant_id, data["employee_id"])
-    if data.get("status") == "closed" and conversation.closed_at is None:
+    if data.get("status") == Conversation.STATUS_CLOSED and conversation.closed_at is None:
         conversation.closed_at = datetime.now(timezone.utc)
-    if "status" in data and data["status"] != "closed":
+    if "status" in data and data["status"] != Conversation.STATUS_CLOSED:
         conversation.closed_at = None
     for key, value in data.items():
         setattr(conversation, key, value)
@@ -298,7 +298,7 @@ async def create_message(
     conversation = await get_conversation(db, conversation_id, tenant_id)
     if conversation is None:
         raise ValueError("会话不存在")
-    if conversation.status == "closed":
+    if conversation.status == Conversation.STATUS_CLOSED:
         raise ValueError("会话已关闭，不能发送消息")
     message = Message(
         conversation_id=conversation_id,
@@ -307,13 +307,13 @@ async def create_message(
         content=body.content,
         metadata_=body.metadata or {},
         reply_to_id=body.reply_to_id,
-        is_read=body.sender_type != "CUSTOMER",
+        is_read=body.sender_type != Conversation.SENDER_CUSTOMER,
     )
     now = datetime.now(timezone.utc)
     conversation.last_message_at = now
-    if body.sender_type == "AGENT" and conversation.status == "pending_human":
-        conversation.status = "human_processing"
-        conversation.handling_type = "human"
+    if body.sender_type == Conversation.SENDER_AGENT and conversation.status == Conversation.STATUS_PENDING_HUMAN:
+        conversation.status = Conversation.STATUS_HUMAN_PROCESSING
+        conversation.handling_type = Conversation.HANDLING_HUMAN
     db.add(message)
     await db.commit()
     await db.refresh(message)
@@ -353,7 +353,7 @@ async def mark_messages_read(db: AsyncSession, conversation_id: int, tenant_id: 
     result = await db.execute(
         select(Message).where(
             Message.conversation_id == conversation_id,
-            Message.sender_type == "CUSTOMER",
+            Message.sender_type == Conversation.SENDER_CUSTOMER,
             Message.is_read.is_(False),
         )
     )

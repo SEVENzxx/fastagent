@@ -16,21 +16,27 @@ logger = logging.getLogger(__name__)
 
 
 async def deliver_message(db: AsyncSession, conversation: Conversation, message: Message) -> Message:
-    """尝试将本地创建的消息发送到对应的外部渠道。"""
-    if message.sender_type not in {"AGENT", "AI", "SYSTEM"} or message.content_type != "text":
-        logger.info(
-            "跳过出站投递：message_id=%s sender_type=%s content_type=%s",
-            message.id,
-            message.sender_type,
-            message.content_type,
-        )
+    """尝试将本地创建的消息发送到对应的外部渠道。
+
+    ── 处理步骤 ──
+      1. 过滤 — 只投递 AGENT / AI / SYSTEM 发出的文本消息
+      2. 敏感词风控 — 先检查消息内容是否命中敏感词
+      3. block/transfer → 标记 pending_human + 创建通知 + 拦截
+      4. 无渠道 → 跳过（纯本地会话，无需投递）
+      5. 查渠道配置 + 联系人 external_userid
+      6. 调用渠道出站接口（企微 send_text）
+      7. 更新消息 metadata（出站结果），提交
+    """
+
+    # ── 1: 过滤 — 只投递坐席/AI/系统文本消息 ──
+    if message.sender_type not in {Conversation.SENDER_AGENT, Conversation.SENDER_AI, Conversation.SENDER_SYSTEM} or message.content_type != "text":
         return message
 
-    # 所有文本出站都必须先经过同一个风控入口。这里位于渠道选择之前，因此没有
-    # 配置企微渠道的本地演示消息也会留下命中记录，后续自动跟进复用本服务时同样
-    # 不会绕过敏感词规则。
+    # ── 2: 敏感词风控 ──
     from app.services import operations_service
     sensitive = await operations_service.evaluate_sensitive_text(db, conversation.tenant_id, message.content or "")
+
+    # ── 3: 命中 → block → 拦截并转人工；warn → 记录但不拦截 ──
     if sensitive["action"]:
         metadata = dict(message.metadata_ or {})
         metadata["sensitive_word_check"] = sensitive
@@ -45,8 +51,8 @@ async def deliver_message(db: AsyncSession, conversation: Conversation, message:
             commit=False,
         )
         if sensitive["action"] in {"block", "transfer"}:
-            conversation.status = "pending_human"
-            conversation.handling_type = "human"
+            conversation.status = Conversation.STATUS_PENDING_HUMAN
+            conversation.handling_type = Conversation.HANDLING_HUMAN
             conversation.is_transferred = True
             conversation.transfer_reason = "敏感词风控触发"
             metadata["outbound"] = {
@@ -70,16 +76,15 @@ async def deliver_message(db: AsyncSession, conversation: Conversation, message:
             await db.commit()
             await db.refresh(message)
             return message
+        # warn → 记录但不拦截，继续投递
         await db.commit()
         await db.refresh(message)
+
+    # ── 4: 无渠道 → 跳过 ──
     if conversation.platform_id is None:
-        logger.info(
-            "跳过出站投递：conversation_id=%s message_id=%s reason=no_platform",
-            conversation.id,
-            message.id,
-        )
         return message
 
+    # ── 5: 查渠道配置 + 校验 ──
     platform = await db.get(Platform, conversation.platform_id)
     if (
         platform is None
@@ -95,27 +100,15 @@ async def deliver_message(db: AsyncSession, conversation: Conversation, message:
         )
         return message
 
+    # ── 6: 提取联系人 external_userid → 调用企微出站 ──
     contact = await db.get(Contact, conversation.contact_id)
     external_userid = _get_wecom_external_userid(contact)
-    logger.info(
-        "开始出站投递：tenant_id=%s conversation_id=%s message_id=%s platform_id=%s content_len=%s",
-        conversation.tenant_id,
-        conversation.id,
-        message.id,
-        platform.id,
-        len(message.content or ""),
-    )
     result = await _send_wecom_text(platform, external_userid, message.content or "")
+
+    # ── 7: 更新消息 metadata + 提交 ──
     message.metadata_ = _with_outbound_metadata(message.metadata_ or {}, result)
     await db.commit()
     await db.refresh(message)
-    logger.info(
-        "出站投递完成：conversation_id=%s message_id=%s platform_id=%s ok=%s",
-        conversation.id,
-        message.id,
-        platform.id,
-        result.get("ok"),
-    )
     return message
 
 

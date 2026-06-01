@@ -19,24 +19,10 @@ from app.services.ai.intent.normalizer import TextNormalizer
 from app.services.ai.intent.router import IntentRouter
 from app.services.ai.intent.rule_matcher import RuleMatcher
 from app.services.ai.intent.segmenter import MessageSegmenter
-from app.services.ai.intent.types import IntentCandidate, IntentHit, IntentResult, PendingIntentState, RoutedIntent
+from app.services.ai.intent.types import IntentCandidate, IntentHit, IntentResult, PendingIntentState, ROUTE_HUMAN, ROUTE_SILENT, RoutedIntent
 from app.services.ai.intent.vector_retriever import VectorIntentRetriever, VectorProvider
 
 logger = logging.getLogger(__name__)
-
-PIPELINE_STEPS: tuple[tuple[int, str, str], ...] = (
-    (1, "TextNormalizer", "文本清洗，输出 normalized_text"),
-    (2, "RuleMatcher", "强规则匹配，高风险 should_stop 可直接返回"),
-    (3, "KeywordEntityExtractor", "抽取关键词/实体/intent_boosts/risk_flags"),
-    (4, "ContextStateResolver", "处理上一轮 pending intent 的槽位补全"),
-    (5, "MessageSegmenter", "多问题拆句，每个 segment 独立识别"),
-    (6, "VectorIntentRetriever", "向量候选召回，只返回 IntentCandidate"),
-    (7, "IntentFusionScorer", "融合 vector_score + keyword_boost + context_boost"),
-    (8, "AmbiguityDetector", "判断高置信、低置信、歧义、无候选"),
-    (9, "LLMIntentJudge", "仅在需要时从候选中精判"),
-    (10, "IntentRouter", "IntentResult 映射 RoutedIntent"),
-)
-
 
 class IntentRecognitionPipeline:
     """企业客服分层意图识别流水线。"""
@@ -69,50 +55,61 @@ class IntentRecognitionPipeline:
         *,
         pending_state: PendingIntentState | None = None,
     ) -> IntentResult:
-        """识别意图，返回 IntentResult。"""
+        """识别意图，返回 IntentResult。
 
-        # 1: Normalizer — 文本清洗
+        ── 流水线步骤 ──
+          1. Normalizer          文本清洗
+          2. RuleMatcher         强规则匹配（高风险直接返回）
+          3. KeywordEntity       关键词/实体抽取 + intent 加权
+          4. ContextState        多轮槽位补全（pending state）
+          5. Segmenter           多意图分句
+          6. VectorRetriever     向量意图召回
+          7. FusionScorer        融合打分
+          8. AmbiguityDetector   歧义判断
+          9. LLMIntentJudge      仅模糊候选触发精判
+         10. IntentRouter        IntentResult → RoutedIntent
+        """
+
+        # ── 1: 文本清洗 ──
         started = time.perf_counter()
         original = str(text or "")
         normalized = self.normalizer.normalize(original)
-        logger.info("意图识别流水线开始：text_len=%s normalized_len=%s", len(original), len(normalized))
 
-        # 2: RuleMatcher — 强规则提前退出
+        # ── 2: 强规则匹配（转人工/投诉/辱骂等高优先级规则）──
         strong_hit = self.rule_matcher.match(normalized)
-        if strong_hit is not None and strong_hit.route in {"HUMAN", "SILENT"}:
-            logger.info("意图识别通过强规则提前退出：intent=%s route=%s confidence=%.4f", strong_hit.intent, strong_hit.route, strong_hit.confidence, )
+        if strong_hit is not None and strong_hit.route in {ROUTE_HUMAN, ROUTE_SILENT}:
+            logger.info(
+                "意图识别 — 强规则命中：intent=%s route=%s confidence=%.2f",
+                strong_hit.intent, strong_hit.route, strong_hit.confidence,
+            )
             return self._early_result(original, normalized, strong_hit, "rule_matcher")
 
-        # 3: KeywordEntityExtractor — 关键字匹配
+        # ── 3: 关键词/实体抽取 ──
         signals = self.keyword_entity.extract(normalized)
 
-        # 4: ContextStateResolver — 槽位补全
+        # ── 4: 多轮槽位补全 ──
         context_hit = self.context_state.resolve(normalized, signals, pending_state)
         if context_hit is not None:
             logger.info(
-                "意图识别通过待补槽状态完成：intent=%s route=%s confidence=%.4f elapsed_ms=%.0f",
-                context_hit.intent, context_hit.route, context_hit.confidence,
+                "意图识别 — 槽位补全命中：intent=%s route=%s elapsed_ms=%.0f",
+                context_hit.intent, context_hit.route,
                 (time.perf_counter() - started) * 1000,
             )
             return self._early_result(original, normalized, context_hit, "context_state")
 
-        # 5: MessageSegmenter
+        # ── 5: 多意图分句 ──
         segments = self.segmenter.segment(
             normalized, enable_multi_intent=self.config.enable_multi_intent,
         )
         if not segments:
-            logger.info("意图识别返回未知意图：reason=empty_segments elapsed_ms=%.0f",
-                        (time.perf_counter() - started) * 1000)
             return self._unknown_result(original, normalized, "空文本或无法拆分")
 
-        logger.info("意图识别拆句完成：segments=%s", len(segments))
-
-        # 6-9: 每个 segment 独立识别
+        # ── 6-9: 每个 segment 独立走 向量召回 → 融合打分 → 歧义判断 → LLM 精判 ──
         hits: list[IntentHit] = []
         for segment in segments:
             hits.append(await self._recognize_segment(segment, normalized, signals))
 
-        # 10 在 recognize_and_route() 中调用
+        # ── 组装 IntentResult ──
         primary_hit = max(hits, key=lambda item: item.confidence) if hits else None
         candidates = [c for hit in hits for c in hit.candidates]
         result = IntentResult(
@@ -128,11 +125,9 @@ class IntentRecognitionPipeline:
             reason="多意图识别完成" if len(hits) > 1 else (primary_hit.reason if primary_hit else "无候选"),
         )
         logger.info(
-            "意图识别流水线完成：primary_intent=%s confidence=%.4f hits=%s candidates=%s "
-            "multi=%s clarify=%s source=%s elapsed_ms=%.0f",
-            result.primary_intent, result.confidence, len(result.hits), len(result.candidates),
-            result.is_multi_intent, result.need_clarification, result.source,
-            (time.perf_counter() - started) * 1000,
+            "意图识别完成：intent=%s confidence=%.2f hits=%s multi=%s elapsed_ms=%.0f",
+            result.primary_intent, result.confidence, len(result.hits),
+            result.is_multi_intent, (time.perf_counter() - started) * 1000,
         )
         return result
 
@@ -142,13 +137,13 @@ class IntentRecognitionPipeline:
         *,
         pending_state: PendingIntentState | None = None,
     ) -> RoutedIntent:
-        """识别并路由，返回 RoutedIntent。"""
+        """意图识别 + 路由，返回 RoutedIntent。"""
+
+        # ── 1: 意图识别 ──
         result = await self.recognize(text, pending_state=pending_state)
+
+        # ── 2: 路由映射 ──
         routed = self.router.route(result)
-        logger.info(
-            "意图路由完成：primary_intent=%s route=%s skill=%s confidence=%.4f hits=%s",
-            routed.primary_intent, routed.route, routed.skill, routed.confidence, len(routed.hits),
-        )
         return routed
 
     # ------------------------------------------------------------------
@@ -158,26 +153,25 @@ class IntentRecognitionPipeline:
     async def _recognize_segment(
         self, segment: str, full_text: str, signals,
     ) -> IntentHit:
-        """6-9：单个 segment 的意图识别。"""
+        """单个 segment 的意图识别（步骤 6-9）。
 
-        # 6: VectorIntentRetriever
+        6. 向量召回 → 7. 融合打分 → 8. 歧义判断 → 9. LLM 精判
+        """
+
+        # ── 6: 向量意图召回 ──
         vector_candidates = await self.vector_retriever.retrieve(segment)
 
-        # 7: IntentFusionScorer → list[IntentCandidate]
+        # ── 7: 融合打分（vector + keyword + context）──
         fused = self.fusion_scorer.score(
             vector_candidates, signals, segment=segment, full_text=full_text,
         )
 
-        # 8: AmbiguityDetector → (top, is_ambiguous, need_llm, need_clarification, reason)
+        # ── 8: 歧义判断 ──
         top, is_ambiguous, need_llm, need_clarification, amb_reason = (
             self.ambiguity_detector.detect(fused)
         )
-        logger.info(
-            "意图片段打分完成：segment_len=%s candidates=%s selected=%s confidence=%.4f ambiguous=%s need_llm=%s",
-            len(segment), len(fused), top.intent, top.score, is_ambiguous, need_llm,
-        )
 
-        # 9: LLMIntentJudge → (primary_intent, secondary, need_clarification, reason) | None
+        # ── 9: LLM 精判（仅模糊候选触发，节省 LLM 调用）──
         if need_llm:
             judged = await self.llm_judge.judge(segment, fused)
             if judged is not None:

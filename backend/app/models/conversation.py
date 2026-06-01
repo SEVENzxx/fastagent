@@ -6,12 +6,29 @@ from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Index, Integer
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
+from app.models import Contact, Employee
 from app.models.base import Base
 from app.utils.id_generator import generate_id
 
 
 class Conversation(Base):
     """客户会话"""
+
+    # ── 会话状态常量 ──
+    STATUS_AI_PROCESSING = "ai_processing"
+    STATUS_PENDING_HUMAN = "pending_human"
+    STATUS_HUMAN_PROCESSING = "human_processing"
+    STATUS_CLOSED = "closed"
+
+    # ── 处理类型常量 ──
+    HANDLING_AI_ONLY = "ai_only"
+    HANDLING_HUMAN = "human"
+
+    # ── 发送者类型常量 ──
+    SENDER_CUSTOMER = "CUSTOMER"
+    SENDER_AGENT = "AGENT"
+    SENDER_AI = "AI"
+    SENDER_SYSTEM = "SYSTEM"
 
     __tablename__ = "conversations"
 
@@ -33,16 +50,16 @@ class Conversation(Base):
     status: Mapped[str] = mapped_column(
         String(20),
         nullable=False,
-        default="ai_processing",
-        server_default="ai_processing",
-        comment="会话状态",
+        default=STATUS_AI_PROCESSING,
+        server_default=STATUS_AI_PROCESSING,
+        comment="会话状态: ai_processing / pending_human / human_processing / closed",
     )
     handling_type: Mapped[str] = mapped_column(
         String(20),
         nullable=False,
-        default="ai_only",
-        server_default="ai_only",
-        comment="处理类型",
+        default=HANDLING_AI_ONLY,
+        server_default=HANDLING_AI_ONLY,
+        comment="处理类型: ai_only / human",
     )
     is_transferred: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default=text("false"), comment="是否已转人工"

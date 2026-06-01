@@ -7,7 +7,7 @@ from collections.abc import AsyncIterator
 
 from app.services.ai.agent.types import AgentContext
 from app.services.ai.handlers.registry import register_handler
-from app.services.ai.intent.types import RoutedIntent
+from app.services.ai.intent.types import ROUTE_AGENT, RoutedIntent
 
 logger = logging.getLogger(__name__)
 
@@ -33,11 +33,11 @@ async def handle_agent(
     return result
 
 
-@register_handler("AGENT")
+@register_handler(ROUTE_AGENT)
 class AgentHandler:
     """AGENT 路由处理器。"""
 
-    route = "AGENT"
+    route = ROUTE_AGENT
     reply_sender_type = "AI"
     clear_pending_state = False
     transfer_to_human = False

@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING
 from app.config import settings
 from app.integrations.llm_client import LLMClient, LLMClientError
 from app.services.ai.handlers.registry import register_handler
-from app.services.ai.intent.types import RoutedIntent
+from app.services.ai.intent.types import ROUTE_GENERAL_REPLY, RoutedIntent
 
 if TYPE_CHECKING:
     from app.services.ai.agent.types import AgentContext
@@ -68,11 +68,11 @@ async def handle_general_reply(routed: RoutedIntent) -> AsyncIterator[str]:
         yield _fallback(routed)
 
 
-@register_handler("GENERAL_REPLY")
+@register_handler(ROUTE_GENERAL_REPLY)
 class GeneralReplyHandler:
     """GENERAL_REPLY 路由处理器。"""
 
-    route = "GENERAL_REPLY"
+    route = ROUTE_GENERAL_REPLY
     reply_sender_type = "AI"
     clear_pending_state = False
     transfer_to_human = False

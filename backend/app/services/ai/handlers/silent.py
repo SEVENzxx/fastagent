@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from typing import TYPE_CHECKING
 
-from app.services.ai.intent.types import RoutedIntent
+from app.services.ai.intent.types import ROUTE_SILENT, RoutedIntent
 from app.services.ai.handlers.registry import register_handler
 
 if TYPE_CHECKING:
@@ -17,11 +17,11 @@ async def handle_silent(_routed: RoutedIntent) -> str:
     return ""
 
 
-@register_handler("SILENT")
+@register_handler(ROUTE_SILENT)
 class SilentHandler:
     """SILENT 路由处理器。"""
 
-    route = "SILENT"
+    route = ROUTE_SILENT
     reply_sender_type = None
     clear_pending_state = False
     transfer_to_human = False
