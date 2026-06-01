@@ -5,7 +5,7 @@ from __future__ import annotations
 from app.services.ai.intent.types import IntentCandidate
 
 
-INTENT_JUDGE_SYSTEM_PROMPT = """你是企业客服系统的意图精判器。
+INTENT_JUDGE_SYSTEM_PROMPT = """你是智能客服意图精判器。
 只能从候选意图中选择 primary_intent 和 secondary_intents，不能发明新的 intent。
 必须输出 JSON：
 {"primary_intent":"...","secondary_intents":[],"need_clarification":false,"reason":"..."}

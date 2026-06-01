@@ -2,24 +2,41 @@
 
 from datetime import datetime, timedelta, timezone
 
+import bcrypt
 from jose import jwt, JWTError
-from passlib.context import CryptContext
 
 from app.config import settings
 
 # ── 密码哈希上下文 ─────────────────────────────────────────────────────────
-
-_pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+#
+# passlib 1.7.4 会在初始化 bcrypt 后端时执行一组旧版兼容探测。bcrypt 5.0 已经
+# 对超过 72 字节的输入抛出异常，导致 passlib 的内部探测失败，最终连普通密码也
+# 无法哈希。这里直接使用 bcrypt 官方接口，生成的仍然是标准 bcrypt 哈希，因此
+# 已有密码无需迁移。
 
 
 def hash_password(password: str) -> str:
-    """对明文密码进行 bcrypt 哈希。"""
-    return _pwd_context.hash(password)
+    """对明文密码进行 bcrypt 哈希。
+
+    bcrypt 算法只处理前 72 个字节。静默截断会让两个不同长密码得到相同结果，
+    因此明确拒绝超长输入，让调用方返回可解释的校验错误。
+    """
+    password_bytes = password.encode("utf-8")
+    if len(password_bytes) > 72:
+        raise ValueError("密码长度不能超过 72 个字节")
+    return bcrypt.hashpw(password_bytes, bcrypt.gensalt()).decode("utf-8")
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     """验证明文密码与哈希值是否匹配。"""
-    return _pwd_context.verify(plain_password, hashed_password)
+    password_bytes = plain_password.encode("utf-8")
+    if len(password_bytes) > 72:
+        return False
+    try:
+        return bcrypt.checkpw(password_bytes, hashed_password.encode("utf-8"))
+    except (TypeError, ValueError):
+        # 数据库中若存在损坏哈希，不应让登录接口抛出 500。
+        return False
 
 
 # ── JWT 令牌 ──────────────────────────────────────────────────────────────

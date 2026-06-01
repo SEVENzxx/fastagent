@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 import io
 
 from app.database import get_db
-from app.dependencies import get_current_user, require_permission
+from app.dependencies import require_permission, require_tenant_user
 from app.models.employee import Employee
 from app.models.role import PermissionCode
 from app.schemas.product import (
@@ -53,7 +53,7 @@ async def search_products(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
     db: AsyncSession = Depends(get_db),
-    current_user: Employee = Depends(get_current_user),
+    current_user: Employee = Depends(require_tenant_user),
 ):
     """搜索/筛选商品"""
     items, total = await product_service.list_products(
@@ -81,7 +81,7 @@ async def list_products(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
     db: AsyncSession = Depends(get_db),
-    current_user: Employee = Depends(get_current_user),
+    current_user: Employee = Depends(require_tenant_user),
 ):
     """获取商品列表"""
     items, total = await product_service.list_products(
@@ -144,7 +144,7 @@ async def import_products(
 async def get_product(
     product_id: int,
     db: AsyncSession = Depends(get_db),
-    current_user: Employee = Depends(get_current_user),
+    current_user: Employee = Depends(require_tenant_user),
 ):
     """获取单个商品"""
     product = await product_service.get_product(db, product_id, current_user.tenant_id)

@@ -1,16 +1,17 @@
-"""Product management service."""
+"""商品管理服务。"""
 
 import csv
 import io
 import json
 from datetime import datetime, timezone
 
-from sqlalchemy import and_, func, select, or_
+from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.category import Category
 from app.models.product import Product
 from app.schemas.product import ProductCreate, ProductImportError, ProductImportResponse, ProductUpdate
+from app.services.vector_search_service import VectorDomain, VectorSearchService
 
 
 PRODUCT_IMPORT_TEMPLATE = (
@@ -18,6 +19,8 @@ PRODUCT_IMPORT_TEMPLATE = (
     "西湖龙井 500g,LJ-500,茶叶/绿茶/龙井,168.00,120.00,100,否,上架,明前龙井,"
     "\"{\"\"规格\"\":\"\"500g\"\",\"\"产地\"\":\"\"杭州\"\"}\"\n"
 )
+
+_vector_search = VectorSearchService()
 
 _COLUMN_ALIASES = {
     "商品名称": "name",
@@ -132,14 +135,18 @@ async def list_products(
     clean_keyword = keyword.strip()
 
     if clean_keyword:
-        pattern = f"%{clean_keyword}%"
-        conditions.append(
-            or_(
-                Product.name.ilike(pattern),
-                Product.sku.ilike(pattern),
-                Product.description.ilike(pattern),
-            )
+        vector_hits = await _vector_search.search_text(
+            domain=VectorDomain.PRODUCT,
+            tenant_id=tenant_id,
+            query=clean_keyword,
+            top_k=max(page * page_size, page_size),
+            min_score=0.55,
+            filters={"is_active": is_active} if is_active is not None else None,
         )
+        product_ids = [int(hit.payload["product_id"]) for hit in vector_hits if str(hit.payload.get("product_id", "")).isdigit()]
+        if not product_ids:
+            return [], 0
+        conditions.append(Product.id.in_(product_ids))
     if category_id is not None:
         conditions.append(Product.category_id == category_id)
     if is_active is not None:
@@ -156,11 +163,15 @@ async def list_products(
 
     offset = (page - 1) * page_size
     result = await db.execute(
-        base_query.order_by(Product.updated_at.desc(), Product.created_at.desc())
-        .offset(offset)
-        .limit(page_size)
+        base_query.order_by(Product.updated_at.desc(), Product.created_at.desc()).offset(offset).limit(page_size)
+        if not clean_keyword
+        else base_query
     )
     items = list(result.scalars().all())
+    if clean_keyword:
+        order = {pid: idx for idx, pid in enumerate(product_ids)}
+        items.sort(key=lambda item: order.get(item.id, len(order)))
+        items = items[offset: offset + page_size]
     await attach_category_names(db, items)
     return items, total or 0
 
@@ -178,6 +189,42 @@ async def attach_category_names(db: AsyncSession, products: list[Product]) -> No
     category_map = {category_id: name for category_id, name in result.all()}
     for product in products:
         product._category_name = category_map.get(product.category_id)
+
+
+def _product_search_text(product: Product) -> str:
+    specs = json.dumps(product.specs, ensure_ascii=False, sort_keys=True) if product.specs else ""
+    return "\n".join(
+        part
+        for part in [
+            product.name,
+            product.sku or "",
+            product.description or "",
+            specs,
+        ]
+        if part
+    )
+
+
+async def _index_product(product: Product) -> None:
+    point_id = await _vector_search.upsert_text(
+        domain=VectorDomain.PRODUCT,
+        tenant_id=product.tenant_id,
+        business_id=product.id,
+        text=_product_search_text(product),
+        payload={
+            "product_id": str(product.id),
+            "name": product.name,
+            "sku": product.sku,
+            "category_id": str(product.category_id) if product.category_id is not None else None,
+            "is_active": product.is_active,
+            "is_sample": product.is_sample,
+            "price": float(product.price) if product.price is not None else None,
+            "stock": product.stock,
+        },
+        point_id=product.qdrant_point_id,
+    )
+    if point_id:
+        product.qdrant_point_id = point_id
 
 
 async def get_product(
@@ -220,6 +267,8 @@ async def create_product(
         is_active=body.is_active,
     )
     db.add(product)
+    await db.flush()
+    await _index_product(product)
     await db.commit()
     await db.refresh(product)
     await attach_category_names(db, [product])
@@ -267,6 +316,7 @@ async def update_product(
         setattr(product, key, value)
 
     product.updated_at = datetime.now(timezone.utc)
+    await _index_product(product)
     await db.commit()
     await db.refresh(product)
     await attach_category_names(db, [product])
@@ -280,8 +330,15 @@ async def delete_product(
     if product is None:
         return False
 
+    point_id = product.qdrant_point_id
     await db.delete(product)
     await db.commit()
+    if point_id:
+        await _vector_search.delete_points(
+            domain=VectorDomain.PRODUCT,
+            tenant_id=tenant_id,
+            point_ids=[point_id],
+        )
     return True
 
 
@@ -563,6 +620,9 @@ async def import_products_csv(
         products_to_create.append(Product(tenant_id=tenant_id, sku=sku, **payload))
 
     db.add_all(products_to_create)
+    await db.flush()
+    for product in products_to_create:
+        await _index_product(product)
     await db.commit()
     return ProductImportResponse(
         success=True,

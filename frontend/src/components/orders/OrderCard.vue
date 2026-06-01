@@ -19,7 +19,15 @@ function statusColor(status: string): string {
   return ordersApi.STATUS_COLORS[status] || 'info'
 }
 
-function canTransition(order: Record<string, any>, toStatus: string): boolean {
+function orderId(order: OrderResponse | Record<string, any>): string {
+  return String(order.id || ('order_id' in order ? order.order_id : ''))
+}
+
+function payableAmount(order: OrderResponse | Record<string, any>): number {
+  return Number(('payable_amount' in order ? order.payable_amount : order.payableAmount) || 0)
+}
+
+function canTransition(order: OrderResponse | Record<string, any>, toStatus: string): boolean {
   const transitions: Record<string, string[]> = {
     draft: ['pending_customer_confirm', 'cancelled'],
     pending_customer_confirm: ['customer_confirmed', 'cancelled'],
@@ -36,7 +44,7 @@ function canTransition(order: Record<string, any>, toStatus: string): boolean {
 <template>
   <div class="order-card" :class="{ compact }">
     <div class="order-card-header">
-      <span class="order-id">#{{ order.id || order.order_id }}</span>
+      <span class="order-id">#{{ orderId(order) }}</span>
       <el-tag :type="statusColor(order.status)" size="small">
         {{ statusLabel(order.status) }}
       </el-tag>
@@ -54,7 +62,7 @@ function canTransition(order: Record<string, any>, toStatus: string): boolean {
 
     <div class="order-card-footer">
       <span class="order-amount">
-        <strong>¥{{ ((order.payable_amount ?? order.payableAmount) || 0).toFixed(2) }}</strong>
+        <strong>¥{{ payableAmount(order).toFixed(2) }}</strong>
       </span>
 
       <div v-if="!compact" class="order-actions">
@@ -62,7 +70,7 @@ function canTransition(order: Record<string, any>, toStatus: string): boolean {
           v-if="canTransition(order, 'customer_confirmed')"
           size="small"
           type="success"
-          @click.stop="emit('statusChange', order.id || order.order_id, 'customer_confirmed')"
+          @click.stop="emit('statusChange', orderId(order), 'customer_confirmed')"
         >
           确认
         </el-button>
@@ -70,7 +78,7 @@ function canTransition(order: Record<string, any>, toStatus: string): boolean {
           v-if="canTransition(order, 'agent_confirmed')"
           size="small"
           type="primary"
-          @click.stop="emit('statusChange', order.id || order.order_id, 'agent_confirmed')"
+          @click.stop="emit('statusChange', orderId(order), 'agent_confirmed')"
         >
           审核
         </el-button>
@@ -78,7 +86,7 @@ function canTransition(order: Record<string, any>, toStatus: string): boolean {
           v-if="canTransition(order, 'shipped')"
           size="small"
           type="warning"
-          @click.stop="emit('statusChange', order.id || order.order_id, 'shipped')"
+          @click.stop="emit('statusChange', orderId(order), 'shipped')"
         >
           发货
         </el-button>
@@ -86,7 +94,7 @@ function canTransition(order: Record<string, any>, toStatus: string): boolean {
           v-if="canTransition(order, 'cancelled')"
           size="small"
           type="danger"
-          @click.stop="emit('statusChange', order.id || order.order_id, 'cancelled')"
+          @click.stop="emit('statusChange', orderId(order), 'cancelled')"
         >
           取消
         </el-button>

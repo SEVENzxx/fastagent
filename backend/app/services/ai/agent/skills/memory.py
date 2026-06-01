@@ -1,33 +1,33 @@
-"""remember_info — 客户偏好/信息记忆（真实实现，多表联写）。"""
+"""remember_info — 客户偏好/信息记忆（LLM 动态提取，无硬编码关键词）。"""
 
 from __future__ import annotations
 
+import json
 import logging
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
+from app.integrations.llm_client import LLMClient, LLMClientError
 from app.models.sales_memory import SalesMemory
 from app.services.ai.agent.types import ToolResult
 
 logger = logging.getLogger(__name__)
 
-# 简单关键词→key 映射，后续可扩展为 LLM 提取
-KEYWORD_MAP: dict[str, tuple[str, str]] = {
-    "酱香": ("favorite_flavor", "酱香型"),
-    "浓香": ("favorite_flavor", "浓香型"),
-    "清香": ("favorite_flavor", "清香型"),
-    "龙井": ("favorite_tea", "龙井"),
-    "碧螺春": ("favorite_tea", "碧螺春"),
-    "铁观音": ("favorite_tea", "铁观音"),
-    "大红袍": ("favorite_tea", "大红袍"),
-    "普洱": ("favorite_tea", "普洱茶"),
-    "红茶": ("favorite_tea", "红茶"),
-    "绿茶": ("favorite_tea", "绿茶"),
-    "花茶": ("favorite_tea", "花茶"),
-    "预算": ("budget_range", None),
-    "价位": ("budget_range", None),
-}
+# LLM 提取偏好的系统提示词（通用，不绑定任何具体业务词）
+_MEMORY_EXTRACT_SYSTEM_PROMPT = """\
+你从客户消息中提取值得记住的偏好或信息。
+
+请输出 JSON 格式：
+{"items": [{"key": "偏好维度", "value": "偏好值"}, ...], "nothing": false}
+
+规则：
+- key 应当是类别级的简洁标签，如 "favorite_flavor"、"budget_range"、"preferred_style"、"delivery_city"
+- value 是客户表达的具体偏好内容
+- 如果客户消息中没有任何值得记忆的信息，输出 {"items": [], "nothing": true}
+- 不要编造信息，只提取客户明确表达的内容
+- 不要输出 Markdown 或额外解释"""
 
 
 async def remember_info(
@@ -37,11 +37,7 @@ async def remember_info(
     db: AsyncSession,
     **kwargs,
 ) -> ToolResult:
-    """从客户消息中提取并保存偏好信息。
-
-    kwargs 中可传入：
-      - customer_text: str 客户原始消息
-    """
+    """从客户消息中提取并保存偏好信息（LLM 动态提取）。"""
     customer_text = str(kwargs.get("customer_text") or "").strip()
     if not customer_text:
         logger.warning("Skill remember_info 无 customer_text：tenant_id=%s", tenant_id)
@@ -58,23 +54,10 @@ async def remember_info(
             error="缺少客户标识",
         )
 
-    saved: list[str] = []
-    for keyword, (mem_key, mem_value) in KEYWORD_MAP.items():
-        if keyword in customer_text:
-            value = mem_value or customer_text
-            await _upsert_memory(db, tenant_id, contact_id, mem_key, value, customer_text)
-            saved.append(f"{mem_key}={value}")
-            logger.info(
-                "Skill remember_info 保存记忆：tenant_id=%s contact_id=%s key=%s value=%s",
-                tenant_id,
-                contact_id,
-                mem_key,
-                value,
-            )
-
-    if not saved:
+    items = await _extract_with_llm(customer_text)
+    if not items:
         logger.info(
-            "Skill remember_info 未识别到已知偏好关键词：tenant_id=%s text=%s",
+            "Skill remember_info 未提取到偏好信息：tenant_id=%s text=%s",
             tenant_id,
             customer_text,
         )
@@ -82,6 +65,22 @@ async def remember_info(
             ok=True,
             skill_name="remember_info",
             result={"saved": [], "message": "暂未识别到特定偏好信息"},
+        )
+
+    saved: list[str] = []
+    for item in items:
+        key = str(item.get("key", "")).strip()
+        value = str(item.get("value", "")).strip()
+        if not key or not value:
+            continue
+        await _upsert_memory(db, tenant_id, contact_id, key, value, customer_text)
+        saved.append(f"{key}={value}")
+        logger.info(
+            "Skill remember_info 保存记忆：tenant_id=%s contact_id=%s key=%s value=%s",
+            tenant_id,
+            contact_id,
+            key,
+            value,
         )
 
     logger.info(
@@ -93,8 +92,30 @@ async def remember_info(
     return ToolResult(
         ok=True,
         skill_name="remember_info",
-        result={"saved": saved, "message": f"已记住: {', '.join(saved)}"},
+        result={"saved": saved, "message": f"已记住: {', '.join(saved)}"} if saved else {
+            "saved": [], "message": "暂未识别到特定偏好信息"
+        },
     )
+
+
+async def _extract_with_llm(text: str) -> list[dict]:
+    """调用小模型提取偏好 key-value。"""
+    try:
+        client = LLMClient()
+        raw = await client.complete(
+            [
+                {"role": "system", "content": _MEMORY_EXTRACT_SYSTEM_PROMPT},
+                {"role": "user", "content": text},
+            ],
+            model=settings.AI_GENERAL_REPLY_MODEL or settings.AI_LLM_MODEL,
+            max_tokens=128,
+            temperature=0.0,
+        )
+        data = json.loads(raw.strip())
+        return data.get("items", [])
+    except (LLMClientError, json.JSONDecodeError, ValueError) as exc:
+        logger.warning("Skill remember_info LLM 提取失败：%s", exc)
+        return []
 
 
 async def _upsert_memory(

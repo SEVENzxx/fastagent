@@ -1,11 +1,48 @@
 """角色与权限服务"""
 
+from fastapi import HTTPException, status
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.models.employee import Employee
-from app.models.role import EmployeeRole, Permission, Role, RolePermission
+from app.models.role import EmployeeRole, Permission, PermissionCode, Role, RolePermission
+
+
+PLATFORM_ONLY_PERMISSION_CODES = {
+    PermissionCode.MANAGE_TENANTS.value,
+    PermissionCode.MANAGE_PLANS.value,
+    PermissionCode.VIEW_AUDIT_LOGS.value,
+    PermissionCode.MANAGE_BACKUPS.value,
+    PermissionCode.MANAGE_SYSTEM_SETTINGS.value,
+    PermissionCode.EXPORT_DATA.value,
+}
+
+
+async def _validate_tenant_permission_ids(
+    db: AsyncSession,
+    permission_ids: list[int],
+) -> list[int]:
+    unique_ids = list(dict.fromkeys(permission_ids))
+    if not unique_ids:
+        return []
+
+    rows = (
+        await db.execute(
+            select(Permission.id, Permission.code).where(Permission.id.in_(unique_ids))
+        )
+    ).all()
+    if len(rows) != len(unique_ids):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="存在无效权限",
+        )
+    if any(code in PLATFORM_ONLY_PERMISSION_CODES for _, code in rows):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="平台管理权限不能分配给租户角色",
+        )
+    return unique_ids
 
 
 async def list_roles(db: AsyncSession, tenant_id: int) -> list[Role]:
@@ -34,11 +71,12 @@ async def create_role(
     description: str | None = None,
     permission_ids: list[int] | None = None,
 ) -> Role:
+    permission_ids = await _validate_tenant_permission_ids(db, permission_ids or [])
     role = Role(tenant_id=tenant_id, name=name, description=description)
     db.add(role)
     await db.flush()
 
-    for permission_id in dict.fromkeys(permission_ids or []):
+    for permission_id in permission_ids:
         db.add(RolePermission(role_id=role.id, permission_id=permission_id))
 
     await db.commit()
@@ -87,6 +125,8 @@ async def set_role_permissions(db: AsyncSession, role_id: int, tenant_id: int, p
     if not role:
         return None
 
+    permission_ids = await _validate_tenant_permission_ids(db, permission_ids)
+
     # 清除旧关联
     await db.execute(
         delete(RolePermission).where(RolePermission.role_id == role_id)
@@ -101,11 +141,11 @@ async def set_role_permissions(db: AsyncSession, role_id: int, tenant_id: int, p
 
 
 async def get_employee_permission_codes(db: AsyncSession, employee: Employee) -> set[str]:
-    """获取员工拥有的全部权限码（所有角色的权限并集）。超管返回全部权限。"""
-    if employee.is_superuser:
-        result = await db.execute(select(Permission.code))
-        return {row[0] for row in result.all()}
+    """获取员工拥有的全部权限码（所有角色的权限并集）。
 
+    注意：is_superuser 不在此处绕过角色权限。平台管理员仅使用
+    require_superuser 访问平台接口，前端菜单显隐依赖此处返回的实际角色权限码。
+    """
     result = await db.execute(
         select(Permission.code)
         .select_from(EmployeeRole)

@@ -7,12 +7,25 @@ from collections import defaultdict
 from app.services.ai.config.intent_config import DEFAULT_INTENT_CONFIG, IntentRecognitionConfig
 from app.services.ai.intent.types import IntentCandidate, KeywordEntityResult
 
+# 上下文加权规则（平台级通用默认，租户级可通过 DB 覆盖）
+# 格式：{intent: [(keywords_in_full_text, boost_value), ...]}
+_DEFAULT_CONTEXT_BOOST_RULES: dict[str, list[tuple[list[str], float]]] = {
+    "delivery_time": [(["发货", "订单"], 0.04)],
+    "order_status": [(["订单"], 0.03)],
+}
+
 
 class IntentFusionScorer:
     """将 vector_score、keyword_boost、context_boost 融合到 intent 维度。"""
 
-    def __init__(self, config: IntentRecognitionConfig | None = None) -> None:
+    def __init__(
+        self,
+        config: IntentRecognitionConfig | None = None,
+        *,
+        context_boost_rules: dict[str, list[tuple[list[str], float]]] | None = None,
+    ) -> None:
         self.config = config or DEFAULT_INTENT_CONFIG
+        self.context_boost_rules = context_boost_rules if context_boost_rules is not None else _DEFAULT_CONTEXT_BOOST_RULES
 
     def score(
         self,
@@ -62,8 +75,9 @@ class IntentFusionScorer:
         return sorted(fused, key=lambda item: item.score, reverse=True)
 
     def _context_boost(self, intent: str, segment: str, full_text: str) -> float:
-        if intent == "delivery_time" and "发货" in full_text and "订单" in full_text:
-            return 0.04
-        if intent == "order_status" and "订单" in full_text:
-            return 0.03
+        """基于可配置规则的上下文加权。"""
+        rules = self.context_boost_rules.get(intent, [])
+        for keywords, boost in rules:
+            if all(kw in full_text for kw in keywords):
+                return boost
         return 0.0

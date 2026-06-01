@@ -76,6 +76,7 @@ class LLMClient:
             len(text),
             (time.perf_counter() - call_started) * 1000,
         )
+        await self._record_usage(messages, text, selected_model, "complete", call_started)
         return text
 
     async def chat(
@@ -110,6 +111,8 @@ class LLMClient:
             len(text),
             (time.perf_counter() - call_started) * 1000,
         )
+        if self.provider == "http":
+            await self._record_usage(messages, text, selected_model, "chat", call_started)
         return text
 
     async def generate(
@@ -144,6 +147,8 @@ class LLMClient:
             len(text),
             (time.perf_counter() - call_started) * 1000,
         )
+        if self.provider == "http":
+            await self._record_usage([{"role": "user", "content": prompt}], text, selected_model, "generate", call_started)
         return text
 
     async def stream(
@@ -183,12 +188,14 @@ class LLMClient:
         )
         chunks = 0
         output_len = 0
+        collected: list[str] = []
         try:
             async for chunk in response:
                 text = self._extract_stream_delta(chunk)
                 if text:
                     chunks += 1
                     output_len += len(text)
+                    collected.append(text)
                     yield text
             logger.info(
                 "LLM 流式调用完成：provider=%s model=%s chunks=%s output_len=%s elapsed_ms=%.0f",
@@ -198,6 +205,7 @@ class LLMClient:
                 output_len,
                 (time.perf_counter() - call_started) * 1000,
             )
+            await self._record_usage(messages, "".join(collected), selected_model, "stream", call_started)
         except TypeError as exc:
             raise LLMClientError("litellm stream response is not async iterable") from exc
 
@@ -399,3 +407,25 @@ class LLMClient:
         if isinstance(obj, dict):
             return obj.get(key)
         return getattr(obj, key, None)
+
+    async def _record_usage(
+        self,
+        messages: list[dict[str, str]],
+        completion_text: str,
+        model: str,
+        source: str,
+        started: float,
+    ) -> None:
+        """尽力写入计量日志，计量失败不能阻断客服回复。"""
+        try:
+            from app.services.usage_service import record_current_usage
+            prompt_text = "\n".join(str(item.get("content") or "") for item in messages)
+            await record_current_usage(
+                model=model,
+                source=source,
+                prompt_text=prompt_text,
+                completion_text=completion_text,
+                latency_ms=int((time.perf_counter() - started) * 1000),
+            )
+        except Exception:
+            logger.exception("LLM 用量日志写入失败，已跳过，不影响当前回复")

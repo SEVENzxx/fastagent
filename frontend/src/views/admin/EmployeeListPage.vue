@@ -61,7 +61,6 @@ async function handleSubmit(data: {
   phone: string | null
   skills: string[]
   maxConcurrentChats: number
-  isSuperuser: boolean
   roleIds: string[]
 }) {
   if (editingEmployee.value) {
@@ -70,7 +69,6 @@ async function handleSubmit(data: {
       phone: data.phone,
       skills: data.skills,
       maxConcurrentChats: data.maxConcurrentChats,
-      isSuperuser: data.isSuperuser,
     })
     await employeesApi.setEmployeeRoles(editingEmployee.value.id, { roleIds: data.roleIds })
     ElMessage.success('员工已更新')

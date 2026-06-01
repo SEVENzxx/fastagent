@@ -1,17 +1,17 @@
-"""Agent generate_reply 系统提示词。"""
+"""Agent generate_reply 系统提示词（支持租户自定义覆盖）。"""
 
 from __future__ import annotations
 
-GENERATE_REPLY_SYSTEM_PROMPT = """\
-你是企业微信客服助手，正在为客户提供售后服务。
+from app.services.ai.tenant_ai_config import get_default_reply_system_prompt
 
-请根据以下工具调用结果，用简洁、自然、礼貌的中文回复客户。
-- 如果工具调用成功并返回了数据，请自然地组织成客户能理解的内容。
-- 如果工具调用失败或返回空结果，请礼貌告知客户当前无法处理并建议下一步。
-- 不要编造工具返回结果中没有的信息。
-- 不要使用"根据工具调用结果"、"系统返回"、"查询结果显示"等透露内部机制的表述。
-- 保持回复简洁，一次不要输出超过 200 字。
-"""
+GENERATE_REPLY_SYSTEM_PROMPT = get_default_reply_system_prompt()
+
+
+def get_effective_system_prompt(tenant_custom_prompt: str | None = None) -> str:
+    """返回有效的系统提示词：租户 custom_prompt 优先，否则使用平台默认值。"""
+    if tenant_custom_prompt:
+        return tenant_custom_prompt
+    return GENERATE_REPLY_SYSTEM_PROMPT
 
 
 def build_generate_reply_user_prompt(

@@ -56,8 +56,24 @@ class Settings(BaseSettings):
     AI_EMBEDDING_ENABLED: bool = True
     AI_EMBEDDING_BASE_URL: str = "http://127.0.0.1:8001"
     AI_EMBEDDING_TIMEOUT_SECONDS: float = 5.0
+    # BAAI/bge-small-zh-v1.5 的标准输出维度为 512。该值必须与 embedding
+    # 服务真实输出和 Qdrant collection 配置一致，否则所有向量读写都会失败。
+    AI_EMBEDDING_DIMENSION: int = 512
 
-    # Phase 9 Agent runtime
+    # Qdrant vector database
+    QDRANT_ENABLED: bool = True
+    QDRANT_URL: str = "http://127.0.0.1:6333"
+    QDRANT_API_KEY: str = ""
+    QDRANT_TIMEOUT_SECONDS: float = 5.0
+    QDRANT_DISTANCE: str = "Cosine"
+    QDRANT_COLLECTION_INTENT_SAMPLES: str = "fastagent_intent_samples"
+    QDRANT_COLLECTION_KNOWLEDGE_CHUNKS: str = "fastagent_knowledge_chunks"
+    QDRANT_COLLECTION_QA_PAIRS: str = "fastagent_qa_pairs"
+    QDRANT_COLLECTION_PRODUCTS: str = "fastagent_products"
+    QDRANT_COLLECTION_MARKETING_DOCS: str = "fastagent_marketing_documents"
+    QDRANT_COLLECTION_IMAGES: str = "fastagent_images"
+
+    # Agent runtime
     AI_AGENT_ENABLED: bool = True
     AI_AGENT_MODEL: str = ""
     AI_AGENT_MAX_TOKENS: int = 512
@@ -67,6 +83,22 @@ class Settings(BaseSettings):
     AI_AGENT_RECENT_MESSAGE_LIMIT: int = 20
     AI_AGENT_ENABLE_HITL: bool = False
     AI_AGENT_ENABLE_MCP_STUBS: bool = True
+
+    # RAG / Knowledge Base
+    AI_RERANKER_PROVIDER: str = "http"
+    AI_RERANKER_BASE_URL: str = "http://8.160.180.22:8002/rerank"
+    AI_RERANKER_MODEL: str = "BAAI/bge-reranker-v2-m3"
+    AI_RERANKER_ENABLED: bool = True
+    AI_RERANKER_TIMEOUT_SECONDS: float = 10.0
+    AI_KNOWLEDGE_TOP_K: int = 20
+    AI_KNOWLEDGE_MIN_SCORE: float = 0.7
+    AI_KNOWLEDGE_RERANK_TOP_K: int = 5
+    AI_KNOWLEDGE_CHUNK_SIZE: int = 500
+    AI_KNOWLEDGE_CHUNK_OVERLAP: int = 100
+    AI_KNOWLEDGE_MIN_CHUNK_SIZE: int = 100
+    AI_KNOWLEDGE_BATCH_SIZE: int = 32
+    AI_KNOWLEDGE_QA_MIN_SCORE: float = 0.85
+    AI_KNOWLEDGE_QA_TOP_K: int = 3
 
     # Security
     SECRET_KEY: str

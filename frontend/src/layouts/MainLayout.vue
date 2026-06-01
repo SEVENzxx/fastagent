@@ -10,6 +10,7 @@ const permStore = usePermissionStore()
 
 const username = computed(() => authStore.user?.displayName || authStore.user?.email || '已登录用户')
 const isSuperuser = computed(() => authStore.user?.isSuperuser ?? false)
+const homePath = computed(() => isSuperuser.value ? '/platform-admin' : '/')
 const userInitial = computed(() => username.value.slice(0, 1).toUpperCase())
 
 function handleUserCommand(command: string) {
@@ -40,59 +41,89 @@ onMounted(async () => {
 <template>
   <div class="main-layout">
     <aside class="sidebar">
-      <button class="brand" type="button" @click="router.push('/')">
+      <button class="brand" type="button" @click="router.push(homePath)">
         <span class="brand-mark">FA</span>
         <span class="brand-text">FastAgent</span>
       </button>
 
       <el-menu :default-active="router.currentRoute.value.path" router class="sidebar-menu">
-        <el-menu-item index="/">
-          <span class="nav-icon nav-icon-workbench" />
-          <span>会话工作台</span>
-        </el-menu-item>
+        <el-sub-menu v-if="isSuperuser" index="platform-admin">
+          <template #title>
+            <span class="nav-icon nav-icon-platform" />
+            <span>平台管理</span>
+          </template>
+          <el-menu-item index="/platform-admin">平台总览</el-menu-item>
+          <el-menu-item index="/platform-admin/tenants">租户管理</el-menu-item>
+          <el-menu-item index="/platform-admin/plans">套餐管理</el-menu-item>
+          <el-menu-item index="/platform-admin/llm-configs">LLM 模型池</el-menu-item>
+          <el-menu-item index="/platform-admin/business">跨租户业务</el-menu-item>
+          <el-menu-item index="/platform-admin/operations">审计与登录历史</el-menu-item>
+          <el-menu-item index="/platform-admin/system">系统运维</el-menu-item>
+        </el-sub-menu>
 
-        <template v-if="permStore.hasPermission('manage_roles') || isSuperuser">
-          <el-menu-item index="/admin/roles">
-            <span class="nav-icon nav-icon-role" />
-            <span>角色管理</span>
+        <template v-if="!isSuperuser">
+          <el-menu-item index="/">
+            <span class="nav-icon nav-icon-workbench" />
+            <span>会话工作台</span>
+          </el-menu-item>
+
+          <el-sub-menu index="business">
+            <template #title>
+              <span class="nav-icon nav-icon-contact" />
+              <span>客户经营</span>
+            </template>
+            <el-menu-item index="/contacts">联系人管理</el-menu-item>
+            <el-menu-item index="/products">商品管理</el-menu-item>
+            <el-menu-item v-if="permStore.hasPermission('manage_products')" index="/products/categories">分类管理</el-menu-item>
+            <el-menu-item index="/orders">订单管理</el-menu-item>
+          </el-sub-menu>
+
+          <el-sub-menu index="content-ai">
+            <template #title>
+              <span class="nav-icon nav-icon-kb" />
+              <span>内容与 AI</span>
+            </template>
+            <el-menu-item index="/knowledge">知识文档</el-menu-item>
+            <el-menu-item index="/qa-pairs">问答对</el-menu-item>
+            <el-menu-item index="/marketing">营销资料</el-menu-item>
+            <el-menu-item index="/images">图片库</el-menu-item>
+            <el-menu-item index="/hit-testing">命中测试</el-menu-item>
+          </el-sub-menu>
+
+          <el-sub-menu index="analytics">
+            <template #title>
+              <span class="nav-icon nav-icon-platform" />
+              <span>数据分析</span>
+            </template>
+            <el-menu-item index="/analytics">数据仪表盘</el-menu-item>
+            <el-menu-item index="/analytics/usage">用量分析</el-menu-item>
+          </el-sub-menu>
+
+          <el-sub-menu index="organization-settings">
+            <template #title>
+              <span class="nav-icon nav-icon-team" />
+              <span>组织与设置</span>
+            </template>
+            <el-menu-item v-if="permStore.hasPermission('manage_roles')" index="/admin/roles">角色管理</el-menu-item>
+            <el-menu-item v-if="permStore.hasPermission('manage_employees')" index="/admin/employees">员工管理</el-menu-item>
+            <el-menu-item index="/settings/wechat">企微设置</el-menu-item>
+            <el-menu-item v-if="permStore.hasPermission('manage_sensitive_words')" index="/settings/sensitive-words">敏感词管理</el-menu-item>
+          </el-sub-menu>
+
+          <el-sub-menu index="tools">
+            <template #title>
+              <span class="nav-icon nav-icon-tool" />
+              <span>常用工具</span>
+            </template>
+            <el-menu-item index="/tools/batch-add-wechat">批量加微信</el-menu-item>
+            <el-menu-item index="/tools/account-binding">账号绑定</el-menu-item>
+          </el-sub-menu>
+
+          <el-menu-item index="/notifications">
+            <span class="nav-icon nav-icon-qa" />
+            <span>系统通知</span>
           </el-menu-item>
         </template>
-        <template v-if="permStore.hasPermission('manage_employees') || isSuperuser">
-          <el-menu-item index="/admin/employees">
-            <span class="nav-icon nav-icon-team" />
-            <span>员工管理</span>
-          </el-menu-item>
-        </template>
-        <template v-if="permStore.hasPermission('manage_employees') || isSuperuser">
-          <el-menu-item index="/products/categories">
-            <span class="nav-icon nav-icon-folder" />
-            <span>分类管理</span>
-          </el-menu-item>
-        </template>
-        <el-menu-item index="/products">
-          <span class="nav-icon nav-icon-product" />
-          <span>商品管理</span>
-        </el-menu-item>
-        <el-menu-item index="/contacts">
-          <span class="nav-icon nav-icon-contact" />
-          <span>联系人管理</span>
-        </el-menu-item>
-        <el-menu-item index="/orders">
-          <span class="nav-icon nav-icon-order" />
-          <span>订单管理</span>
-        </el-menu-item>
-        <el-menu-item index="/settings/wechat">
-          <span class="nav-icon nav-icon-channel" />
-          <span>企微设置</span>
-        </el-menu-item>
-        <el-menu-item index="/tools/batch-add-wechat">
-          <span class="nav-icon nav-icon-tool" />
-          <span>批量加微信</span>
-        </el-menu-item>
-        <el-menu-item index="/tools/account-binding">
-          <span class="nav-icon nav-icon-link" />
-          <span>账号绑定</span>
-        </el-menu-item>
       </el-menu>
     </aside>
 
@@ -227,6 +258,20 @@ onMounted(async () => {
   top: 9px;
   background: currentColor;
   box-shadow: 0 -4px 0 currentColor;
+}
+
+.nav-icon-platform::before {
+  width: 15px;
+  height: 15px;
+  border: 1.6px solid currentColor;
+  border-radius: 3px;
+}
+
+.nav-icon-platform::after {
+  width: 7px;
+  height: 7px;
+  border: 1.6px solid currentColor;
+  border-radius: 999px;
 }
 
 .nav-icon-role::before {
@@ -385,6 +430,91 @@ onMounted(async () => {
   border-bottom: 1.6px solid currentColor;
   border-right: 1.6px solid currentColor;
   transform: rotate(45deg);
+}
+
+.nav-icon-kb::before {
+  width: 14px;
+  height: 14px;
+  border: 1.6px solid currentColor;
+  border-radius: 2px;
+}
+
+.nav-icon-kb::after {
+  width: 6px;
+  height: 1.6px;
+  left: 5px;
+  top: 6px;
+  background: currentColor;
+  box-shadow: 0 4px 0 currentColor;
+}
+
+.nav-icon-qa::before {
+  width: 12px;
+  height: 10px;
+  border: 1.6px solid currentColor;
+  border-radius: 999px;
+  transform: translateY(2px);
+}
+
+.nav-icon-qa::after {
+  width: 5px;
+  height: 5px;
+  left: 5px;
+  bottom: 3px;
+  border-right: 1.6px solid currentColor;
+  border-bottom: 1.6px solid currentColor;
+  transform: rotate(45deg);
+}
+
+.nav-icon-test::before {
+  width: 14px;
+  height: 14px;
+  border: 1.6px solid currentColor;
+  border-radius: 999px;
+}
+
+.nav-icon-test::after {
+  width: 5px;
+  height: 5px;
+  left: 6px;
+  top: 4px;
+  border: 1.6px solid currentColor;
+  border-left: 0;
+  border-top: 0;
+  border-radius: 0 0 2px 0;
+  transform: rotate(15deg);
+}
+
+.nav-icon-mkt::before {
+  width: 13px;
+  height: 14px;
+  border: 1.6px solid currentColor;
+  border-radius: 2px;
+}
+
+.nav-icon-mkt::after {
+  width: 7px;
+  height: 4px;
+  left: 5px;
+  top: 4px;
+  border-top: 1.6px solid currentColor;
+  border-radius: 2px 2px 0 0;
+}
+
+.nav-icon-img::before {
+  width: 14px;
+  height: 12px;
+  border: 1.6px solid currentColor;
+  border-radius: 3px;
+}
+
+.nav-icon-img::after {
+  width: 5px;
+  height: 5px;
+  right: 3px;
+  top: 3px;
+  border: 1.6px solid currentColor;
+  border-radius: 999px;
 }
 
 .workspace {

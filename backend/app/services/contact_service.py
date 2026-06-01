@@ -137,6 +137,28 @@ async def list_contacts(
     return items, total or 0
 
 
+async def search_contacts(
+    db: AsyncSession,
+    tenant_id: int,
+    *,
+    keyword: str = "",
+    limit: int = 20,
+) -> tuple[list[Contact], int]:
+    """兼容服务层调用方的轻量联系人搜索入口。
+
+    页面列表使用 ``list_contacts`` 的完整分页能力；订单服务测试、Agent Skill
+    等内部调用方只需要取少量联系人，因此保留一个语义更直接的搜索函数。这里仍然
+    委托给统一查询实现，确保 tenant_id 隔离、员工展示名加载和关键词规则不会分叉。
+    """
+    return await list_contacts(
+        db,
+        tenant_id,
+        keyword=keyword,
+        page=1,
+        page_size=max(1, min(limit, 100)),
+    )
+
+
 async def get_contact(
     db: AsyncSession,
     contact_id: int,

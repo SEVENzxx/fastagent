@@ -31,7 +31,6 @@ class EmployeeUpdate(CamelModel):
     phone: str | None = None
     skills: list[str] | None = None
     max_concurrent_chats: int | None = None
-    is_superuser: bool | None = None
 
 
 class EmployeeResponse(CamelModel):

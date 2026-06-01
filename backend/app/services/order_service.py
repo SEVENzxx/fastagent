@@ -16,6 +16,9 @@ from app.schemas.order import (
     OrderCreate,
     OrderUpdate,
 )
+from app.services.vector_search_service import VectorDomain, VectorSearchService
+
+_vector_search = VectorSearchService()
 
 
 async def list_orders(
@@ -94,20 +97,25 @@ async def create_order(
 
     for item in body.items:
         product = await _match_product(db, tenant_id, item.product_name)
-        unit_price = product.price if product and product.price else Decimal("0")
+        if product is None:
+            # 下单是有金额、库存和底价约束的业务写操作，不能沿用“搜索不到就保留
+            # 用户原文”的宽松策略。否则错误文本会生成 0 元订单，后续库存扣减和
+            # 报价审批也失去商品依据。
+            raise ValueError(f"未找到可下单商品：{item.product_name}")
+        unit_price = product.price if product.price else Decimal("0")
         qty = Decimal(str(item.quantity))
         sub = (unit_price * qty).quantize(Decimal("0.01"))
 
         snapshot = {
             "product_name": item.product_name,
-            "sku": product.sku if product else None,
-            "specs": product.specs if product else None,
-            "original_price": float(product.price) if product and product.price else None,
-            "floor_price": float(product.floor_price) if product and product.floor_price else None,
+            "sku": product.sku,
+            "specs": product.specs,
+            "original_price": float(product.price) if product.price else None,
+            "floor_price": float(product.floor_price) if product.floor_price else None,
         }
 
         item_data.append({
-            "product_id": product.id if product else None,
+            "product_id": product.id,
             "product_snapshot": snapshot,
             "quantity": item.quantity,
             "unit_price": float(unit_price),
@@ -148,6 +156,12 @@ async def create_order(
         )
         db.add(order_item)
 
+    # 订单是销售阶段最可靠的业务事实。明细写入后刷新客户画像，
+    # 保证工作台无需等待异步任务即可看到最新管线状态。
+    await db.flush()
+    await db.refresh(order, attribute_names=["items"])
+    from app.services.sales_intelligence_service import sync_order_context
+    await sync_order_context(db, order)
     await db.commit()
     await db.refresh(order)
     await _attach_contact_names(db, [order])
@@ -181,16 +195,18 @@ async def update_order(
     if body.add_items:
         for add_item in body.add_items:
             product = await _match_product(db, tenant_id, add_item.product_name)
-            unit_price = product.price if product and product.price else 0
+            if product is None:
+                raise ValueError(f"未找到可添加商品：{add_item.product_name}")
+            unit_price = product.price if product.price else 0
             sub = round(unit_price * add_item.quantity, 2)
             snapshot = {
                 "product_name": add_item.product_name,
-                "sku": product.sku if product else None,
-                "original_price": float(product.price) if product and product.price else None,
+                "sku": product.sku,
+                "original_price": float(product.price) if product.price else None,
             }
             order_item = OrderItem(
                 order_id=order.id,
-                product_id=product.id if product else None,
+                product_id=product.id,
                 product_snapshot=snapshot,
                 quantity=add_item.quantity,
                 unit_price=unit_price,
@@ -256,6 +272,8 @@ async def transition_order_status(
     elif to_status == "cancelled":
         order.cancelled_at = now
 
+    from app.services.sales_intelligence_service import sync_order_context
+    await sync_order_context(db, order)
     await db.commit()
     await db.refresh(order)
     await _attach_contact_names(db, [order])
@@ -297,14 +315,14 @@ async def cancel_order(
 
 
 # ---------------------------------------------------------------------------
-# Internal helpers
+# 内部辅助函数
 # ---------------------------------------------------------------------------
 
 
 async def _match_product(
     db: AsyncSession, tenant_id: int, product_name: str
 ) -> Product | None:
-    """按商品名精确匹配或 ILIKE 匹配，租户隔离。"""
+    """先按精确名称匹配商品，失败后使用 Qdrant 语义召回。"""
     product = await db.scalar(
         select(Product).where(
             Product.tenant_id == tenant_id,
@@ -314,10 +332,24 @@ async def _match_product(
     if product:
         return product
 
+    hits = await _vector_search.search_text(
+        domain=VectorDomain.PRODUCT,
+        tenant_id=tenant_id,
+        query=product_name,
+        top_k=1,
+        min_score=0.55,
+        filters={"is_active": True},
+    )
+    if not hits:
+        return None
+    product_id = hits[0].payload.get("product_id")
+    if not str(product_id).isdigit():
+        return None
     product = await db.scalar(
         select(Product).where(
             Product.tenant_id == tenant_id,
-            Product.name.ilike(f"%{product_name.strip()}%"),
+            Product.id == int(product_id),
+            Product.is_active.is_(True),
         )
     )
     return product

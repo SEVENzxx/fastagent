@@ -1,4 +1,4 @@
-"""AGENT 路由处理器 — Phase 9 LangGraph Agent。"""
+"""AGENT 路由处理器 — LangGraph Agent。"""
 
 from __future__ import annotations
 

@@ -41,14 +41,17 @@ async def get_current_user(
 
 
 def require_permission(code: str):
-    """要求当前员工拥有指定权限码。超管自动放行。"""
+    """要求租户员工拥有指定权限码。"""
 
     async def checker(
         current_user: Employee = Depends(get_current_user),
         db: AsyncSession = Depends(get_db),
     ) -> Employee:
         if current_user.is_superuser:
-            return current_user
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="平台管理员不能访问租户业务接口",
+            )
 
         codes = await get_employee_permission_codes(db, current_user)
         if code not in codes:
@@ -59,6 +62,18 @@ def require_permission(code: str):
         return current_user
 
     return checker
+
+
+async def require_tenant_user(
+    current_user: Employee = Depends(get_current_user),
+) -> Employee:
+    """要求当前用户是租户员工，而不是平台超级管理员。"""
+    if current_user.is_superuser:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="平台管理员不能访问租户业务接口",
+        )
+    return current_user
 
 
 async def require_superuser(

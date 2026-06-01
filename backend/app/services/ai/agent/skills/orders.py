@@ -8,14 +8,22 @@ manage_order: 查询订单 / 修改订单
 from __future__ import annotations
 
 import logging
+import re
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.order import Order
+from app.models.product import Product
 from app.schemas.order import OrderCreate as OrderCreateSchema
 from app.schemas.order import OrderItemCreate, OrderUpdate
 from app.services import order_service
 from app.services.ai.agent.types import ToolResult
+from app.services.ai.tenant_ai_config import (
+    DEFAULT_ORDER_STATUS_LABELS as STATUS_LABELS,
+    DEFAULT_FIELD_LABELS as FIELD_LABELS,
+    DEFAULT_QUANTITY_UNITS,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +55,7 @@ async def create_order(
     if not items_raw:
         customer_text = str(kwargs.get("customer_text") or kwargs.get("query") or "").strip()
         if customer_text:
-            items_raw = [{"product_name": customer_text, "quantity": 1}]
+            items_raw = await _extract_items_from_customer_text(db, tenant_id, customer_text)
         else:
             return ToolResult(
                 ok=False,
@@ -139,6 +147,40 @@ async def create_order(
             "message": _build_create_message(items_display, order.payable_amount, missing),
         },
     )
+
+
+async def _extract_items_from_customer_text(
+    db: AsyncSession,
+    tenant_id: int,
+    customer_text: str,
+) -> list[dict]:
+    """从客户原话中提取商品和数量。
+
+    下单属于高风险写操作，不能把整句文本直接交给向量检索后自动选中相似商品。
+    这里先读取本租户已启用商品，并采用最长名称优先的包含匹配；这样“茅台”和
+    “茅台镇酱香 500ml”同时存在时会命中更具体的商品。没有明确商品名时仍把
+    原文保留下来，由订单服务返回“未找到可下单商品”，引导客服确认。
+    """
+    products = list(
+        (
+            await db.execute(
+                select(Product.name)
+                .where(Product.tenant_id == tenant_id, Product.is_active.is_(True))
+                .order_by(Product.name)
+            )
+        ).scalars().all()
+    )
+    matched_name = next(
+        (name for name in sorted(products, key=len, reverse=True) if name and name in customer_text),
+        None,
+    )
+    if matched_name is None:
+        return [{"product_name": customer_text, "quantity": 1}]
+
+    tail = customer_text.split(matched_name, 1)[1]
+    quantity_match = re.search(rf"(\d+)\s*(?:[{DEFAULT_QUANTITY_UNITS}])?", tail)
+    quantity = int(quantity_match.group(1)) if quantity_match else 1
+    return [{"product_name": matched_name, "quantity": max(quantity, 1)}]
 
 
 async def confirm_order(
@@ -284,15 +326,7 @@ async def manage_order(
 # Internal helpers
 # ---------------------------------------------------------------------------
 
-STATUS_LABELS = {
-    "draft": "草稿",
-    "pending_customer_confirm": "待客户确认",
-    "customer_confirmed": "客户已确认",
-    "agent_confirmed": "坐席已确认",
-    "shipped": "已发货",
-    "signed": "已签收",
-    "cancelled": "已取消",
-}
+# STATUS_LABELS 和 FIELD_LABELS 已从 tenant_ai_config 导入，支持未来租户级覆盖。
 
 
 def _status_label(status: str) -> str:
@@ -321,8 +355,7 @@ def _build_create_message(
         )
     lines.append(f"应付金额：¥{payable:.2f}")
     if missing:
-        labels = {"address": "收货地址", "phone": "联系电话"}
-        missing_labels = [labels.get(m, m) for m in missing]
+        missing_labels = [FIELD_LABELS.get(m, m) for m in missing]
         lines.append(f"请补充：{'、'.join(missing_labels)}")
     return "\n".join(lines)
 

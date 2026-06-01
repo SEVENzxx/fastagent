@@ -34,12 +34,6 @@ export const useAuthStore = defineStore('auth', () => {
     await fetchUser()
   }
 
-  async function register(data: authApi.RegisterParams) {
-    const res = await authApi.register(data)
-    setAuth(res.accessToken, res.refreshToken)
-    await fetchUser()
-  }
-
   async function fetchUser() {
     user.value = await authApi.getMe()
     if (user.value?.permissions) {
@@ -59,8 +53,8 @@ export const useAuthStore = defineStore('auth', () => {
     refreshToken,
     isAuthenticated,
     login,
-    register,
     logout,
+    clearAuth,
     fetchUser,
   }
 })

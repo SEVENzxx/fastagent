@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import re
 
+from app.services.ai.tenant_ai_config import DEFAULT_IGNORE_PHRASES
+
 
 class MessageSegmenter:
     """识别一句话中的多个问题，避免过度拆分短句。"""
@@ -24,4 +26,4 @@ class MessageSegmenter:
             return [text]
 
         # 过短寒暄不独立成任务，保留在后续 context_boost 中即可。
-        return [segment for segment in segments if segment not in {"你好", "您好", "谢谢", "再见"}]
+        return [segment for segment in segments if segment not in DEFAULT_IGNORE_PHRASES]

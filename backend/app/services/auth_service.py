@@ -32,6 +32,17 @@ AGENT_PERMISSION_CODES = {
     PermissionCode.VIEW_IMAGES.value,
 }
 
+# 租户管理员权限：全部业务权限，排除了超管专有的平台管理权限
+# MANAGE_TENANTS / MANAGE_PLANS / VIEW_AUDIT_LOGS / MANAGE_BACKUPS / MANAGE_SYSTEM_SETTINGS / EXPORT_DATA
+PLATFORM_ONLY_PERMISSION_CODES = {
+    PermissionCode.MANAGE_TENANTS.value,
+    PermissionCode.MANAGE_PLANS.value,
+    PermissionCode.VIEW_AUDIT_LOGS.value,
+    PermissionCode.MANAGE_BACKUPS.value,
+    PermissionCode.MANAGE_SYSTEM_SETTINGS.value,
+    PermissionCode.EXPORT_DATA.value,
+}
+
 
 def _slugify(name: str) -> str:
     """生成 URL slug：英文转小写，中文转拼音，混合处理"""
@@ -59,7 +70,9 @@ async def register_tenant(
 ) -> dict:
     """注册新租户，同时创建管理员员工。
 
-    在同一个事务中完成：创建 Tenant → 创建 Employee（is_superuser=True）
+    在同一个事务中完成：创建 Tenant → 创建 Employee → 创建角色 → 分配权限。
+    兼容内部初始化场景。公开注册入口已移除；通过该函数创建的账号始终是租户管理员，
+    不具备平台超级管理员权限。
     """
     resolved_slug = slug or _slugify(company_name)
 
@@ -82,7 +95,7 @@ async def register_tenant(
         email=email,
         hashed_password=hash_password(password),
         display_name=display_name,
-        is_superuser=True,
+        is_superuser=False,
     )
     db.add(employee)
     await db.flush()
@@ -91,7 +104,7 @@ async def register_tenant(
     admin_role = Role(
         tenant_id=tenant.id,
         name="管理员",
-        description="默认管理员角色，拥有全部权限",
+        description="租户管理员，拥有该租户的全部业务权限",
     )
     agent_role = Role(
         tenant_id=tenant.id,
@@ -102,7 +115,8 @@ async def register_tenant(
     await db.flush()
 
     for permission in permissions:
-        db.add(RolePermission(role_id=admin_role.id, permission_id=permission.id))
+        if permission.code not in PLATFORM_ONLY_PERMISSION_CODES:
+            db.add(RolePermission(role_id=admin_role.id, permission_id=permission.id))
         if permission.code in AGENT_PERMISSION_CODES:
             db.add(RolePermission(role_id=agent_role.id, permission_id=permission.id))
 
@@ -135,15 +149,41 @@ async def login(db: AsyncSession, *, email: str, password: str) -> dict:
     employee = result.scalars().first()
 
     if not employee or not verify_password(password, employee.hashed_password):
+        from app.services.operations_service import record_login
+        await record_login(
+            db,
+            email=email,
+            success=False,
+            tenant_id=employee.tenant_id if employee else None,
+            employee_id=employee.id if employee else None,
+            failure_reason="邮箱或密码错误",
+        )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="邮箱或密码错误",
         )
 
-    # 更新最后登录时间
+    # 更新最后登录时间和在线状态
     employee.last_login_at = datetime.now(timezone.utc)
+    employee.online_status = "online"
     await db.commit()
     await db.refresh(employee)
+    from app.services.operations_service import record_audit, record_login
+    await record_login(
+        db,
+        email=email,
+        success=True,
+        tenant_id=employee.tenant_id,
+        employee_id=employee.id,
+    )
+    await record_audit(
+        db,
+        action="login",
+        resource_type="employee",
+        tenant_id=employee.tenant_id,
+        employee_id=employee.id,
+        resource_id=employee.id,
+    )
 
     subject = str(employee.id)
     return {
@@ -152,6 +192,17 @@ async def login(db: AsyncSession, *, email: str, password: str) -> dict:
         "token_type": "bearer",
         "user": employee,
     }
+
+
+async def logout(db: AsyncSession, *, employee_id: int) -> None:
+    """设置员工为离线状态。"""
+    result = await db.execute(
+        select(Employee).where(Employee.id == employee_id, Employee.deleted_at.is_(None))
+    )
+    employee = result.scalars().first()
+    if employee is not None:
+        employee.online_status = "offline"
+        await db.commit()
 
 
 async def refresh_token(db: AsyncSession, *, token: str) -> dict:

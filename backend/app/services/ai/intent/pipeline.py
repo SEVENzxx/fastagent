@@ -70,25 +70,23 @@ class IntentRecognitionPipeline:
         pending_state: PendingIntentState | None = None,
     ) -> IntentResult:
         """识别意图，返回 IntentResult。"""
+
+        # 1: Normalizer — 文本清洗
         started = time.perf_counter()
         original = str(text or "")
         normalized = self.normalizer.normalize(original)
         logger.info("意图识别流水线开始：text_len=%s normalized_len=%s", len(original), len(normalized))
 
-        # Step 2: RuleMatcher — 强规则提前退出
+        # 2: RuleMatcher — 强规则提前退出
         strong_hit = self.rule_matcher.match(normalized)
         if strong_hit is not None and strong_hit.route in {"HUMAN", "SILENT"}:
-            logger.info(
-                "意图识别命中强规则并提前结束：intent=%s route=%s confidence=%.4f elapsed_ms=%.0f",
-                strong_hit.intent, strong_hit.route, strong_hit.confidence,
-                (time.perf_counter() - started) * 1000,
-            )
+            logger.info("意图识别通过强规则提前退出：intent=%s route=%s confidence=%.4f", strong_hit.intent, strong_hit.route, strong_hit.confidence, )
             return self._early_result(original, normalized, strong_hit, "rule_matcher")
 
-        # Step 3: KeywordEntityExtractor
+        # 3: KeywordEntityExtractor — 关键字匹配
         signals = self.keyword_entity.extract(normalized)
 
-        # Step 4: ContextStateResolver — 槽位补全
+        # 4: ContextStateResolver — 槽位补全
         context_hit = self.context_state.resolve(normalized, signals, pending_state)
         if context_hit is not None:
             logger.info(
@@ -98,7 +96,7 @@ class IntentRecognitionPipeline:
             )
             return self._early_result(original, normalized, context_hit, "context_state")
 
-        # Step 5: MessageSegmenter
+        # 5: MessageSegmenter
         segments = self.segmenter.segment(
             normalized, enable_multi_intent=self.config.enable_multi_intent,
         )
@@ -109,12 +107,12 @@ class IntentRecognitionPipeline:
 
         logger.info("意图识别拆句完成：segments=%s", len(segments))
 
-        # Step 6-9: 每个 segment 独立识别
+        # 6-9: 每个 segment 独立识别
         hits: list[IntentHit] = []
         for segment in segments:
             hits.append(await self._recognize_segment(segment, normalized, signals))
 
-        # Step 10 在 recognize_and_route() 中调用
+        # 10 在 recognize_and_route() 中调用
         primary_hit = max(hits, key=lambda item: item.confidence) if hits else None
         candidates = [c for hit in hits for c in hit.candidates]
         result = IntentResult(
@@ -160,17 +158,17 @@ class IntentRecognitionPipeline:
     async def _recognize_segment(
         self, segment: str, full_text: str, signals,
     ) -> IntentHit:
-        """Step 6-9：单个 segment 的意图识别。"""
+        """6-9：单个 segment 的意图识别。"""
 
-        # Step 6: VectorIntentRetriever
+        # 6: VectorIntentRetriever
         vector_candidates = await self.vector_retriever.retrieve(segment)
 
-        # Step 7: IntentFusionScorer → list[IntentCandidate]
+        # 7: IntentFusionScorer → list[IntentCandidate]
         fused = self.fusion_scorer.score(
             vector_candidates, signals, segment=segment, full_text=full_text,
         )
 
-        # Step 8: AmbiguityDetector → (top, is_ambiguous, need_llm, need_clarification, reason)
+        # 8: AmbiguityDetector → (top, is_ambiguous, need_llm, need_clarification, reason)
         top, is_ambiguous, need_llm, need_clarification, amb_reason = (
             self.ambiguity_detector.detect(fused)
         )
@@ -179,7 +177,7 @@ class IntentRecognitionPipeline:
             len(segment), len(fused), top.intent, top.score, is_ambiguous, need_llm,
         )
 
-        # Step 9: LLMIntentJudge → (primary_intent, secondary, need_clarification, reason) | None
+        # 9: LLMIntentJudge → (primary_intent, secondary, need_clarification, reason) | None
         if need_llm:
             judged = await self.llm_judge.judge(segment, fused)
             if judged is not None:

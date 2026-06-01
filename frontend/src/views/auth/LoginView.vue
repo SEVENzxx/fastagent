@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { reactive, ref } from 'vue'
-import { useRouter, useRoute, RouterLink } from 'vue-router'
+import { useRouter, useRoute } from 'vue-router'
 import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
 import { isAxiosError } from 'axios'
 import { useAuthStore } from '@/stores/useAuthStore'
@@ -109,8 +109,7 @@ async function handleLogin() {
       </el-form>
 
       <p class="auth-switch">
-        还没有账号？
-        <RouterLink to="/register">去注册</RouterLink>
+        账号由平台管理员创建，如需开通请联系超级管理员。
       </p>
     </section>
   </main>

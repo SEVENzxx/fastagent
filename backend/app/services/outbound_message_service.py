@@ -25,6 +25,53 @@ async def deliver_message(db: AsyncSession, conversation: Conversation, message:
             message.content_type,
         )
         return message
+
+    # 所有文本出站都必须先经过同一个风控入口。这里位于渠道选择之前，因此没有
+    # 配置企微渠道的本地演示消息也会留下命中记录，后续自动跟进复用本服务时同样
+    # 不会绕过敏感词规则。
+    from app.services import operations_service
+    sensitive = await operations_service.evaluate_sensitive_text(db, conversation.tenant_id, message.content or "")
+    if sensitive["action"]:
+        metadata = dict(message.metadata_ or {})
+        metadata["sensitive_word_check"] = sensitive
+        message.metadata_ = metadata
+        await operations_service.record_audit(
+            db,
+            action="sensitive_word_hit",
+            resource_type="message",
+            tenant_id=conversation.tenant_id,
+            resource_id=message.id,
+            details=sensitive,
+            commit=False,
+        )
+        if sensitive["action"] in {"block", "transfer"}:
+            conversation.status = "pending_human"
+            conversation.handling_type = "human"
+            conversation.is_transferred = True
+            conversation.transfer_reason = "敏感词风控触发"
+            metadata["outbound"] = {
+                "ok": False,
+                "blocked": True,
+                "reason": "sensitive_word",
+                "action": sensitive["action"],
+            }
+            await operations_service.create_notification(
+                db,
+                tenant_id=conversation.tenant_id,
+                type="sensitive_word",
+                level="error" if sensitive["action"] == "block" else "warning",
+                title="消息触发敏感词风控",
+                content="出站消息已拦截并转入人工处理。",
+                resource_type="conversation",
+                resource_id=conversation.id,
+                metadata=sensitive,
+                commit=False,
+            )
+            await db.commit()
+            await db.refresh(message)
+            return message
+        await db.commit()
+        await db.refresh(message)
     if conversation.platform_id is None:
         logger.info(
             "跳过出站投递：conversation_id=%s message_id=%s reason=no_platform",

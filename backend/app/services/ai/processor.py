@@ -5,16 +5,18 @@ from __future__ import annotations
 import logging
 import time
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.websocket_manager import manager
 from app.models.conversation import Conversation, Message
 from app.schemas.conversation import ConversationUpdate, MessageCreate
 from app.services import conversation_service, outbound_message_service
+from app.services.ai.agent.types import AgentContext
 from app.services.ai.intent.pending_state_store import PendingStateStore
 from app.services.ai.intent.pipeline import IntentRecognitionPipeline
 from app.services.ai.message_router import MessageRouter
-from app.services.ai.agent.types import AgentContext
+from app.services.usage_service import bind_usage_context
 
 logger = logging.getLogger(__name__)
 
@@ -60,43 +62,67 @@ async def process_customer_message_with_ai(
     conversation: Conversation,
     customer_message: Message,
 ) -> None:
-    """对客户入站消息执行 AI 识别、路由和回复。
+    """ 对客户入站消息执行 AI 识别、路由和回复 """
 
-    当前 Phase 8 先打通核心链路：
-    - HUMAN：更新会话为待人工，并落一条 SYSTEM 提示。
-    - SILENT：不回复。
-    - GENERAL_REPLY/AGENT：生成 AI 文本，落库、广播，并尝试出站到企业微信。
-    """
-    if conversation.status in {"closed", "human_processing", "pending_human"}:
-        logger.info(
-            "跳过 AI 处理：conversation_id=%s status=%s",
-            conversation.id,
-            conversation.status,
-        )
+    # ── 1: 已关闭或坐席正在处理的会话，不进入 AI ──
+    if conversation.status in {"closed", "human_processing"}:
         return
+
+    # ── 2: pending_human 排队状态 — 坐席已接管→跳过；无坐席→AI 兜底 ──
+    if conversation.status == "pending_human":
+        # 检查是否有坐席已接管（employee_id 非空）
+        if conversation.employee_id is not None:
+            return
+        # ── 3: 客户主动要求切回 AI ──
+        customer_text = (customer_message.content or "").strip()
+        if customer_text == "智能客服":
+            logger.info("客户要求切回 AI：conversation_id=%s, 恢复 ai_processing", conversation.id, )
+            await conversation_service.update_conversation(
+                db,
+                conversation.id,
+                conversation.tenant_id,
+                ConversationUpdate(status="ai_processing", handling_type="ai_only"),
+            )
+            # 刷新 conversation 对象后继续走正常 AI 管线
+            conversation = await conversation_service.get_conversation(
+                db, conversation.id, conversation.tenant_id
+            )
+            # 继续往下走 AI 流程（不 return）
+        else:
+            # 2b: 无坐席在线，AI 代为回复排队兜底
+            queue_msg = (
+                "当前人工客服繁忙，您正在排队等待中，请耐心等候。"
+                "如需继续由智能客服为您服务，请回复「智能客服」。"
+            )
+            await _create_deliver_and_broadcast_reply_message(
+                db,
+                conversation,
+                queue_msg,
+                sender_type="SYSTEM",
+                metadata={"type": "queue_notice", "status": "pending_human"},
+            )
+            return
+    # ── 3 续：已切回 ai_processing，继续下面的 AI 管线 ──
+    # ── 4: 已由人工接待的会话 → 跳过 AI ──
     if conversation.handling_type == "human":
-        logger.info(
-            "跳过 AI 处理：conversation_id=%s 已由人工接待",
-            conversation.id,
-        )
+        logger.info("跳过 AI 处理：conversation_id=%s 已由人工接待", conversation.id, )
         return
+
+    # ── 5: 过滤非客户文本消息（图片/系统通知/坐席回复等不处理）──
     if customer_message.sender_type != "CUSTOMER" or customer_message.content_type != "text":
-        logger.info(
-            "跳过 AI 处理：message_id=%s sender_type=%s content_type=%s",
-            customer_message.id,
-            customer_message.sender_type,
-            customer_message.content_type,
-        )
         return
 
     started = time.perf_counter()
-    logger.info(
-        "开始 AI 处理：tenant_id=%s conversation_id=%s message_id=%s content_len=%s",
-        conversation.tenant_id,
-        conversation.id,
-        customer_message.id,
-        len(customer_message.content or ""),
+    # ── 6: 绑定用量计量上下文 ──
+    # ContextVar 绑定 (tenant_id, conversation_id, message_id)，
+    # 后续意图精判、Agent 回复等所有 LLM 调用自动记账到该租户。
+    bind_usage_context(
+        tenant_id=conversation.tenant_id,
+        conversation_id=conversation.id,
+        message_id=customer_message.id,
     )
+
+    # ── 7: 读取 PendingState（多轮槽位补全）──
     pending_store = PendingStateStore()
     pending_state = await pending_store.get(conversation.tenant_id, conversation.id)
     if pending_state is not None:
@@ -108,24 +134,13 @@ async def process_customer_message_with_ai(
             pending_state.required_entities,
         )
 
+    # ── 8: 意图识别流水线 → 输出 RoutedIntent (route + skill + confidence) ──
     result = await IntentRecognitionPipeline().recognize_and_route(
         customer_message.content or "",
         pending_state=pending_state,
     )
-    logger.info(
-        "AI 路由完成：tenant_id=%s conversation_id=%s message_id=%s route=%s intent=%s skill=%s confidence=%.4f multi=%s clarify=%s hits=%s",
-        conversation.tenant_id,
-        conversation.id,
-        customer_message.id,
-        result.route,
-        result.primary_intent,
-        result.skill,
-        result.confidence,
-        result.is_multi_intent,
-        result.need_clarification,
-        len(result.hits),
-    )
 
+    # ── 9: WebSocket 广播 ai.routed 事件（前端可实时展示路由结果）──
     await manager.publish(
         conversation.id,
         {
@@ -138,43 +153,38 @@ async def process_customer_message_with_ai(
         },
     )
 
+    # ── 10: 路由分发 → MessageRouter → Handler (SILENT / GENERAL_REPLY / AGENT / HUMAN) ──
     router = MessageRouter()
     handler = router.resolve(result)
 
+    # ── 11: Silent / 无需回复（reply_sender_type=None）→ 直接返回 ──
     if handler.reply_sender_type is None:
-        logger.info(
-            "AI 路由无需回复：conversation_id=%s message_id=%s route=%s elapsed_ms=%.0f",
-            conversation.id,
-            customer_message.id,
-            result.route,
-            (time.perf_counter() - started) * 1000,
-        )
         return
 
+    # ── 12: 清理 PendingState ──
+    # 转人工 / 明确回复 → AI 不需要再追问槽位，清除 Redis 里的待补状态
     if handler.clear_pending_state:
         await pending_store.delete(conversation.tenant_id, conversation.id)
 
+    # ── 13: 转人工 → 自动分配在线坐席 + 通知 ──
     if handler.transfer_to_human:
-        logger.warning(
-            "AI 路由到人工：tenant_id=%s conversation_id=%s message_id=%s intent=%s reason=%s",
-            conversation.tenant_id,
-            conversation.id,
-            customer_message.id,
-            result.primary_intent,
-            result.reason,
-        )
         await _mark_pending_human(db, conversation, result.reason or result.primary_intent or "需要人工处理")
 
-    # 首次 AI 对话时，发送系统提示告知客户
+    # ── 14: 首次 AI 对话 → 发送 AI 问候语（从租户配置读取）──
     if handler.send_ai_greeting and "ai_greeting_sent" not in (conversation.tags or []):
+        from app.services.ai.tenant_ai_config import get_ai_greeting
+        greeting = await get_ai_greeting(db, conversation.tenant_id)
         await _create_and_broadcast_system_message(
             db,
             conversation,
-            "您好，我是 AI 智能助手，正在为您服务。如需人工客服，请随时告知。",
+            greeting,
             metadata={"type": "ai_greeting"},
         )
         conversation.tags = (conversation.tags or []) + ["ai_greeting_sent"]
 
+    # ── 15: 构建 AgentContext ──
+    # 仅 AGENT 路由需要：传 db session + tenant_id + conversation_id + contact_id，
+    # 供 LangGraph Agent 的 Skill 函数调用（如 create_order / search_products）
     agent_ctx = (
         AgentContext(
             db=db,
@@ -186,6 +196,7 @@ async def process_customer_message_with_ai(
         else None
     )
 
+    # ── 16: 流式渲染 AI 回复（先发 typing 指示，再 SSE 推送 chunk）──
     if handler.show_typing:
         await _publish_typing(conversation, True)
 
@@ -216,15 +227,10 @@ async def process_customer_message_with_ai(
     )
 
     if not content:
-        logger.warning(
-            "AI 生成内容为空：conversation_id=%s message_id=%s route=%s intent=%s",
-            conversation.id,
-            customer_message.id,
-            result.route,
-            result.primary_intent,
-        )
+        logger.info("AI 回复生成结果为空，跳过后续处理：conversation_id=%s route=%s", conversation.id, result.route)
         return
 
+    # ── 17: 组装回复 metadata（路由信息 + 订单卡片）──
     metadata: dict = {
         "ai_route": result.route,
         "skill": result.skill,
@@ -233,11 +239,12 @@ async def process_customer_message_with_ai(
         "is_multi_intent": result.is_multi_intent,
     }
 
-    # 附带 order card 数据（来自 Skill 工具调用结果）
+    # 附带 order card 数据（来自 Skill 工具调用结果，如 create_order）
     order_cards = _extract_order_cards(handler)
     if order_cards:
         metadata["order_cards"] = order_cards
 
+    # ── 18: 落库 + WebSocket 广播 + 企微（或其他渠道）出站投递 ──
     await _create_deliver_and_broadcast_reply_message(
         db,
         conversation,
@@ -245,17 +252,32 @@ async def process_customer_message_with_ai(
         sender_type=handler.reply_sender_type or "AI",
         metadata=metadata,
     )
-    logger.info(
-        "AI 处理完成：tenant_id=%s conversation_id=%s message_id=%s route=%s elapsed_ms=%.0f",
-        conversation.tenant_id,
-        conversation.id,
-        customer_message.id,
-        result.route,
-        (time.perf_counter() - started) * 1000,
-    )
 
 
 async def _mark_pending_human(db: AsyncSession, conversation: Conversation, reason: str) -> None:
+    """将会话标记为待人工处理，尝试自动分配在线坐席。
+
+    A - 查同租户在线/离开的坐席（排除离线/busy/已删除）
+    B - 找到 → 自动分配 employee_id；没找到 → 留空
+    C - 更新会话 status="pending_human" + handling_type="human"
+    D - 创建系统通知（已分配坐席则定向通知，否则广播"暂无在线坐席"）
+    E - WebSocket 广播 conversation.updated 事件
+    """
+    from app.models.employee import Employee
+
+    # A-B: 查找同租户在线坐席
+    online_agent = await db.scalar(
+        select(Employee).where(
+            Employee.tenant_id == conversation.tenant_id,
+            Employee.deleted_at.is_(None),
+            Employee.online_status.in_(["online", "away"]),
+        ).order_by(Employee.last_login_at.desc()).limit(1)
+    )
+
+    assigned_employee_id = None
+    if online_agent is not None:
+        assigned_employee_id = online_agent.id
+
     updated = await conversation_service.update_conversation(
         db,
         conversation.id,
@@ -265,14 +287,26 @@ async def _mark_pending_human(db: AsyncSession, conversation: Conversation, reas
             handling_type="human",
             is_transferred=True,
             transfer_reason=reason,
+            employee_id=assigned_employee_id,
         ),
     )
     if updated is not None:
-        logger.info(
-            "会话已标记为等待人工：tenant_id=%s conversation_id=%s reason=%s",
-            conversation.tenant_id,
-            conversation.id,
-            reason,
+        # 创建系统通知提醒坐席有会话需要人工接管
+        from app.services.operations_service import create_notification
+        notice_content = (
+            f"会话 {conversation.id} 因\"{reason}\"转入人工处理，已自动分配给坐席 #{assigned_employee_id}。"
+            if assigned_employee_id
+            else f"会话 {conversation.id} 因\"{reason}\"转入人工处理，当前无在线坐席，请在坐席上线后及时接管。"
+        )
+        await create_notification(
+            db,
+            type="human_transfer",
+            tenant_id=conversation.tenant_id,
+            level="warning",
+            title="会话已转入人工队列",
+            content=notice_content,
+            resource_type="conversation",
+            resource_id=conversation.id,
         )
         await manager.publish(
             conversation.id,
@@ -294,12 +328,6 @@ async def _create_and_broadcast_system_message(
         MessageCreate(sender_type="SYSTEM", content_type="text", content=content, metadata=metadata),
     )
     message = await outbound_message_service.deliver_message(db, conversation, message)
-    logger.info(
-        "系统消息已创建：conversation_id=%s message_id=%s metadata=%s",
-        conversation.id,
-        message.id,
-        metadata,
-    )
     await manager.publish(conversation.id, {"type": "message.created", "message": message_payload(message)})
 
 

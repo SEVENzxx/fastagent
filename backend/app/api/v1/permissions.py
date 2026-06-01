@@ -1,17 +1,19 @@
-"""权限码 API"""
+"""租户权限码 API。平台管理员不使用租户 RBAC 权限列表。"""
 
 from fastapi import APIRouter, Depends
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.dependencies import get_current_user
+from app.dependencies import require_tenant_user
+from app.models.employee import Employee
 from app.models.role import Permission, PermissionCode
 from app.schemas.role import PermissionGroupedResponse, PermissionResponse
 
 router = APIRouter(prefix="/permissions", tags=["权限"])
 
-MODULE_GROUPS = [
+# 业务模块（租户管理员可见）
+BUSINESS_MODULE_GROUPS = [
     ("会话", [
         PermissionCode.VIEW_ASSIGNED_CHATS, PermissionCode.VIEW_ALL_CHATS,
         PermissionCode.MANAGE_CONVERSATIONS,
@@ -52,20 +54,14 @@ MODULE_GROUPS = [
     ("LLM与AI", [
         PermissionCode.MANAGE_LLM_CONFIG, PermissionCode.MANAGE_SENSITIVE_WORDS,
     ]),
-    ("系统管理", [
-        PermissionCode.MANAGE_TENANTS, PermissionCode.MANAGE_PLANS,
-        PermissionCode.VIEW_AUDIT_LOGS, PermissionCode.MANAGE_BACKUPS,
-        PermissionCode.MANAGE_SYSTEM_SETTINGS, PermissionCode.EXPORT_DATA,
-    ]),
 ]
-
 
 @router.get("", response_model=list[PermissionGroupedResponse])
 async def list_permissions(
     db: AsyncSession = Depends(get_db),
-    current_user=Depends(get_current_user),
+    current_user: Employee = Depends(require_tenant_user),
 ):
-    """获取系统全部权限码（按模块分组）。任何已登录用户可访问。"""
+    """获取租户可分配的业务权限码列表（按模块分组）。"""
     result = await db.execute(select(Permission))
     perms = result.scalars().all()
     perm_map: dict[str, PermissionResponse] = {
@@ -73,8 +69,11 @@ async def list_permissions(
         for p in perms
     }
 
+    # 租户管理员看不到平台专有权限模块
+    module_groups = list(BUSINESS_MODULE_GROUPS)
+
     groups: list[PermissionGroupedResponse] = []
-    for module_name, codes in MODULE_GROUPS:
+    for module_name, codes in module_groups:
         items = [perm_map[c.value] for c in codes if c.value in perm_map]
         if items:
             groups.append(PermissionGroupedResponse(module=module_name, permissions=items))

@@ -39,8 +39,8 @@ SKILL_REGISTRY: dict[str, SkillFunc] = {
     "search_images": search_images,
 }
 
-# Phase 8 intent.skill → Phase 9 registry key 映射
-SKILL_ALIASES: dict[str, str | None] = {
+# Phase 8 intent.skill → Phase 9 registry key 映射（平台默认，租户可通过 DB 覆盖）
+_SKILL_ALIASES: dict[str, str | None] = {
     # 聚合映射：多个 intent.skill 合并到一个 registry key
     "product_search": "search_products",
     "product_inquiry": "search_products",
@@ -54,11 +54,30 @@ SKILL_ALIASES: dict[str, str | None] = {
     "human_service": None,
 }
 
+SKILL_ALIASES = _SKILL_ALIASES  # 保留别名以兼容现有引用，未来从 DB 加载
+
 # MCP 工具名单（Phase 11 替换 stub）
 MCP_TOOL_NAMES: set[str] = {"search_knowledge", "search_images"}
 
 # 副作用操作（create/update/delete），进入 DIRECT_SKILL 时标记 requires_approval
-SIDEEFFECT_SKILLS: set[str] = {"create_order", "confirm_order", "manage_order", "update_price_strategy"}
+_SIDEEFFECT_SKILLS: set[str] = {"create_order", "confirm_order", "manage_order", "update_price_strategy"}
+
+SIDEEFFECT_SKILLS = _SIDEEFFECT_SKILLS  # 保留别名以兼容现有引用
+
+
+def load_skill_aliases(
+    alias_overrides: dict[str, str | None] | None = None,
+    sideeffect_overrides: set[str] | None = None,
+) -> None:
+    """从 DB 或外部配置覆盖 skill 别名和副作用名单。
+
+    alias_overrides 为空时保持平台默认。sideeffect_overrides 同。
+    """
+    global SKILL_ALIASES, SIDEEFFECT_SKILLS
+    if alias_overrides:
+        SKILL_ALIASES = {**_SKILL_ALIASES, **alias_overrides}
+    if sideeffect_overrides:
+        SIDEEFFECT_SKILLS = _SIDEEFFECT_SKILLS | sideeffect_overrides
 
 
 def resolve_skill(intent_skill: str | None) -> str | None:

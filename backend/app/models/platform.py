@@ -18,14 +18,14 @@ class Platform(Base):
 
     __tablename__ = "platforms"
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, default=generate_id)
-    tenant_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("tenants.id"), nullable=False)
-    type: Mapped[str] = mapped_column(String(20), nullable=False, default="wecom", server_default="wecom")
-    name: Mapped[str | None] = mapped_column(String(100), nullable=True)
-    config: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
-    webhook_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
-    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default=text("true"))
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, default=generate_id, comment="主键")
+    tenant_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("tenants.id"), nullable=False, comment="租户ID")
+    type: Mapped[str] = mapped_column(String(20), nullable=False, default="wecom", server_default="wecom", comment="渠道类型: wecom / wechat / web")
+    name: Mapped[str | None] = mapped_column(String(100), nullable=True, comment="渠道名称")
+    config: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict, comment="渠道配置 JSON")
+    webhook_url: Mapped[str | None] = mapped_column(String(500), nullable=True, comment="Webhook 回调地址")
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default=text("true"), comment="是否启用")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), comment="创建时间")
 
     __table_args__ = (
         Index("idx_platforms_tenant_type", "tenant_id", "type", unique=True),

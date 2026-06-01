@@ -1,10 +1,13 @@
-"""get_store_showcase — 品牌/店铺介绍（真实实现，无 DB 依赖）。"""
+"""get_store_showcase — 品牌/店铺介绍（从 Tenant 表读取）。"""
 
 from __future__ import annotations
 
 import logging
 
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from app.services.ai.agent.types import ToolResult
+from app.services.ai.tenant_ai_config import get_store_showcase as get_tenant_showcase
 
 logger = logging.getLogger(__name__)
 
@@ -13,22 +16,22 @@ async def get_store_showcase(
     *,
     tenant_id: int,
     contact_id: int | None = None,
+    db: AsyncSession | None = None,
     **kwargs,
 ) -> ToolResult:
-    """返回店铺品牌介绍。"""
+    """返回店铺品牌介绍（优先读 Tenant.store_showcase，兜底通用介绍）。"""
     logger.info(
         "Skill get_store_showcase 被调用：tenant_id=%s contact_id=%s",
         tenant_id,
         contact_id,
     )
-    showcase = (
-        "【FastAgent 智能茶庄】\n"
-        "我们是一家专注高品质茶叶的精选茶庄，主营：\n"
-        "  - 绿茶：龙井、碧螺春、毛尖\n"
-        "  - 红茶：正山小种、金骏眉、祁门红茶\n"
-        "  - 乌龙茶：铁观音、大红袍、凤凰单丛\n"
-        "  - 普洱茶：生普、熟普、古树茶\n"
-        "  - 花茶：茉莉花茶、桂花龙井\n"
-        "所有茶叶均来自原产地直采，品质有保障。支持全国快递配送。"
-    )
+    showcase = None
+    if db is not None:
+        try:
+            showcase = await get_tenant_showcase(db, tenant_id)
+        except Exception as exc:
+            logger.warning("Skill get_store_showcase 读取租户配置失败：%s — 使用默认", exc)
+    if not showcase:
+        from app.services.ai.tenant_ai_config import DEFAULT_STORE_SHOWCASE
+        showcase = DEFAULT_STORE_SHOWCASE
     return ToolResult(ok=True, skill_name="get_store_showcase", result=showcase)

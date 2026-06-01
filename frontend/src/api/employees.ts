@@ -33,7 +33,6 @@ export interface EmployeeUpdate {
   phone?: string | null
   skills?: string[] | null
   maxConcurrentChats?: number
-  isSuperuser?: boolean
 }
 
 export interface EmployeeRoleAssign {

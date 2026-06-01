@@ -58,7 +58,7 @@ async def websocket_endpoint(websocket: WebSocket, conversation_id: int, token: 
 
     async with AsyncSessionLocal() as db:
         employee = await db.get(Employee, employee_id)
-        if employee is None or employee.deleted_at is not None:
+        if employee is None or employee.deleted_at is not None or employee.is_superuser:
             await websocket.close(code=1008)
             return
         conversation = await conversation_service.get_conversation(
@@ -71,6 +71,15 @@ async def websocket_endpoint(websocket: WebSocket, conversation_id: int, token: 
             return
 
     await manager.connect(conversation_id, websocket)
+    manager.connect_employee(employee_id)
+    await manager.start_redis_subscriber(conversation_id)
+
+    # WebSocket 连接建立后，标记员工为在线
+    async with AsyncSessionLocal() as db:
+        emp = await db.get(Employee, employee_id)
+        if emp is not None and emp.online_status != "online":
+            emp.online_status = "online"
+            await db.commit()
 
     async def heartbeat() -> None:
         """服务端心跳。
@@ -120,3 +129,10 @@ async def websocket_endpoint(websocket: WebSocket, conversation_id: int, token: 
     finally:
         heartbeat_task.cancel()
         manager.disconnect(conversation_id, websocket)
+        # 若无其他连接，标记员工离线
+        if manager.disconnect_employee(employee_id):
+            async with AsyncSessionLocal() as db:
+                emp = await db.get(Employee, employee_id)
+                if emp is not None:
+                    emp.online_status = "offline"
+                    await db.commit()

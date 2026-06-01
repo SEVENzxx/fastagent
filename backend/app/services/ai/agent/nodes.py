@@ -10,10 +10,15 @@ from langgraph.types import RunnableConfig
 
 from app.config import settings
 from app.integrations.llm_client import LLMClient, LLMClientError
-from app.services.ai.agent.prompts import GENERATE_REPLY_SYSTEM_PROMPT, build_generate_reply_user_prompt
+from app.services.ai.agent.prompts import build_generate_reply_user_prompt, get_effective_system_prompt
 from app.services.ai.agent.skill_registry import SIDEEFFECT_SKILLS, SKILL_REGISTRY, resolve_skill
 from app.services.ai.agent.types import AgentContext, AgentState, ExecutionMode, ToolResult
 from app.services.ai.intent.types import RoutedIntent
+from app.services.ai.tenant_ai_config import (
+    DEFAULT_CLARIFY_PROMPT,
+    DEFAULT_FALLBACK_MESSAGES,
+    DEFAULT_FALLBACK_SYSTEM_PROMPT,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -351,7 +356,7 @@ async def generate_reply(state: AgentState) -> AgentState:
     # AGENT_PLANNER stub: 直接返回固定话术
     if mode == ExecutionMode.AGENT_PLANNER.value:
         logger.info("[generate_reply] mode=AGENT_PLANNER — stub 固定话术")
-        state["final_reply"] = "抱歉，您的问题比较复杂，正在为您转接人工客服，请稍候。"
+        state["final_reply"] = DEFAULT_FALLBACK_MESSAGES["agent_planner"]
         return state
 
     # CLARIFY: 生成澄清追问
@@ -404,11 +409,11 @@ async def post_process(state: AgentState) -> AgentState:
     if not reply:
         mode = state.get("execution_mode", "")
         if mode == ExecutionMode.AGENT_PLANNER.value:
-            reply = "抱歉，您的问题比较复杂，正在为您转接人工客服，请稍候。"
+            reply = DEFAULT_FALLBACK_MESSAGES["agent_planner"]
         elif mode == ExecutionMode.CLARIFY.value:
-            reply = "请问您是想了解我们的产品，还是有具体的订单问题需要我帮您处理？"
+            reply = DEFAULT_FALLBACK_MESSAGES["clarify_product_or_order"]
         else:
-            reply = "好的，我已收到您的消息。如需进一步帮助，请随时告诉我。"
+            reply = DEFAULT_FALLBACK_MESSAGES["generic_ack"]
 
     state["final_reply"] = reply
     logger.info(
@@ -426,11 +431,11 @@ async def post_process(state: AgentState) -> AgentState:
 # ===========================================================================
 
 
-async def _generate_from_tool_results(customer_text: str, tool_results: list[dict]) -> str:
+async def _generate_from_tool_results(customer_text: str, tool_results: list[dict], system_prompt: str | None = None) -> str:
     """LLM 基于 tool_results 生成自然回复。"""
     user_prompt = build_generate_reply_user_prompt(customer_text, tool_results)
     messages = [
-        {"role": "system", "content": GENERATE_REPLY_SYSTEM_PROMPT},
+        {"role": "system", "content": system_prompt or get_effective_system_prompt()},
         {"role": "user", "content": user_prompt},
     ]
     try:
@@ -448,14 +453,9 @@ async def _generate_from_tool_results(customer_text: str, tool_results: list[dic
 
 async def _generate_clarify_reply(customer_text: str) -> str:
     """生成澄清追问。"""
+    clarify_prompt = DEFAULT_CLARIFY_PROMPT
     messages = [
-        {
-            "role": "system",
-            "content": (
-                "你是企业微信客服助手。用户的意图不太明确，请用简洁礼貌的中文引导用户说明具体需求。"
-                "询问用户想了解什么：商品信息、订单状态、物流查询还是其他？不超过 60 字。"
-            ),
-        },
+        {"role": "system", "content": clarify_prompt},
         {"role": "user", "content": customer_text or "用户暂未提供明确问题"},
     ]
     try:
@@ -467,16 +467,13 @@ async def _generate_clarify_reply(customer_text: str) -> str:
             temperature=settings.AI_GENERAL_REPLY_TEMPERATURE,
         )
     except LLMClientError:
-        return "请问您是想了解我们的产品，还是有订单相关的问题需要我帮您处理？"
+        return DEFAULT_FALLBACK_MESSAGES["clarify_product_or_order"]
 
 
 async def _generate_fallback_reply(customer_text: str) -> str:
     """无工具调用时的兜底回复。"""
     messages = [
-        {
-            "role": "system",
-            "content": "你是企业微信客服助手，请用简洁自然的中文回复用户，不超过 100 字。",
-        },
+        {"role": "system", "content": DEFAULT_FALLBACK_SYSTEM_PROMPT},
         {"role": "user", "content": customer_text or "你好"},
     ]
     try:
@@ -488,14 +485,14 @@ async def _generate_fallback_reply(customer_text: str) -> str:
             temperature=settings.AI_GENERAL_REPLY_TEMPERATURE,
         )
     except LLMClientError:
-        return "您好，请问有什么可以帮助您的？"
+        return DEFAULT_FALLBACK_MESSAGES["empty_reply_general"]
 
 
 def _template_fallback(tool_results: list[dict]) -> str:
     """无 LLM 时的模板兜底。"""
     ok_results = [r for r in tool_results if r.get("ok")]
     if not ok_results:
-        return "抱歉，暂时无法处理您的请求，请稍后再试或转接人工客服。"
+        return DEFAULT_FALLBACK_MESSAGES["error_fallback"]
     parts: list[str] = []
     for r in ok_results:
         result = r.get("result")
@@ -503,7 +500,7 @@ def _template_fallback(tool_results: list[dict]) -> str:
             parts.append(str(result["message"]))
         elif isinstance(result, str):
             parts.append(result)
-    return "\n\n".join(parts) if parts else "好的，我已收到您的请求。"
+    return "\n\n".join(parts) if parts else DEFAULT_FALLBACK_MESSAGES["template_fallback"]
 
 
 def _extract_customer_text(routed: RoutedIntent) -> str:

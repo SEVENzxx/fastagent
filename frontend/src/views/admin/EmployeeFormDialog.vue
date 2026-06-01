@@ -19,7 +19,6 @@ const emit = defineEmits<{
     phone: string | null
     skills: string[]
     maxConcurrentChats: number
-    isSuperuser: boolean
     roleIds: string[]
   }]
 }>()
@@ -32,7 +31,6 @@ const form = reactive({
   phone: '',
   skills: [] as string[],
   maxConcurrentChats: 10,
-  isSuperuser: false,
   roleIds: [] as string[],
 })
 
@@ -59,7 +57,6 @@ watch(
       form.phone = props.employee.phone || ''
       form.skills = props.employee.skills || []
       form.maxConcurrentChats = props.employee.maxConcurrentChats
-      form.isSuperuser = props.employee.isSuperuser
       form.roleIds = props.employee.roles.map((role) => role.id)
       return
     }
@@ -70,7 +67,6 @@ watch(
     form.phone = ''
     form.skills = []
     form.maxConcurrentChats = 10
-    form.isSuperuser = false
     form.roleIds = []
   },
 )
@@ -91,7 +87,6 @@ async function submit() {
     phone: form.phone || null,
     skills: form.skills,
     maxConcurrentChats: form.maxConcurrentChats,
-    isSuperuser: form.isSuperuser,
     roleIds: form.roleIds,
   })
 }
@@ -130,9 +125,6 @@ async function submit() {
         <el-select v-model="form.roleIds" multiple placeholder="选择角色" class="full">
           <el-option v-for="role in roles" :key="role.id" :label="role.name" :value="role.id" />
         </el-select>
-      </el-form-item>
-      <el-form-item label="超级管理员">
-        <el-switch v-model="form.isSuperuser" />
       </el-form-item>
     </el-form>
 

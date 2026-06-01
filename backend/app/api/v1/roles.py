@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.dependencies import get_current_user, require_permission
+from app.dependencies import require_permission, require_tenant_user
 from app.models.employee import Employee
 from app.models.role import PermissionCode
 from app.schemas.role import (
@@ -41,7 +41,7 @@ def _role_to_response(role) -> RoleDetailResponse:
 @router.get("", response_model=list[RoleDetailResponse])
 async def list_roles(
     db: AsyncSession = Depends(get_db),
-    current_user: Employee = Depends(get_current_user),
+    current_user: Employee = Depends(require_tenant_user),
 ):
     """获取租户内所有角色（含权限）"""
     roles = await role_service.list_roles(db, current_user.tenant_id)
@@ -69,7 +69,7 @@ async def create_role(
 async def get_role(
     role_id: int,
     db: AsyncSession = Depends(get_db),
-    current_user: Employee = Depends(get_current_user),
+    current_user: Employee = Depends(require_tenant_user),
 ):
     """获取角色详情"""
     role = await role_service.get_role(db, role_id, current_user.tenant_id)
@@ -111,7 +111,7 @@ async def delete_role(
 async def get_role_permissions(
     role_id: int,
     db: AsyncSession = Depends(get_db),
-    current_user: Employee = Depends(get_current_user),
+    current_user: Employee = Depends(require_tenant_user),
 ):
     """获取角色已有的权限"""
     perms = await role_service.get_role_permissions(db, role_id, current_user.tenant_id)

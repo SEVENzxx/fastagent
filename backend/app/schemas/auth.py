@@ -17,28 +17,6 @@ class LoginRequest(CamelModel):
     password: str
 
 
-class RegisterRequest(CamelModel):
-    """注册请求 — 创建租户 + 管理员"""
-
-    company_name: str
-    email: EmailStr
-    password: str
-    display_name: str | None = None
-
-    @field_validator("company_name")
-    @classmethod
-    def company_name_not_empty(cls, v: str) -> str:
-        if not v.strip():
-            raise ValueError("公司名称不能为空")
-        return v.strip()
-
-    @field_validator("password")
-    @classmethod
-    def password_min_length(cls, v: str) -> str:
-        if len(v) < 6:
-            raise ValueError("密码至少需要 6 个字符")
-        return v
-
 
 class RefreshRequest(CamelModel):
     """刷新令牌请求"""

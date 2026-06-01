@@ -1,17 +1,15 @@
-"""VectorIntentRetriever：向量候选召回。"""
+"""VectorIntentRetriever：基于 Qdrant 的候选意图召回。"""
 
 from __future__ import annotations
 
 import logging
-import math
 from collections.abc import Awaitable, Callable, Sequence
 from difflib import SequenceMatcher
 
-from app.config import settings
-from app.integrations.embedding_client import EmbeddingClient, EmbeddingClientError
 from app.services.ai.config.intent_config import DEFAULT_INTENT_CONFIG, IntentRecognitionConfig
 from app.services.ai.config.intent_examples import DEFAULT_INTENT_EXAMPLES, IntentExample
 from app.services.ai.intent.types import IntentCandidate
+from app.services.vector_search_service import VectorDomain, VectorSearchService
 
 logger = logging.getLogger(__name__)
 
@@ -20,83 +18,82 @@ VectorProvider = Callable[[str, int, float], Awaitable[Sequence[IntentCandidate]
 
 
 class VectorIntentRetriever:
-    """只负责召回候选意图，不直接决定最终 intent。"""
+    """从意图样本 Qdrant collection 中召回候选意图。"""
+
+    _seeded = False
 
     def __init__(
         self,
         config: IntentRecognitionConfig | None = None,
         examples: Sequence[IntentExample] | None = None,
         provider: VectorProvider | None = None,
-        embedding_client: EmbeddingClient | None = None,
+        vector_search: VectorSearchService | None = None,
+        **_: object,
     ) -> None:
         self.config = config or DEFAULT_INTENT_CONFIG
         self.examples = tuple(examples or DEFAULT_INTENT_EXAMPLES)
         self.provider = provider
-        self.embedding_client = embedding_client if embedding_client is not None else (
-            EmbeddingClient() if settings.AI_EMBEDDING_ENABLED else None
-        )
-        self._example_embeddings: list[list[float]] | None = None
+        self.vector_search = vector_search or VectorSearchService()
 
     async def retrieve(self, segment: str) -> list[IntentCandidate]:
-        """返回 top_k 且不低于 min_score 的候选列表。"""
+        """返回分数达到阈值的 top-k 候选意图。"""
         if self.provider is not None:
             provided = await self.provider(segment, self.config.vector_top_k, self.config.vector_min_score)
-            candidates = self._filter_candidates(list(provided or []))
-            logger.info(
-                "向量候选召回完成（自定义 provider）：segment_len=%s candidates=%s",
-                len(segment),
-                len(candidates),
-            )
-            return candidates
+            return self._filter_candidates(list(provided or []))
 
-        if self.embedding_client is not None:
-            try:
-                candidates = await self._retrieve_by_embedding(segment)
-                logger.info(
-                    "向量候选召回完成（Embedding）：segment_len=%s candidates=%s",
-                    len(segment),
-                    len(candidates),
-                )
-                return candidates
-            except EmbeddingClientError as exc:
-                # Embedding 服务异常不能阻断客服主链路，降级到本地轻量相似度。
-                logger.warning(
-                    "Embedding 召回失败，降级到文本相似度：segment_len=%s error=%s",
-                    len(segment),
-                    exc,
-                )
-
-        candidates = self._retrieve_by_text_similarity(segment)
-        logger.info(
-            "向量候选召回完成（文本相似度）：segment_len=%s candidates=%s",
-            len(segment),
-            len(candidates),
+        await self._ensure_intent_samples_indexed()
+        hits = await self.vector_search.search_text(
+            domain=VectorDomain.INTENT_SAMPLE,
+            tenant_id=0,
+            query=segment,
+            top_k=self.config.vector_top_k,
+            min_score=self.config.vector_min_score,
         )
-        return candidates
-
-    async def _retrieve_by_embedding(self, segment: str) -> list[IntentCandidate]:
-        query_embedding = await self.embedding_client.embed(segment)
-        example_embeddings = await self._get_example_embeddings()
         candidates = [
             IntentCandidate(
-                intent=example.intent,
-                label=example.label,
-                score=self._cosine_similarity(query_embedding, example_embedding),
-                source="embedding",
-                matched_text=example.example_text,
-                reason=f"embedding 召回样本: {example.example_text}",
+                intent=str(hit.payload.get("intent") or ""),
+                label=str(hit.payload.get("label") or ""),
+                score=hit.score,
+                source="qdrant",
+                matched_text=str(hit.payload.get("example_text") or hit.payload.get("text") or ""),
+                reason=f"Qdrant 意图样本: {hit.payload.get('example_text') or hit.payload.get('text')}",
             )
-            for example, example_embedding in zip(self.examples, example_embeddings, strict=False)
+            for hit in hits
+            if hit.payload.get("intent")
         ]
-        return self._filter_candidates(candidates)
+        if candidates:
+            logger.info("Intent Qdrant recall complete: segment_len=%s candidates=%s", len(segment), len(candidates))
+            return self._filter_candidates(candidates)
 
-    async def _get_example_embeddings(self) -> list[list[float]]:
-        if self._example_embeddings is None:
-            logger.info("开始向量化意图样本：examples=%s", len(self.examples))
-            self._example_embeddings = await self.embedding_client.embed_many(
-                [example.example_text for example in self.examples]
+        # 本地文本相似度只作为 Qdrant 或 embedding 服务不可用时的可靠性兜底；
+        # 生产语义召回仍以 Qdrant 为准。
+        fallback = self._retrieve_by_text_similarity(segment)
+        logger.info("Intent recall fallback used: segment_len=%s candidates=%s", len(segment), len(fallback))
+        return fallback
+
+    async def _ensure_intent_samples_indexed(self) -> None:
+        if VectorIntentRetriever._seeded:
+            return
+        indexed = 0
+        for index, example in enumerate(self.examples):
+            point_id = await self.vector_search.upsert_text(
+                domain=VectorDomain.INTENT_SAMPLE,
+                tenant_id=0,
+                business_id=f"{example.intent}:{index}",
+                text=example.example_text,
+                payload={
+                    "intent": example.intent,
+                    "label": example.label,
+                    "route": example.route,
+                    "skill": example.skill,
+                    "example_text": example.example_text,
+                    "is_active": True,
+                },
             )
-        return self._example_embeddings
+            if point_id:
+                indexed += 1
+        VectorIntentRetriever._seeded = indexed > 0
+        logger.info("Intent samples indexed in Qdrant: examples=%s indexed=%s", len(self.examples), indexed)
 
     def _retrieve_by_text_similarity(self, segment: str) -> list[IntentCandidate]:
         candidates = [
@@ -104,9 +101,9 @@ class VectorIntentRetriever:
                 intent=example.intent,
                 label=example.label,
                 score=self._similarity(segment, example.example_text),
-                source="vector_retriever",
+                source="text_fallback",
                 matched_text=example.example_text,
-                reason=f"召回样本: {example.example_text}",
+                reason=f"兜底意图样本: {example.example_text}",
             )
             for example in self.examples
         ]
@@ -117,7 +114,6 @@ class VectorIntentRetriever:
         return [item for item in ranked if item.score >= self.config.vector_min_score][: self.config.vector_top_k]
 
     def _similarity(self, left: str, right: str) -> float:
-        """开发期轻量相似度，真实生产由 embedding/pgvector 替换。"""
         left_text = left.lower().strip()
         right_text = right.lower().strip()
         if not left_text or not right_text:
@@ -127,13 +123,3 @@ class VectorIntentRetriever:
         if left_text in right_text or right_text in left_text:
             return 0.9
         return round(SequenceMatcher(None, left_text, right_text).ratio(), 4)
-
-    def _cosine_similarity(self, left: list[float], right: list[float]) -> float:
-        if not left or not right or len(left) != len(right):
-            return 0.0
-        dot = sum(a * b for a, b in zip(left, right, strict=False))
-        left_norm = math.sqrt(sum(item * item for item in left))
-        right_norm = math.sqrt(sum(item * item for item in right))
-        if left_norm == 0 or right_norm == 0:
-            return 0.0
-        return round(max(0.0, min(1.0, dot / (left_norm * right_norm))), 4)

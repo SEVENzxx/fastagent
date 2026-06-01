@@ -36,14 +36,14 @@ async def handle_general_reply(routed: RoutedIntent) -> AsyncIterator[str]:
         len(user_text),
     )
     task_hint = (
-        "用户意图不明确，请先礼貌说明你还需要更多信息，并引导用户补充商品、订单、物流或发票等业务细节。"
+        "用户的意图不太明确，请先礼貌说明还需要更多信息，并引导用户具体描述需求。"
         if routed.need_clarification
-        else "请根据用户内容自然回复，并尽量引导用户补充业务信息。"
+        else "请根据用户内容自然回复，并引导用户提供更具体的业务需求。"
     )
     messages = [
         {
             "role": "system",
-            "content": f"你是企业微信客服助手。请用简洁、自然、礼貌的中文回复用户。{task_hint}",
+            "content": f"你是智能客服助手。请用简洁、自然、礼貌的中文回复用户。{task_hint}",
         },
         {"role": "user", "content": user_text},
     ]

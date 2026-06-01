@@ -47,6 +47,20 @@ class Tenant(Base):
     oneapi_base_url: Mapped[str | None] = mapped_column(
         String(500), comment="One-API 网关地址"
     )
+    selected_llm_config_id: Mapped[int | None] = mapped_column(
+        BigInteger,
+        ForeignKey("llm_configs.id"),
+        nullable=True,
+        comment="租户选中的平台模型池配置。旧 LLM 字段保留用于平滑迁移。",
+    )
+
+    # ── 店铺/品牌展示 ──────────────────────────────────────────────────────
+    store_showcase: Mapped[str | None] = mapped_column(
+        Text, comment="品牌/店铺介绍文本。get_store_showcase skill 读取此字段，为空时返回通用兜底介绍。"
+    )
+    ai_greeting_message: Mapped[str | None] = mapped_column(
+        Text, comment="AI 首次问候语。AI 首次介入会话时发送此消息，为空时使用默认问候。"
+    )
 
     # ── 知识库配置 ────────────────────────────────────────────────────────
     maxkb_base_url: Mapped[str | None] = mapped_column(
@@ -79,8 +93,10 @@ class Tenant(Base):
     __table_args__ = (
         Index("idx_tenants_slug", "slug", unique=True),
         Index("idx_tenants_plan", "plan_id"),
+        Index("idx_tenants_selected_llm", "selected_llm_config_id"),
         {"comment": "租户表"},
     )
 
     # ── ORM 关系 ──────────────────────────────────────────────────────────
     plan: Mapped["Plan | None"] = relationship("Plan", lazy="selectin")  # noqa: F821
+    selected_llm_config: Mapped["LLMConfig | None"] = relationship("LLMConfig", lazy="selectin")  # noqa: F821

@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.dependencies import get_current_user, require_permission
+from app.dependencies import require_permission, require_tenant_user
 from app.models.employee import Employee
 from app.models.role import PermissionCode
 from app.schemas.category import (
@@ -44,7 +44,7 @@ def _to_tree_node(node: dict) -> CategoryTreeResponse:
 @router.get("", response_model=list[CategoryResponse])
 async def list_categories(
     db: AsyncSession = Depends(get_db),
-    current_user: Employee = Depends(get_current_user),
+    current_user: Employee = Depends(require_tenant_user),
 ):
     """获取所有分类（平铺列表）"""
     cats = await category_service.list_categories(db, current_user.tenant_id)
@@ -54,7 +54,7 @@ async def list_categories(
 @router.get("/tree", response_model=list[CategoryTreeResponse])
 async def get_category_tree(
     db: AsyncSession = Depends(get_db),
-    current_user: Employee = Depends(get_current_user),
+    current_user: Employee = Depends(require_tenant_user),
 ):
     """获取分类树"""
     cats = await category_service.list_categories(db, current_user.tenant_id)
@@ -66,7 +66,7 @@ async def get_category_tree(
 async def get_category(
     category_id: int,
     db: AsyncSession = Depends(get_db),
-    current_user: Employee = Depends(get_current_user),
+    current_user: Employee = Depends(require_tenant_user),
 ):
     """获取单个分类"""
     cat = await category_service.get_category(db, category_id, current_user.tenant_id)

@@ -5,7 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.websocket_manager import manager
 from app.database import get_db
-from app.dependencies import get_current_user, require_permission
+from app.dependencies import require_permission, require_tenant_user
 from app.models.conversation import Conversation, Message
 from app.models.employee import Employee
 from app.models.role import PermissionCode
@@ -227,7 +227,7 @@ async def create_message(
     conversation_id: int,
     body: MessageCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: Employee = Depends(get_current_user),
+    current_user: Employee = Depends(require_tenant_user),
 ):
     """写入消息并广播给当前会话的在线连接。
 
@@ -283,7 +283,7 @@ async def recall_message(
 async def mark_messages_read(
     conversation_id: int,
     db: AsyncSession = Depends(get_db),
-    current_user: Employee = Depends(get_current_user),
+    current_user: Employee = Depends(require_tenant_user),
 ):
     """把当前会话里的客户消息标记为已读。
 

@@ -5,6 +5,7 @@ import * as conversationsApi from '@/api/conversations'
 import * as contactsApi from '@/api/contacts'
 import * as employeesApi from '@/api/employees'
 import * as ordersApi from '@/api/orders'
+import * as salesApi from '@/api/sales'
 import type { ConversationResponse, MessageResponse } from '@/api/conversations'
 import type { ContactResponse } from '@/api/contacts'
 import type { EmployeeDetailResponse } from '@/api/employees'
@@ -25,6 +26,9 @@ const createEmployeeId = ref<string | null>(null)
 const createHandlingType = ref('ai_only')
 const aiTyping = ref(false)
 const streamingText = ref('')
+const customerProfile = ref<salesApi.Contact360Response | null>(null)
+const profileLoading = ref(false)
+const newTodoContent = ref('')
 let refreshTimer: number | undefined
 
 const activeId = computed(() => activeConversation.value?.id ?? null)
@@ -112,7 +116,40 @@ async function selectConversation(conversation: ConversationResponse) {
   streamingText.value = ''
   ws.close()
   await loadMessages(conversation.id)
+  await loadCustomerProfile(conversation.contactId)
   ws.connect()
+}
+
+async function loadCustomerProfile(contactId = activeConversation.value?.contactId) {
+  if (!contactId) {
+    customerProfile.value = null
+    return
+  }
+  profileLoading.value = true
+  try {
+    customerProfile.value = await salesApi.getContact360(contactId)
+  } catch {
+    customerProfile.value = null
+  } finally {
+    profileLoading.value = false
+  }
+}
+
+async function createTodo() {
+  if (!activeConversation.value || !newTodoContent.value.trim()) return
+  try {
+    await salesApi.createTodo({ conversationId: activeConversation.value.id, content: newTodoContent.value.trim() })
+    newTodoContent.value = ''
+    await loadCustomerProfile()
+    ElMessage.success('待办已创建')
+  } catch (error: any) {
+    ElMessage.error(error?.response?.data?.detail ?? '创建待办失败')
+  }
+}
+
+async function completeTodo(todoId: string) {
+  await salesApi.updateTodo(todoId, { status: 'done' })
+  await loadCustomerProfile()
 }
 
 async function sendMessage(content: string) {
@@ -184,6 +221,7 @@ async function createConversation() {
 async function handleOrderStatusChange(orderId: string, toStatus: string) {
   try {
     await ordersApi.transitionOrderStatus(orderId, toStatus)
+    await loadCustomerProfile()
     ElMessage.success('订单状态已更新')
   } catch (err: any) {
     ElMessage.error(err?.response?.data?.detail || '操作失败')
@@ -294,17 +332,50 @@ onBeforeUnmount(() => {
 
       <section class="side-section">
         <h3>当前客户</h3>
-        <template v-if="activeConversation">
-          <p class="side-title">{{ activeConversation.contactName }}</p>
-          <p>坐席：{{ activeConversation.employeeName || '未分配' }}</p>
-          <p>处理方式：{{ activeConversation.handlingType }}</p>
+        <template v-if="activeConversation && customerProfile">
+          <p class="side-title">{{ customerProfile.name }}</p>
+          <p>坐席：{{ customerProfile.assignedEmployeeName || activeConversation.employeeName || '未分配' }}</p>
+          <p>阶段：{{ customerProfile.salesContext.stage }}</p>
+          <p>定价：{{ customerProfile.salesContext.pricingLevel }}</p>
+          <p v-if="customerProfile.phone">电话：{{ customerProfile.phone }}</p>
           <div class="tag-list">
-            <el-tag v-for="tag in activeConversation.tags" :key="tag" size="small">
+            <el-tag v-for="tag in customerProfile.tags" :key="tag" size="small">
               {{ tag }}
             </el-tag>
           </div>
         </template>
+        <el-skeleton v-else-if="profileLoading" :rows="3" animated />
         <el-empty v-else description="未选择会话" />
+      </section>
+
+      <section v-if="customerProfile" class="side-section">
+        <h3>会话待办</h3>
+        <div class="todo-create">
+          <el-input v-model="newTodoContent" size="small" placeholder="添加待办" @keydown.enter.prevent="createTodo" />
+          <el-button type="primary" size="small" @click="createTodo">添加</el-button>
+        </div>
+        <div v-for="todo in customerProfile.todos" :key="todo.id" class="todo-row">
+          <el-checkbox :model-value="todo.status === 'done'" :disabled="todo.status !== 'pending'" @change="completeTodo(todo.id)">
+            {{ todo.content }}
+          </el-checkbox>
+        </div>
+        <p v-if="!customerProfile.todos.length" class="hint-line">暂无待办</p>
+      </section>
+
+      <section v-if="customerProfile" class="side-section">
+        <h3>AI 记忆</h3>
+        <p v-for="memory in customerProfile.memories" :key="memory.id">
+          {{ memory.key }}：{{ memory.value }}
+        </p>
+        <p v-if="!customerProfile.memories.length" class="hint-line">暂无销售记忆</p>
+      </section>
+
+      <section v-if="customerProfile" class="side-section">
+        <h3>最近订单</h3>
+        <p v-for="order in customerProfile.orders" :key="order.id">
+          #{{ order.id }} · {{ order.status }} · ¥{{ order.payableAmount.toFixed(2) }}
+        </p>
+        <p v-if="!customerProfile.orders.length" class="hint-line">暂无订单</p>
       </section>
     </aside>
   </div>
@@ -403,6 +474,22 @@ onBeforeUnmount(() => {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
+}
+
+.todo-create {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 6px;
+}
+
+.todo-row {
+  min-width: 0;
+  font-size: 13px;
+}
+
+.todo-row :deep(.el-checkbox__label) {
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 @media (max-width: 980px) {
