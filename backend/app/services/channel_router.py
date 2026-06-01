@@ -1,6 +1,5 @@
 """渠道消息路由服务。"""
 
-import logging
 from datetime import datetime, timezone
 
 from sqlalchemy import select
@@ -14,8 +13,6 @@ from app.models.platform import Platform
 from app.schemas.conversation import ConversationCreate, MessageCreate
 from app.services import conversation_service
 from app.services.ai.processor import process_customer_message_with_ai
-
-logger = logging.getLogger(__name__)
 
 
 def _message_payload(message) -> dict:
@@ -51,6 +48,13 @@ async def _get_or_create_contact(
     tenant_id: int,
     message: WeComInboundMessage,
 ) -> Contact:
+    """匹配或创建联系人。
+
+    1. 按 external_userid 查已有联系人
+    2. 找到 → 更新 name/avatar（如有变化）
+    3. 未找到 → 新建 Contact，标记「企业微信」标签
+    """
+    # ── 1: 查找已有联系人 ──
     contact = await _find_contact_by_wecom_id(db, tenant_id, message.external_userid)
     if contact is not None:
         updated = False
@@ -64,21 +68,9 @@ async def _get_or_create_contact(
             contact.updated_at = datetime.now(timezone.utc)
             await db.commit()
             await db.refresh(contact)
-            logger.info(
-                "企业微信联系人已更新：tenant_id=%s contact_id=%s external_userid=%s",
-                tenant_id,
-                contact.id,
-                message.external_userid,
-            )
-        else:
-            logger.info(
-                "企业微信联系人已匹配：tenant_id=%s contact_id=%s external_userid=%s",
-                tenant_id,
-                contact.id,
-                message.external_userid,
-            )
         return contact
 
+    # ── 2: 新建联系人 ──
     contact = Contact(
         tenant_id=tenant_id,
         name=message.name or f"企微客户 {message.external_userid[-6:]}",
@@ -89,12 +81,6 @@ async def _get_or_create_contact(
     db.add(contact)
     await db.commit()
     await db.refresh(contact)
-    logger.info(
-        "企业微信联系人已创建：tenant_id=%s contact_id=%s external_userid=%s",
-        tenant_id,
-        contact.id,
-        message.external_userid,
-    )
     return contact
 
 
@@ -105,22 +91,17 @@ async def route_wecom_message(
 ) -> tuple[Conversation, object]:
     """把企业微信入站消息路由到联系人、会话和消息。
 
-    路由规则：
-    - external_userid 匹配已有联系人；不存在则自动创建联系人。
-    - 联系人 assigned_employee_id 作为默认坐席；未分配则会话进入未分配池。
-    - 同一联系人复用同一个会话；关闭会话会被重新打开并接着聊。
-    - CUSTOMER 消息落库后广播到该会话频道，工作台几秒内可见。
+    ── 处理步骤 ──
+      1. 联系人匹配：external_userid 查已有联系人，不存在则自动创建
+      2. 会话复用：同一联系人复用同一个会话；有坐席→pending_human，无坐席→ai_processing
+      3. 消息落库：CUSTOMER 消息写入 messages 表
+      4. WebSocket 广播：message.created + conversation.updated 推送到坐席工作台
+      5. AI 处理：意图识别 → 路由 → 自动回复
     """
-    logger.info(
-        "开始路由企业微信消息：tenant_id=%s platform_id=%s external_userid=%s msg_id=%s content_type=%s content_len=%s",
-        platform.tenant_id,
-        platform.id,
-        message.external_userid,
-        message.msg_id,
-        message.content_type,
-        len(message.content or ""),
-    )
+    # ── 1: 联系人匹配 / 创建 ──
     contact = await _get_or_create_contact(db, platform.tenant_id, message)
+
+    # ── 2: 会话复用 / 新建 ──
     conversation = await conversation_service.create_conversation(
         db,
         platform.tenant_id,
@@ -133,14 +114,8 @@ async def route_wecom_message(
             tags=["企业微信"],
         ),
     )
-    logger.info(
-        "企业微信会话已解析：tenant_id=%s conversation_id=%s contact_id=%s status=%s handling_type=%s",
-        platform.tenant_id,
-        conversation.id,
-        contact.id,
-        conversation.status,
-        conversation.handling_type,
-    )
+
+    # ── 3: 消息落库 ──
     conversation, saved_message = await conversation_service.create_message(
         db,
         conversation.id,
@@ -156,13 +131,8 @@ async def route_wecom_message(
             },
         ),
     )
-    logger.info(
-        "企业微信客户消息已保存：tenant_id=%s conversation_id=%s message_id=%s msg_id=%s",
-        platform.tenant_id,
-        conversation.id,
-        saved_message.id,
-        message.msg_id,
-    )
+
+    # ── 4: WebSocket 广播到坐席工作台 ──
     await manager.publish(
         conversation.id,
         {"type": "message.created", "message": _message_payload(saved_message)},
@@ -174,11 +144,7 @@ async def route_wecom_message(
             "conversationId": str(conversation.id),
         },
     )
+
+    # ── 5: AI 意图识别 + 自动回复 ──
     await process_customer_message_with_ai(db, conversation, saved_message)
-    logger.info(
-        "企业微信消息路由完成：tenant_id=%s conversation_id=%s message_id=%s",
-        platform.tenant_id,
-        conversation.id,
-        saved_message.id,
-    )
     return conversation, saved_message

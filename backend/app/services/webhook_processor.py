@@ -23,8 +23,12 @@ async def process_wecom_message(
 ) -> None:
     """处理企业微信入站消息。
 
-    真实 webhook 先快速返回 200，再通过 BackgroundTasks 异步调用这里。
-    异常会被捕获并创建系统通知，确保渠道故障不会被静默忽略。
+    ── 处理步骤 ──
+      1. 将已解密的 WeComInboundMessage 交给 channel_router
+         → 联系人匹配/创建 → 会话复用/新建 → 消息落库
+         → WebSocket 广播到坐席工作台 → AI 意图识别 + 回复
+      2. 成功 → 记录耗时日志
+      3. 失败 → 记录异常 + 创建系统通知（避免渠道故障被静默忽略）
     """
     started = time.perf_counter()
     logger.info(
@@ -34,8 +38,12 @@ async def process_wecom_message(
         message.external_userid,
         message.msg_id,
     )
+
+    # ── 1: 全链路路由 + AI 处理 ──
     try:
         await route_wecom_message(db, platform, message)
+
+    # ── 2: 成功 ──
         logger.info(
             "后台处理企业微信消息完成：tenant_id=%s platform_id=%s msg_id=%s elapsed_ms=%.0f",
             platform.tenant_id,
@@ -43,6 +51,8 @@ async def process_wecom_message(
             message.msg_id,
             (time.perf_counter() - started) * 1000,
         )
+
+    # ── 3: 失败 → 日志 + 系统通知 ──
     except Exception:
         logger.exception(
             "后台处理企业微信消息失败：tenant_id=%s platform_id=%s msg_id=%s",
@@ -50,7 +60,6 @@ async def process_wecom_message(
             platform.id,
             message.msg_id,
         )
-        # 创建渠道异常通知，提醒管理员排查
         from app.services.operations_service import create_notification
         await create_notification(
             db,
