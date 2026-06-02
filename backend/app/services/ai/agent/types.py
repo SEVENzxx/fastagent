@@ -33,6 +33,7 @@ class AgentState(TypedDict, total=False):
     tenant_id: int
     conversation_id: int
     contact_id: int | None
+    tenant_custom_prompt: str | None
     execution_mode: str
     planned_tool_calls: list[dict]
     tool_results: list[dict]

@@ -1,9 +1,16 @@
-"""VectorIntentRetriever：基于 Qdrant 的候选意图召回。"""
+"""VectorIntentRetriever：基于 Qdrant 的候选意图召回。
+
+召回路径：Qdrant 向量检索 → 无结果则本地文本相似度兜底。
+
+意图样本由 bootstrap.py 在应用启动时统一写入 Qdrant（tenant_id=0 全局共享）。
+租户可通过管理后台自定义/覆盖自己的意图样本，写入时使用 tenant_id>0。
+检索时按 tenant_id 过滤，租户专属样本优先，无专属样本时使用全局默认。
+"""
 
 from __future__ import annotations
 
 import logging
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Sequence
 from difflib import SequenceMatcher
 
 from app.services.ai.config.intent_config import DEFAULT_INTENT_CONFIG, IntentRecognitionConfig
@@ -14,42 +21,57 @@ from app.services.vector_search_service import VectorDomain, VectorSearchService
 logger = logging.getLogger(__name__)
 
 
-VectorProvider = Callable[[str, int, float], Awaitable[Sequence[IntentCandidate]]]
-
-
 class VectorIntentRetriever:
-    """从意图样本 Qdrant collection 中召回候选意图。"""
+    """从 Qdrant 意图样本 collection 中召回候选意图。
 
-    _seeded = False
+    检索逻辑：
+      1. 先按 tenant_id 查租户专属样本，有结果直接返回
+      2. 专属样本无结果 → 查 tenant_id=0 的全局默认样本
+      3. Qdrant / embedding 不可用 → 本地 SequenceMatcher 兜底
+
+    注意：意图样本的写入不属于此类的职责，在 bootstrap.py 启动时处理。
+    """
 
     def __init__(
         self,
         config: IntentRecognitionConfig | None = None,
         examples: Sequence[IntentExample] | None = None,
-        provider: VectorProvider | None = None,
         vector_search: VectorSearchService | None = None,
-        **_: object,
     ) -> None:
         self.config = config or DEFAULT_INTENT_CONFIG
         self.examples = tuple(examples or DEFAULT_INTENT_EXAMPLES)
-        self.provider = provider
         self.vector_search = vector_search or VectorSearchService()
 
-    async def retrieve(self, segment: str) -> list[IntentCandidate]:
-        """返回分数达到阈值的 top-k 候选意图。"""
-        if self.provider is not None:
-            provided = await self.provider(segment, self.config.vector_top_k, self.config.vector_min_score)
-            return self._filter_candidates(list(provided or []))
+    async def retrieve(self, segment: str, *, tenant_id: int = 0) -> list[IntentCandidate]:
+        """返回分数达到阈值的 top-k 候选意图。
 
-        await self._ensure_intent_samples_indexed()
+        1. 查租户专属样本 (tenant_id)
+        2. 无结果 → 查全局默认样本 (tenant_id=0)
+        3. Qdrant / embedding 不可用 → 本地文本相似度兜底
+        """
+        # ── 1: Qdrant 向量检索（租户专属优先，全局默认兜底）──
+        candidates = await self._search_qdrant(segment, tenant_id=tenant_id)
+        if not candidates and tenant_id != 0:
+            candidates = await self._search_qdrant(segment, tenant_id=0)
+
+        if candidates:
+            return candidates
+
+        # ── 2: Qdrant / embedding 不可用 → 本地文本相似度兜底 ──
+        fallback = self._retrieve_by_text_similarity(segment)
+        logger.info("意图召回降级：Qdrant 不可用，使用本地兜底。query=%s candidates=%s", segment[:40], len(fallback))
+        return fallback
+
+    async def _search_qdrant(self, segment: str, *, tenant_id: int) -> list[IntentCandidate]:
+        """对指定 tenant_id 执行 Qdrant 向量检索。"""
         hits = await self.vector_search.search_text(
             domain=VectorDomain.INTENT_SAMPLE,
-            tenant_id=0,
+            tenant_id=tenant_id,
             query=segment,
             top_k=self.config.vector_top_k,
             min_score=self.config.vector_min_score,
         )
-        candidates = [
+        return [
             IntentCandidate(
                 intent=str(hit.payload.get("intent") or ""),
                 label=str(hit.payload.get("label") or ""),
@@ -61,41 +83,9 @@ class VectorIntentRetriever:
             for hit in hits
             if hit.payload.get("intent")
         ]
-        if candidates:
-            logger.info("Intent Qdrant recall complete: segment_len=%s candidates=%s", len(segment), len(candidates))
-            return self._filter_candidates(candidates)
-
-        # 本地文本相似度只作为 Qdrant 或 embedding 服务不可用时的可靠性兜底；
-        # 生产语义召回仍以 Qdrant 为准。
-        fallback = self._retrieve_by_text_similarity(segment)
-        logger.info("Intent recall fallback used: segment_len=%s candidates=%s", len(segment), len(fallback))
-        return fallback
-
-    async def _ensure_intent_samples_indexed(self) -> None:
-        if VectorIntentRetriever._seeded:
-            return
-        indexed = 0
-        for index, example in enumerate(self.examples):
-            point_id = await self.vector_search.upsert_text(
-                domain=VectorDomain.INTENT_SAMPLE,
-                tenant_id=0,
-                business_id=f"{example.intent}:{index}",
-                text=example.example_text,
-                payload={
-                    "intent": example.intent,
-                    "label": example.label,
-                    "route": example.route,
-                    "skill": example.skill,
-                    "example_text": example.example_text,
-                    "is_active": True,
-                },
-            )
-            if point_id:
-                indexed += 1
-        VectorIntentRetriever._seeded = indexed > 0
-        logger.info("Intent samples indexed in Qdrant: examples=%s indexed=%s", len(self.examples), indexed)
 
     def _retrieve_by_text_similarity(self, segment: str) -> list[IntentCandidate]:
+        """Qdrant / embedding 不可用时的本地兜底召回。"""
         candidates = [
             IntentCandidate(
                 intent=example.intent,
@@ -110,10 +100,12 @@ class VectorIntentRetriever:
         return self._filter_candidates(candidates)
 
     def _filter_candidates(self, candidates: list[IntentCandidate]) -> list[IntentCandidate]:
+        """按分数降序 → 卡 min_score 阈值 → 取 top_k。"""
         ranked = sorted(candidates, key=lambda item: item.score, reverse=True)
         return [item for item in ranked if item.score >= self.config.vector_min_score][: self.config.vector_top_k]
 
     def _similarity(self, left: str, right: str) -> float:
+        """本地文本相似度（SequenceMatcher），兜底用的精确/包含/模糊匹配。"""
         left_text = left.lower().strip()
         right_text = right.lower().strip()
         if not left_text or not right_text:

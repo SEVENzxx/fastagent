@@ -5,14 +5,13 @@
 - 租户不再直接维护供应商密钥（API Key），只保存选中的模型池记录 ID。
 - 密钥字段（api_key_encrypted）只允许平台管理接口写入，任何 API 响应都不会回传原文，
   避免浏览器、日志和导出文件中泄漏密钥。
-- 一个平台可能接入多个供应商（OpenAI、DeepSeek、通义千问等），每个供应商可能有
-  多个模型（gpt-4、deepseek-chat 等），每个模型按用途（purpose）区分使用场景。
+- 一个平台可能接入多个供应商（OpenAI、DeepSeek、通义千问等）和多个模型。
 - 此表与 llm_usage_logs 表关联，用于统计各模型的调用量和费用。
 
 关联关系：
 ---------
 - LLMUsageLog.llm_config_id → 本表 id（每次 LLM 调用记录关联到具体配置）
-- 租户配置 tenant.llm_config_id → 本表 id（租户当前选用的默认模型）
+- Tenant.selected_llm_config_id → 本表 id（租户当前选用的默认模型）
 """
 
 from datetime import datetime
@@ -30,9 +29,8 @@ class LLMConfig(Base):
 
     业务角色：
     ---------
-    充当所有 AI Agent 功能的"模型供应池"。Agent 在执行对话、意图识别、RAG 检索、
-    回复生成等任务时，根据 purpose 字段从池中选取合适的模型。平台管理员在后台
-    维护此表，租户管理员只能从已激活的记录中选择。
+    充当租户 AI 功能的模型供应池。平台管理员在后台维护配置，租户管理员只能从
+    已激活的记录中选择。Agent 和 RAG 回复使用租户选中的配置。
 
     字段说明：
     ---------
@@ -44,8 +42,7 @@ class LLMConfig(Base):
     - model: 实际模型名，如 gpt-4-turbo / deepseek-chat，传给供应商 API。
     - pricing: JSONB 存储价格配置，如 {"input": 0.001, "output": 0.002}（每 1K token 美元价），
       用于用量统计和成本估算。
-    - purpose: 用途标识 —— chat（对话）、embedding（向量化）、rerank（重排序）、
-      intent（意图识别）等，Agent 调度时按用途选择。
+    - purpose: 配置用途标签，当前租户对话模型使用 chat。
     - is_active: 是否启用，关闭后 Agent 不再选用此配置。
     """
 
@@ -80,7 +77,7 @@ class LLMConfig(Base):
 
     # ---- 索引 ----
     __table_args__ = (
-        # 联合索引：按用途 + 启用状态快速筛选可用模型（Agent 调度高频查询）
+        # 后台按用途和启用状态筛选模型池配置。
         Index("idx_llm_configs_purpose_active", "purpose", "is_active"),
         {"comment": "平台级 LLM 模型池"},
     )

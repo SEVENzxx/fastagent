@@ -14,13 +14,14 @@ from app.services.ai.intent.ambiguity import AmbiguityDetector
 from app.services.ai.intent.context_state import ContextStateResolver
 from app.services.ai.intent.fusion_scorer import IntentFusionScorer
 from app.services.ai.intent.keyword_entity import KeywordEntityExtractor
-from app.services.ai.intent.llm_judge import CompletionCallable, LLMIntentJudge
+from app.services.ai.intent.llm_judge import LLMIntentJudge
 from app.services.ai.intent.normalizer import TextNormalizer
 from app.services.ai.intent.router import IntentRouter
 from app.services.ai.intent.rule_matcher import RuleMatcher
 from app.services.ai.intent.segmenter import MessageSegmenter
-from app.services.ai.intent.types import IntentCandidate, IntentHit, IntentResult, PendingIntentState, ROUTE_HUMAN, ROUTE_SILENT, RoutedIntent
-from app.services.ai.intent.vector_retriever import VectorIntentRetriever, VectorProvider
+from app.services.ai.intent.types import IntentCandidate, IntentHit, IntentResult, PendingIntentState, ROUTE_HUMAN, \
+    ROUTE_SILENT, RoutedIntent
+from app.services.ai.intent.vector_retriever import VectorIntentRetriever
 
 logger = logging.getLogger(__name__)
 
@@ -30,8 +31,6 @@ class IntentRecognitionPipeline:
     def __init__(
         self,
         config: IntentRecognitionConfig | None = None,
-        vector_provider: VectorProvider | None = None,
-        llm_completion: CompletionCallable | None = None,
     ) -> None:
         self.config = config or DEFAULT_INTENT_CONFIG
         self.normalizer = TextNormalizer()
@@ -39,10 +38,10 @@ class IntentRecognitionPipeline:
         self.keyword_entity = KeywordEntityExtractor(self.config)
         self.context_state = ContextStateResolver(self.config)
         self.segmenter = MessageSegmenter()
-        self.vector_retriever = VectorIntentRetriever(self.config, provider=vector_provider)
+        self.vector_retriever = VectorIntentRetriever(self.config)
         self.fusion_scorer = IntentFusionScorer(self.config)
         self.ambiguity_detector = AmbiguityDetector(self.config)
-        self.llm_judge = LLMIntentJudge(llm_completion)
+        self.llm_judge = LLMIntentJudge()
         self.router = IntentRouter(self.config)
 
     # ------------------------------------------------------------------

@@ -1,60 +1,45 @@
-"""LLMIntentJudge：低置信度候选精判。"""
+"""LLMIntentJudge — 低置信度候选精判，仅模糊样本触发。"""
 
 from __future__ import annotations
 
 import json
-from collections.abc import Awaitable, Callable
 from typing import Any
 
-from app.config import settings
-from app.integrations.llm_client import LLMClient, LLMClientError
 from app.services.ai.intent.types import IntentCandidate
-from app.services.ai.prompts.intent_judge import INTENT_JUDGE_SYSTEM_PROMPT, build_intent_judge_user_prompt
-
-
-CompletionCallable = Callable[[list[dict[str, str]]], Awaitable[str | dict[str, Any]]]
+from app.services.ai.llm_gateway import LLMClientError, LLMUseCase, complete
+from app.services.ai.prompts.intent_judge import build_intent_judge_messages
 
 
 class LLMIntentJudge:
-    """只允许 LLM 从候选列表中选择。"""
-
-    def __init__(
-        self,
-        completion: CompletionCallable | None = None,
-        client: LLMClient | None = None,
-    ) -> None:
-        self.client = client or LLMClient()
-        self.completion = completion or self._complete_with_http
+    """LLM 精判：只允许从候选列表中选，不允许自由发挥。"""
 
     async def judge(
         self, text: str, candidates: list[IntentCandidate]
     ) -> tuple[str, list[str], bool, str] | None:
-        """执行 LLM 精判，返回 (primary_intent, secondary_intents, need_clarification, reason)。
-
-        模型服务异常或解析失败时返回 None，让上层沿用融合打分结果。
-        """
+        """返回 (primary_intent, secondary_intents, need_clarification, reason)，异常时返回 None。"""
         if not candidates:
             return None
 
-        messages = [
-            {"role": "system", "content": INTENT_JUDGE_SYSTEM_PROMPT},
-            {"role": "user", "content": build_intent_judge_user_prompt(text, candidates)},
-        ]
         try:
-            raw = await self.completion(messages)
+            raw = await complete(
+                LLMUseCase.INTENT_JUDGE,
+                build_intent_judge_messages(text, candidates),
+                max_tokens=64,
+                temperature=0.0,
+            )
         except LLMClientError:
             return None
 
         parsed = self._parse(raw)
-        candidate_intents = {item.intent for item in candidates}
+        candidate_set = {item.intent for item in candidates}
         primary = str(parsed.get("primary_intent") or "").strip()
-        if primary not in candidate_intents:
-            return None
+        if primary not in candidate_set:
+            return None  # LLM 输出的意图不在候选集中，视为不可信
 
         secondary = [
             str(item).strip()
             for item in parsed.get("secondary_intents", [])
-            if str(item).strip() in candidate_intents and str(item).strip() != primary
+            if str(item).strip() in candidate_set and str(item).strip() != primary
         ]
         return (
             primary,
@@ -64,6 +49,7 @@ class LLMIntentJudge:
         )
 
     def _parse(self, raw: str | dict[str, Any]) -> dict[str, Any]:
+        """容错解析 LLM 返回的 JSON，含 Markdown 代码块剥离。"""
         if isinstance(raw, dict):
             return raw
         text = str(raw or "").strip()
@@ -76,11 +62,3 @@ class LLMIntentJudge:
         except json.JSONDecodeError:
             return {}
         return parsed if isinstance(parsed, dict) else {}
-
-    async def _complete_with_http(self, messages: list[dict[str, str]]) -> str:
-        return await self.client.complete(
-            messages,
-            model=settings.AI_INTENT_JUDGE_MODEL or settings.AI_LLM_MODEL,
-            max_tokens=settings.AI_INTENT_JUDGE_MAX_TOKENS,
-            temperature=settings.AI_INTENT_JUDGE_TEMPERATURE,
-        )

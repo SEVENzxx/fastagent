@@ -1,4 +1,4 @@
-"""Phase 9 Agent StateGraph — 7 节点编排。
+"""Phase 9 Agent StateGraph — 6 节点编排。
 
 流程：
   build_context → decide_execution_mode → plan_tools → dispatch_tools

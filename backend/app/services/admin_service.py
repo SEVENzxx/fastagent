@@ -21,6 +21,7 @@
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.secret_crypto import encrypt_secret
 from app.core.security import hash_password
 from app.models.contact import Contact
 from app.models.conversation import Conversation, Message
@@ -39,7 +40,6 @@ from app.schemas.admin import (
     TenantCreate,
     TenantUpdate,
 )
-from app.core.secret_crypto import encrypt_secret
 
 # ── 权限码常量 ──────────────────────────────────────────────────────────────
 # 坐席角色默认拥有的基础业务权限
@@ -211,6 +211,10 @@ async def update_llm_config(db: AsyncSession, item_id: int, body: LLMConfigUpdat
         item.api_key_encrypted = encrypt_secret(body.api_key)
     await db.commit()
     await db.refresh(item)
+
+    # 清除使用该 LLM 配置的所有租户的 Redis 缓存
+    await _invalidate_llm_config_cache(db, item_id)
+
     return item
 
 
@@ -353,6 +357,11 @@ async def update_tenant(db: AsyncSession, item_id: int, body: TenantUpdate) -> T
     await db.commit()
     await db.refresh(item)
     await _attach_tenant_names(db, [item])
+
+    # selected_llm_config_id 变更 → 清除该租户的 LLM 配置缓存
+    if "selected_llm_config_id" in data:
+        await _invalidate_tenant_llm_cache(item_id)
+
     return item
 
 
@@ -399,6 +408,36 @@ async def _attach_tenant_names(db: AsyncSession, items: list[Tenant]) -> None:
     for item in items:
         item._plan_name = plans.get(item.plan_id)
         item._selected_llm_config_name = configs.get(item.selected_llm_config_id)
+
+
+async def _invalidate_tenant_llm_cache(tenant_id: int) -> None:
+    """清除指定租户的 LLM 配置 Redis 缓存。"""
+    try:
+        from app.redis_client import get_redis_client
+        redis = get_redis_client()
+        await redis.delete(f"fastagent:llm_config:{tenant_id}")
+        await redis.aclose()
+    except Exception:
+        pass
+
+
+async def _invalidate_llm_config_cache(db: AsyncSession, llm_config_id: int) -> None:
+    """清除所有使用该 LLM 配置的租户的 Redis 缓存。"""
+    try:
+        tenant_ids = (await db.execute(
+            select(Tenant.id).where(
+                Tenant.selected_llm_config_id == llm_config_id,
+                Tenant.deleted_at.is_(None),
+            )
+        )).scalars().all()
+        if tenant_ids:
+            from app.redis_client import get_redis_client
+            redis = get_redis_client()
+            for tid in tenant_ids:
+                await redis.delete(f"fastagent:llm_config:{tid}")
+            await redis.aclose()
+    except Exception:
+        pass
 
 
 async def list_cross_tenant_conversations(

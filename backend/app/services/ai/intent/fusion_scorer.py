@@ -1,4 +1,4 @@
-"""IntentFusionScorer：意图融合打分。"""
+"""IntentFusionScorer — 向量召回 + 关键词加权 + 上下文加权，三源融合打分。"""
 
 from __future__ import annotations
 
@@ -7,16 +7,30 @@ from collections import defaultdict
 from app.services.ai.config.intent_config import DEFAULT_INTENT_CONFIG, IntentRecognitionConfig
 from app.services.ai.intent.types import IntentCandidate, KeywordEntityResult
 
-# 上下文加权规则（平台级通用默认，租户级可通过 DB 覆盖）
-# 格式：{intent: [(keywords_in_full_text, boost_value), ...]}
+# 上下文加权规则 — 当 full_text（整条用户消息）同时包含指定关键词时，给对应 intent 加分。
+# 例如：用户说"我的订单怎么还不发货"，full_text 里同时有"发货"和"订单"，
+# delivery_time 额外 +0.04；"订单"也命中 order_status +0.03。
+# 格式：{intent: [(需要同时出现的关键词列表, 加分值), ...]}
 _DEFAULT_CONTEXT_BOOST_RULES: dict[str, list[tuple[list[str], float]]] = {
-    "delivery_time": [(["发货", "订单"], 0.04)],
+    "delivery_time": [(["发货", "订单"], 0.04), (["物流", "订单"], 0.03)],
     "order_status": [(["订单"], 0.03)],
+    "logistics_status": [(["快递", "订单"], 0.04), (["物流", "订单"], 0.04)],
+    "invoice": [(["发票", "订单"], 0.04)],
+    "return_refund": [(["退款", "订单"], 0.04), (["退货", "订单"], 0.04)],
 }
 
 
 class IntentFusionScorer:
-    """将 vector_score、keyword_boost、context_boost 融合到 intent 维度。"""
+    """三源融合打分器。
+
+    输入:
+      - candidates: 向量召回的候选意图（含 Qdrant score）
+      - signals: 关键词/实体提取结果（含 intent_boosts）
+      - full_text: 用户完整消息（用于上下文加权）
+
+    输出:
+      - 按 final_score 降序的候选列表，每个候选分数 = min(vector_score + keyword_boost + context_boost, 1.0)
+    """
 
     def __init__(
         self,
@@ -35,11 +49,18 @@ class IntentFusionScorer:
         segment: str,
         full_text: str,
     ) -> list[IntentCandidate]:
-        """按 intent 聚合候选并融合分数，返回按融合分数降序排列的候选列表。"""
+        """融合三源分数，按 final_score 降序返回。
+
+        1. 按 intent 分组 — 同 intent 的多个向量候选合并
+        2. 补充 keyword-only 候选 — 纯关键词命中但向量未召回的 intent
+        3. 逐 intent 融合 — best_score + keyword_boost + context_boost，上限 1.0
+        """
+        # ── 1: 按 intent 分组 ──
         grouped: dict[str, list[IntentCandidate]] = defaultdict(list)
         for candidate in candidates:
             grouped[candidate.intent].append(candidate)
 
+        # ── 2: keyword-only 候选 — 向量没召回但关键词命中了 ──
         for intent, boost in signals.intent_boosts.items():
             if intent not in grouped:
                 grouped[intent].append(
@@ -53,6 +74,7 @@ class IntentFusionScorer:
                     )
                 )
 
+        # ── 3: 逐个 intent 融合三源分数 ──
         fused: list[IntentCandidate] = []
         for intent, items in grouped.items():
             best_score = max(item.score for item in items)
@@ -68,14 +90,14 @@ class IntentFusionScorer:
                     score=final_score,
                     source="fusion",
                     matched_text=", ".join(matched_examples) if matched_examples else None,
-                    reason=f"best={best_score:.2f} kw={keyword_boost:.2f} ctx={context_boost:.2f} hits={len(items)}",
+                    reason=f"向量{best_score:.2f}+关键词{keyword_boost:.2f}+上下文{context_boost:.2f}={final_score:.2f} | {len(items)}个候选",
                 )
             )
 
         return sorted(fused, key=lambda item: item.score, reverse=True)
 
     def _context_boost(self, intent: str, segment: str, full_text: str) -> float:
-        """基于可配置规则的上下文加权。"""
+        """查规则表 → full_text 里是否同时包含该 intent 的所有上下文关键词。"""
         rules = self.context_boost_rules.get(intent, [])
         for keywords, boost in rules:
             if all(kw in full_text for kw in keywords):

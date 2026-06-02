@@ -1,77 +1,94 @@
-"""GENERAL_REPLY 路由处理器。"""
+"""GENERAL_REPLY 路由处理器 — 无意图命中时的通用回复，RAG 增强。"""
 
 from __future__ import annotations
 
 import logging
 from collections.abc import AsyncIterator
-
 from typing import TYPE_CHECKING
 
 from app.config import settings
-from app.integrations.llm_client import LLMClient, LLMClientError
 from app.services.ai.handlers.registry import register_handler
 from app.services.ai.intent.types import ROUTE_GENERAL_REPLY, RoutedIntent
+from app.services.ai.llm_gateway import LLMClientError, LLMUseCase, stream
+from app.services.ai.prompts.general_reply import (
+    build_clarify_messages,
+    build_general_reply_messages,
+    build_rag_reply_messages,
+)
+from app.services.ai.types import Messages
+from app.services.vector_search_service import VectorDomain, VectorSearchService
 
 if TYPE_CHECKING:
     from app.services.ai.agent.types import AgentContext
 
 logger = logging.getLogger(__name__)
 
+_FALLBACK_TEXT = "我先帮你确认一下，可以再描述具体需求吗？"
 
-async def handle_general_reply(routed: RoutedIntent) -> AsyncIterator[str]:
-    """用平台托管的小模型流式生成通用回复。
 
-    GENERAL_REPLY 处理闲聊、跑题、未知意图和澄清类问题。这里优先调用
-    `.env` 中配置的小模型，并通过 SSE 流式返回；服务异常时返回固定兜底话术。
-
-    上层通过 ``async for chunk in handle_general_reply(routed):`` 消费，
-    每个 chunk 是模型实时输出的片段。
-    """
+async def handle_general_reply(
+    routed: RoutedIntent,
+    *,
+    tenant_id: int | None = None,
+) -> AsyncIterator[str]:
+    """通用回复：RAG 命中 → 租户模型；否则 → 本地 AI_LLM_MODEL。"""
     user_text = _build_user_text(routed)
-    logger.info(
-        "通用回复开始生成：intent=%s confidence=%.4f clarify=%s user_text_len=%s",
-        routed.primary_intent,
-        routed.confidence,
-        routed.need_clarification,
-        len(user_text),
-    )
-    task_hint = (
-        "用户的意图不太明确，请先礼貌说明还需要更多信息，并引导用户具体描述需求。"
-        if routed.need_clarification
-        else "请根据用户内容自然回复，并引导用户提供更具体的业务需求。"
-    )
-    messages = [
-        {
-            "role": "system",
-            "content": f"你是智能客服助手。请用简洁、自然、礼貌的中文回复用户。{task_hint}",
-        },
-        {"role": "user", "content": user_text},
-    ]
+
+    # 意图不明确 → 本地模型直接澄清
+    if routed.need_clarification:
+        async for chunk in _stream(LLMUseCase.GENERAL_REPLY, build_clarify_messages(user_text)):
+            yield chunk
+        return
+
+    # 检索知识库
+    knowledge_context = await _retrieve_knowledge(user_text, tenant_id) if tenant_id else ""
+
+    if knowledge_context:
+        # RAG 命中 → 租户模型
+        messages = build_rag_reply_messages(user_text, knowledge_context)
+        async for chunk in _stream(LLMUseCase.RAG_REPLY, messages, tenant_id=tenant_id):
+            yield chunk
+    else:
+        # 无 RAG → 本地模型兜底
+        async for chunk in _stream(LLMUseCase.GENERAL_REPLY, build_general_reply_messages(user_text)):
+            yield chunk
+
+
+async def _stream(
+    use_case: LLMUseCase,
+    messages: Messages,
+    *,
+    tenant_id: int | None = None,
+) -> AsyncIterator[str]:
+    """按用途选择模型并流式调用 LLM。"""
     try:
         has_output = False
-        chunks = 0
-        async for chunk in LLMClient().stream(
-            messages,
-            model=settings.AI_GENERAL_REPLY_MODEL or settings.AI_LLM_MODEL,
-            temperature=settings.AI_GENERAL_REPLY_TEMPERATURE,
-        ):
+        async for chunk in stream(use_case, messages, tenant_id=tenant_id, temperature=0.2):
             has_output = True
-            chunks += 1
             yield chunk
         if not has_output:
-            logger.warning("通用回复模型返回空内容，使用兜底回复")
-            yield _fallback(routed)
-        else:
-            logger.info("通用回复生成完成：chunks=%s", chunks)
+            yield _FALLBACK_TEXT
     except LLMClientError as exc:
-        logger.warning("通用回复模型调用失败，使用兜底回复：error=%s", exc)
-        yield _fallback(routed)
+        logger.warning("通用回复 LLM 失败: %s", exc)
+        yield _FALLBACK_TEXT
+
+
+async def _retrieve_knowledge(query: str, tenant_id: int) -> str:
+    """从 Qdrant 知识库检索并拼接上下文。"""
+    try:
+        vs = VectorSearchService()
+        hits = await vs.search_text(
+            domain=VectorDomain.KNOWLEDGE_CHUNK, tenant_id=tenant_id, query=query,
+            top_k=settings.AI_GENERAL_REPLY_RAG_TOP_K,
+            min_score=settings.AI_GENERAL_REPLY_RAG_MIN_SCORE,
+        )
+    except Exception:
+        return ""
+    return "\n".join(f"- {h.payload.get('text', '')}" for h in hits) if hits else ""
 
 
 @register_handler(ROUTE_GENERAL_REPLY)
 class GeneralReplyHandler:
-    """GENERAL_REPLY 路由处理器。"""
-
     route = ROUTE_GENERAL_REPLY
     reply_sender_type = "AI"
     clear_pending_state = False
@@ -81,22 +98,13 @@ class GeneralReplyHandler:
     requires_agent_context = False
 
     async def stream(
-        self,
-        routed: RoutedIntent,
-        *,
-        agent_context: AgentContext | None = None,
+        self, routed: RoutedIntent, *, agent_context: AgentContext | None = None,
     ) -> AsyncIterator[str]:
-        async for chunk in handle_general_reply(routed):
+        tenant_id = agent_context.tenant_id if agent_context else None
+        async for chunk in handle_general_reply(routed, tenant_id=tenant_id):
             yield chunk
 
 
-def _fallback(routed: RoutedIntent) -> str:
-    if routed.need_clarification:
-        return "我还需要再确认一下你的具体需求，可以补充说明吗？"
-    return "我先帮你确认一下，可以再描述具体需求吗？"
-
-
 def _build_user_text(routed: RoutedIntent) -> str:
-    """从路由结果中还原用户文本，供通用回复模型生成上下文相关回复。"""
-    segments = [hit.segment for hit in routed.hits if hit.segment]
+    segments = [h.segment for h in routed.hits if h.segment]
     return "；".join(segments) or "用户暂未提供明确问题"

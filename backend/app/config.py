@@ -40,27 +40,21 @@ class Settings(BaseSettings):
     REDIS_URL: str
     REDIS_PASSWORD: str
 
-    # AI model services
+    # ── 本地 AI 模型（意图精判 + 通用回复兜底） ──
     AI_LLM_PROVIDER: str = "http"
     AI_LLM_API_KEY: str = ""
     AI_LLM_BASE_URL: str = "http://127.0.0.1:8003"
     AI_LLM_MODEL: str = "qwen2.5-0.5b-local"
-    AI_INTENT_JUDGE_MODEL: str = ""
-    AI_GENERAL_REPLY_MODEL: str = ""
     AI_LLM_TIMEOUT_SECONDS: float = 30.0
     AI_LLM_MAX_TOKENS: int = 128
-    AI_INTENT_JUDGE_MAX_TOKENS: int = 64
-    AI_GENERAL_REPLY_MAX_TOKENS: int = 128
-    AI_INTENT_JUDGE_TEMPERATURE: float = 0.0
-    AI_GENERAL_REPLY_TEMPERATURE: float = 0.2
+
+    # ── Embedding ──
     AI_EMBEDDING_ENABLED: bool = True
     AI_EMBEDDING_BASE_URL: str = "http://127.0.0.1:8001"
     AI_EMBEDDING_TIMEOUT_SECONDS: float = 5.0
-    # BAAI/bge-small-zh-v1.5 的标准输出维度为 512。该值必须与 embedding
-    # 服务真实输出和 Qdrant collection 配置一致，否则所有向量读写都会失败。
-    AI_EMBEDDING_DIMENSION: int = 512
+    AI_EMBEDDING_DIMENSION: int = 512  # 必须与 embedding 服务真实输出和 Qdrant collection 一致
 
-    # Qdrant vector database
+    # ── Qdrant ──
     QDRANT_ENABLED: bool = True
     QDRANT_URL: str = "http://127.0.0.1:6333"
     QDRANT_API_KEY: str = ""
@@ -73,11 +67,8 @@ class Settings(BaseSettings):
     QDRANT_COLLECTION_MARKETING_DOCS: str = "fastagent_marketing_documents"
     QDRANT_COLLECTION_IMAGES: str = "fastagent_images"
 
-    # Agent runtime
+    # ── Agent 行为控制（非模型参数，模型参数由租户 LLMConfig 接管） ──
     AI_AGENT_ENABLED: bool = True
-    AI_AGENT_MODEL: str = ""
-    AI_AGENT_MAX_TOKENS: int = 512
-    AI_AGENT_TEMPERATURE: float = 0.2
     AI_AGENT_MAX_TOOL_CALLS: int = 3
     AI_AGENT_TIMEOUT_SECONDS: float = 30.0
     AI_AGENT_RECENT_MESSAGE_LIMIT: int = 20
@@ -99,6 +90,8 @@ class Settings(BaseSettings):
     AI_KNOWLEDGE_BATCH_SIZE: int = 32
     AI_KNOWLEDGE_QA_MIN_SCORE: float = 0.85
     AI_KNOWLEDGE_QA_TOP_K: int = 3
+    AI_GENERAL_REPLY_RAG_TOP_K: int = 3
+    AI_GENERAL_REPLY_RAG_MIN_SCORE: float = 0.7
 
     # Security
     SECRET_KEY: str

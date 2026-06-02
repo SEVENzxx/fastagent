@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from app.services.ai.intent.types import IntentCandidate
+from app.services.ai.types import Messages
 
 
 INTENT_JUDGE_SYSTEM_PROMPT = """你是智能客服意图精判器。
@@ -25,3 +26,11 @@ def build_intent_judge_user_prompt(text: str, candidates: list[IntentCandidate])
 {candidate_lines}
 
 请只从候选意图中选择。"""
+
+
+def build_intent_judge_messages(text: str, candidates: list[IntentCandidate]) -> Messages:
+    """构造意图精判消息。"""
+    return [
+        {"role": "system", "content": INTENT_JUDGE_SYSTEM_PROMPT},
+        {"role": "user", "content": build_intent_judge_user_prompt(text, candidates)},
+    ]

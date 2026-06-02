@@ -178,6 +178,15 @@ class QdrantVectorClient:
             (time.perf_counter() - started) * 1000,
         )
 
+    async def count(self, *, collection: str, filters: dict[str, Any] | None = None) -> int:
+        """查询集合中符合过滤条件的向量点数量。"""
+        qdrant_filter = self._to_qdrant_filter(filters)
+        body: dict[str, Any] = {}
+        if qdrant_filter:
+            body["filter"] = qdrant_filter
+        data = await self._request("POST", f"/collections/{collection}/points/count", json=body)
+        return int(data.get("result", {}).get("count", 0))
+
     async def _collection_exists(self, collection: str) -> bool:
         try:
             await self._request("GET", f"/collections/{collection}")

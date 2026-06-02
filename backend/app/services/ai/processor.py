@@ -169,36 +169,23 @@ async def process_customer_message_with_ai(
         pending_state=pending_state,
     )
 
-    # ── 10: WebSocket 广播 ──
-    await manager.publish(
-        conversation.id,
-        {
-            "type": "ai.routed",
-            "route": result.route,
-            "skill": result.skill,
-            "primaryIntent": result.primary_intent,
-            "confidence": result.confidence,
-            "needClarification": result.need_clarification,
-        },
-    )
-
-    # ── 11: 路由分发 → Handler ──
+    # ── 10: 路由分发 → Handler ──
     router = MessageRouter()
     handler = router.resolve(result)
 
-    # ── 12: Silent → 直接返回 ──
+    # ── 11: Silent → 直接返回 ──
     if handler.reply_sender_type is None:
         return
 
-    # ── 13: 清理 PendingState ──
+    # ── 12: 清理 PendingState ──
     if handler.clear_pending_state:
         await pending_store.delete(conversation.tenant_id, conversation.id)
 
-    # ── 14: 转人工 ──
+    # ── 13: 转人工 ──
     if handler.transfer_to_human:
         await _mark_pending_human(db, conversation, result.reason or result.primary_intent or "需要人工处理")
 
-    # ── 15: 首次 AI 问候 ──
+    # ── 14: 首次 AI 问候 ──
     if handler.send_ai_greeting and "ai_greeting_sent" not in (conversation.tags or []):
         from app.services.ai.tenant_ai_config import get_ai_greeting
         greeting = await get_ai_greeting(db, conversation.tenant_id)
@@ -210,16 +197,14 @@ async def process_customer_message_with_ai(
         )
         conversation.tags = (conversation.tags or []) + ["ai_greeting_sent"]
 
-    # ── 16: 构建 AgentContext ──
-    agent_ctx = (
-        AgentContext(
-            db=db,
-            tenant_id=conversation.tenant_id,
-            conversation_id=conversation.id,
-            contact_id=conversation.contact_id,
-        )
-        if handler.requires_agent_context
-        else None
+    # ── 15: 构建 AgentContext ──
+    # AGENT 路由需要完整 db session 供 Skill 函数使用；
+    # GENERAL_REPLY 只需要 tenant_id（用于 RAG 知识库检索）
+    agent_ctx = AgentContext(
+        db=db,
+        tenant_id=conversation.tenant_id,
+        conversation_id=conversation.id,
+        contact_id=conversation.contact_id,
     )
 
     # ── 17: 流式渲染 AI 回复 ──
