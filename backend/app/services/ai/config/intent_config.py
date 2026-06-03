@@ -162,25 +162,3 @@ DEFAULT_INTENT_CONFIG = IntentRecognitionConfig(
 )
 
 
-def build_intent_config(
-    *,
-    rules: tuple[StrongRuleConfig, ...] | None = None,
-    keyword_boosts: tuple[KeywordBoostConfig, ...] | None = None,
-    intent_route_map: dict[str, IntentRouteConfig] | None = None,
-    **overrides,
-) -> IntentRecognitionConfig:
-    """构建意图识别配置，支持租户级覆盖。
-
-    覆盖规则：传入的参数覆盖默认值，未传入的使用平台默认。
-    """
-    return IntentRecognitionConfig(
-        vector_top_k=overrides.get("vector_top_k", DEFAULT_INTENT_CONFIG.vector_top_k),
-        vector_min_score=overrides.get("vector_min_score", DEFAULT_INTENT_CONFIG.vector_min_score),
-        high_confidence_score=overrides.get("high_confidence_score", DEFAULT_INTENT_CONFIG.high_confidence_score),
-        ambiguous_gap=overrides.get("ambiguous_gap", DEFAULT_INTENT_CONFIG.ambiguous_gap),
-        enable_llm_fallback=overrides.get("enable_llm_fallback", DEFAULT_INTENT_CONFIG.enable_llm_fallback),
-        enable_multi_intent=overrides.get("enable_multi_intent", DEFAULT_INTENT_CONFIG.enable_multi_intent),
-        rules=rules or DEFAULT_RULES,
-        keyword_boosts=keyword_boosts or DEFAULT_KEYWORD_BOOSTS,
-        intent_route_map=intent_route_map or DEFAULT_INTENT_ROUTE_MAP,
-    )

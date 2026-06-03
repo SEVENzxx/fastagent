@@ -211,14 +211,5 @@ class ConnectionManager:
                 logger.exception("Redis 订阅异常，5 秒后重试")
                 await asyncio.sleep(5)
 
-    async def unsubscribe_conversation(self, conversation_id: int) -> None:
-        """退订 Redis 频道（会话关闭时调用，避免频道泄漏）。
-
-        参数：
-            conversation_id: 要退订的会话 ID
-        """
-        self._subscribed.discard(conversation_id)
-
-
 # 全局单例 — 由 ws.py 和 message_router/processor 等模块共享
 manager = ConnectionManager()

@@ -5,8 +5,6 @@
 
 from __future__ import annotations
 
-from typing import Any
-
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -78,42 +76,3 @@ async def get_custom_prompt(db: AsyncSession, tenant_id: int) -> str | None:
     return None
 
 
-# ===========================================================================
-# 非 DB 配置（代码内可替换默认值）
-# ===========================================================================
-
-
-def get_intent_route_map(**overrides: Any) -> dict:
-    """返回意图路由映射（支持租户级覆盖）。
-
-    当前返回平台默认配置，未来从 DB 的 tenant_intent_config 表读取。
-    """
-    from app.services.ai.config.intent_config import DEFAULT_INTENT_ROUTE_MAP
-    return DEFAULT_INTENT_ROUTE_MAP
-
-
-def get_strong_rules(**overrides: Any) -> tuple:
-    """返回强规则配置。"""
-    from app.services.ai.config.intent_config import DEFAULT_RULES
-    return DEFAULT_RULES
-
-
-def get_keyword_boosts(**overrides: Any) -> tuple:
-    """返回关键词加权配置。"""
-    from app.services.ai.config.intent_config import DEFAULT_KEYWORD_BOOSTS
-    return DEFAULT_KEYWORD_BOOSTS
-
-
-def get_order_status_labels(**overrides: Any) -> dict[str, str]:
-    """返回订单状态中文标签。"""
-    return {**DEFAULT_ORDER_STATUS_LABELS, **overrides}
-
-
-def get_field_labels(**overrides: Any) -> dict[str, str]:
-    """返回客户信息字段中文标签。"""
-    return {**DEFAULT_FIELD_LABELS, **overrides}
-
-
-def get_ignore_phrases(**overrides: Any) -> set[str]:
-    """返回寒暄短句过滤集。"""
-    return DEFAULT_IGNORE_PHRASES | set(overrides.get("extra", []))

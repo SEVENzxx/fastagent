@@ -13,7 +13,6 @@ class ExecutionMode(str, Enum):
     DIRECT_SKILL = "direct_skill"
     AGENT_PLANNER = "agent_planner"
     CLARIFY = "clarify"
-    HUMAN = "human"
 
 
 @dataclass(frozen=True, slots=True)

@@ -15,14 +15,10 @@ from app.services.ai.agent.skills.operations import list_documents, manage_todos
 from app.services.ai.agent.skills.orders import confirm_order, create_order, manage_order
 from app.services.ai.agent.skills.products import search_products
 from app.services.ai.agent.skills.store import get_store_showcase
-from app.services.ai.agent.types import ToolResult
 
 logger = logging.getLogger(__name__)
 
-# Skill 函数签名: async def (*, tenant_id, contact_id, db, **kwargs) -> ToolResult
-SkillFunc = Callable[..., Any]
-
-SKILL_REGISTRY: dict[str, SkillFunc] = {
+SKILL_REGISTRY: dict[str, Callable[..., Any]] = {
     # 真实 Skill（Phase 9 第一阶段）
     "get_store_showcase": get_store_showcase,
     "search_products": search_products,
@@ -40,7 +36,7 @@ SKILL_REGISTRY: dict[str, SkillFunc] = {
 }
 
 # Phase 8 intent.skill → Phase 9 registry key 映射（平台默认，租户可通过 DB 覆盖）
-_SKILL_ALIASES: dict[str, str | None] = {
+SKILL_ALIASES: dict[str, str | None] = {
     # 聚合映射：多个 intent.skill 合并到一个 registry key
     "product_search": "search_products",
     "product_inquiry": "search_products",
@@ -54,30 +50,8 @@ _SKILL_ALIASES: dict[str, str | None] = {
     "human_service": None,
 }
 
-SKILL_ALIASES = _SKILL_ALIASES  # 保留别名以兼容现有引用，未来从 DB 加载
-
-# MCP 工具名单（Phase 11 替换 stub）
-MCP_TOOL_NAMES: set[str] = {"search_knowledge", "search_images"}
-
 # 副作用操作（create/update/delete），进入 DIRECT_SKILL 时标记 requires_approval
-_SIDEEFFECT_SKILLS: set[str] = {"create_order", "confirm_order", "manage_order", "update_price_strategy"}
-
-SIDEEFFECT_SKILLS = _SIDEEFFECT_SKILLS  # 保留别名以兼容现有引用
-
-
-def load_skill_aliases(
-    alias_overrides: dict[str, str | None] | None = None,
-    sideeffect_overrides: set[str] | None = None,
-) -> None:
-    """从 DB 或外部配置覆盖 skill 别名和副作用名单。
-
-    alias_overrides 为空时保持平台默认。sideeffect_overrides 同。
-    """
-    global SKILL_ALIASES, SIDEEFFECT_SKILLS
-    if alias_overrides:
-        SKILL_ALIASES = {**_SKILL_ALIASES, **alias_overrides}
-    if sideeffect_overrides:
-        SIDEEFFECT_SKILLS = _SIDEEFFECT_SKILLS | sideeffect_overrides
+SIDEEFFECT_SKILLS: set[str] = {"create_order", "confirm_order", "manage_order", "update_price_strategy"}
 
 
 def resolve_skill(intent_skill: str | None) -> str | None:
@@ -89,11 +63,3 @@ def resolve_skill(intent_skill: str | None) -> str | None:
         logger.warning("Skill alias 解析后不在 registry 中：intent_skill=%s alias=%s", intent_skill, alias)
         return None
     return alias
-
-
-def is_skill_registered(skill_name: str | None) -> bool:
-    """检查 skill 是否已注册。"""
-    if not skill_name:
-        return False
-    resolved = SKILL_ALIASES.get(skill_name, skill_name)
-    return resolved is not None and resolved in SKILL_REGISTRY

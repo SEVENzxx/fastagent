@@ -12,27 +12,6 @@ from app.services.ai.intent.types import ROUTE_AGENT, RoutedIntent
 logger = logging.getLogger(__name__)
 
 
-async def handle_agent(
-    routed: RoutedIntent,
-    *,
-    agent_context: AgentContext | None = None,
-) -> dict:
-    """通过 LangGraph Agent 处理 AGENT 路由，返回 {"reply": str, "tool_results": list}。"""
-    logger.info(
-        "AGENT handler 调用 LangGraph Agent：tenant_id=%s conversation_id=%s intent=%s skill=%s confidence=%.4f",
-        agent_context.tenant_id,
-        agent_context.conversation_id,
-        routed.primary_intent,
-        routed.skill,
-        routed.confidence,
-    )
-
-    from app.services.ai.agent import run_agent
-
-    result = await run_agent(agent_context, routed)
-    return result
-
-
 @register_handler(ROUTE_AGENT)
 class AgentHandler:
     """AGENT 路由处理器。"""
@@ -54,7 +33,18 @@ class AgentHandler:
         *,
         agent_context: AgentContext | None = None,
     ) -> str:
-        result = await handle_agent(routed, agent_context=agent_context)
+        logger.info(
+            "AGENT handler 调用 LangGraph Agent：tenant_id=%s conversation_id=%s intent=%s skill=%s confidence=%.4f",
+            agent_context.tenant_id,
+            agent_context.conversation_id,
+            routed.primary_intent,
+            routed.skill,
+            routed.confidence,
+        )
+
+        from app.services.ai.agent import run_agent
+
+        result = await run_agent(agent_context, routed)
         self.last_tool_results = result.get("tool_results", [])
         return result["reply"]
 

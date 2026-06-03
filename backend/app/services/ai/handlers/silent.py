@@ -12,11 +12,6 @@ if TYPE_CHECKING:
     from app.services.ai.agent.types import AgentContext
 
 
-async def handle_silent(_routed: RoutedIntent) -> str:
-    """静默处理：不回复内容。"""
-    return ""
-
-
 @register_handler(ROUTE_SILENT)
 class SilentHandler:
     """SILENT 路由处理器。"""
@@ -35,7 +30,7 @@ class SilentHandler:
         *,
         agent_context: AgentContext | None = None,
     ) -> str:
-        return await handle_silent(routed)
+        return ""
 
     async def stream(
         self,

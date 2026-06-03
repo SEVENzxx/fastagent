@@ -12,11 +12,6 @@ if TYPE_CHECKING:
     from app.services.ai.agent.types import AgentContext
 
 
-async def handle_human(routed: RoutedIntent) -> str:
-    """人工处理占位：后续接人工队列和 WebSocket 通知。"""
-    return "您已接入人工客服，请稍候，客服人员将尽快为您服务。"
-
-
 @register_handler(ROUTE_HUMAN)
 class HumanHandler:
     """HUMAN 路由处理器。"""
@@ -35,7 +30,7 @@ class HumanHandler:
         *,
         agent_context: AgentContext | None = None,
     ) -> str:
-        return await handle_human(routed)
+        return "您已接入人工客服，请稍候，客服人员将尽快为您服务。"
 
     async def stream(
         self,

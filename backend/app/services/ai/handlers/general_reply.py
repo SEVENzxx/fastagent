@@ -26,34 +26,6 @@ logger = logging.getLogger(__name__)
 _FALLBACK_TEXT = "我先帮你确认一下，可以再描述具体需求吗？"
 
 
-async def handle_general_reply(
-    routed: RoutedIntent,
-    *,
-    tenant_id: int | None = None,
-) -> AsyncIterator[str]:
-    """通用回复：RAG 命中 → 租户模型；否则 → 本地 AI_LLM_MODEL。"""
-    user_text = _build_user_text(routed)
-
-    # 意图不明确 → 本地模型直接澄清
-    if routed.need_clarification:
-        async for chunk in _stream(LLMUseCase.GENERAL_REPLY, build_clarify_messages(user_text)):
-            yield chunk
-        return
-
-    # 检索知识库
-    knowledge_context = await _retrieve_knowledge(user_text, tenant_id) if tenant_id else ""
-
-    if knowledge_context:
-        # RAG 命中 → 租户模型
-        messages = build_rag_reply_messages(user_text, knowledge_context)
-        async for chunk in _stream(LLMUseCase.RAG_REPLY, messages, tenant_id=tenant_id):
-            yield chunk
-    else:
-        # 无 RAG → 本地模型兜底
-        async for chunk in _stream(LLMUseCase.GENERAL_REPLY, build_general_reply_messages(user_text)):
-            yield chunk
-
-
 async def _stream(
     use_case: LLMUseCase,
     messages: Messages,
@@ -87,6 +59,11 @@ async def _retrieve_knowledge(query: str, tenant_id: int) -> str:
     return "\n".join(f"- {h.payload.get('text', '')}" for h in hits) if hits else ""
 
 
+def _build_user_text(routed: RoutedIntent) -> str:
+    segments = [h.segment for h in routed.hits if h.segment]
+    return "；".join(segments) or "用户暂未提供明确问题"
+
+
 @register_handler(ROUTE_GENERAL_REPLY)
 class GeneralReplyHandler:
     route = ROUTE_GENERAL_REPLY
@@ -100,11 +77,25 @@ class GeneralReplyHandler:
     async def stream(
         self, routed: RoutedIntent, *, agent_context: AgentContext | None = None,
     ) -> AsyncIterator[str]:
+        """通用回复：RAG 命中 → 租户模型；否则 → 本地 AI_LLM_MODEL。"""
+        user_text = _build_user_text(routed)
         tenant_id = agent_context.tenant_id if agent_context else None
-        async for chunk in handle_general_reply(routed, tenant_id=tenant_id):
-            yield chunk
 
+        # 意图不明确 → 本地模型直接澄清
+        if routed.need_clarification:
+            async for chunk in _stream(LLMUseCase.GENERAL_REPLY, build_clarify_messages(user_text)):
+                yield chunk
+            return
 
-def _build_user_text(routed: RoutedIntent) -> str:
-    segments = [h.segment for h in routed.hits if h.segment]
-    return "；".join(segments) or "用户暂未提供明确问题"
+        # 检索知识库
+        knowledge_context = await _retrieve_knowledge(user_text, tenant_id) if tenant_id else ""
+
+        if knowledge_context:
+            # RAG 命中 → 租户模型
+            messages = build_rag_reply_messages(user_text, knowledge_context)
+            async for chunk in _stream(LLMUseCase.RAG_REPLY, messages, tenant_id=tenant_id):
+                yield chunk
+        else:
+            # 无 RAG → 本地模型兜底
+            async for chunk in _stream(LLMUseCase.GENERAL_REPLY, build_general_reply_messages(user_text)):
+                yield chunk

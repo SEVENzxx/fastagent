@@ -4,23 +4,12 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
 
 from app.services.ai.agent.types import AgentContext
 from app.services.ai.handlers.registry import RouteHandler, get_handler
 from app.services.ai.intent.types import RoutedIntent
 
 logger = logging.getLogger(__name__)
-
-
-@dataclass(frozen=True, slots=True)
-class MessageRouterResult:
-    """轻量调度结果。"""
-
-    route: str
-    skill: str | None
-    message: str
-
 
 ChunkCallback = Callable[[str], Awaitable[None]]
 
@@ -40,24 +29,6 @@ class MessageRouter:
             handler.show_typing,
         )
         return handler
-
-    async def dispatch(
-        self,
-        routed: RoutedIntent,
-        *,
-        agent_context: AgentContext | None = None,
-    ) -> MessageRouterResult:
-        """根据 route 返回非流式处理结果。"""
-        logger.info(
-            "消息路由器开始调度：route=%s skill=%s intent=%s confidence=%.4f",
-            routed.route,
-            routed.skill,
-            routed.primary_intent,
-            routed.confidence,
-        )
-        handler = self.resolve(routed)
-        message = await self.render(routed, handler=handler, agent_context=agent_context)
-        return MessageRouterResult(routed.route, routed.skill, message)
 
     async def render(
         self,
