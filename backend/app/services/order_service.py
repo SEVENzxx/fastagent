@@ -16,7 +16,7 @@ from app.schemas.order import (
     OrderCreate,
     OrderUpdate,
 )
-from app.services.vector_search_service import VectorDomain, VectorSearchService
+from app.ai.rag.vector_search import VectorDomain, VectorSearchService
 
 _vector_search = VectorSearchService()
 

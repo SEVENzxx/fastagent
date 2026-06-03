@@ -8,7 +8,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.qa_pair import QAPair
-from app.services.vector_search_service import VectorDomain, VectorSearchService
+from app.ai.rag.vector_search import VectorDomain, VectorSearchService
 
 logger = logging.getLogger(__name__)
 

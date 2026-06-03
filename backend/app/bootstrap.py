@@ -136,8 +136,8 @@ async def _seed_intent_samples() -> None:
     避免将首次请求用户的耗时摊到第一个真实客户消息上。
     """
     from app.config import settings
-    from app.services.ai.config.intent_examples import DEFAULT_INTENT_EXAMPLES
-    from app.services.vector_search_service import VectorDomain, VectorSearchService
+    from app.ai.classifier.intent_examples import DEFAULT_INTENT_EXAMPLES
+    from app.ai.rag.vector_search import VectorDomain, VectorSearchService
 
     qdrant_ok = settings.QDRANT_ENABLED and settings.QDRANT_URL
     embed_ok = settings.AI_EMBEDDING_ENABLED and settings.AI_EMBEDDING_BASE_URL

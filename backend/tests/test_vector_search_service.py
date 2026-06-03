@@ -5,7 +5,7 @@ import pytest
 from app.config import settings
 from app.integrations.embedding_client import EmbeddingClientError
 from app.integrations.qdrant_client import QdrantSearchHit
-from app.services.vector_search_service import VectorDomain, VectorSearchService
+from app.ai.rag.vector_search import VectorDomain, VectorSearchService
 
 
 @pytest.fixture(autouse=True)

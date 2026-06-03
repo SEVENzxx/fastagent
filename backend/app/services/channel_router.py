@@ -12,7 +12,7 @@ from app.models.conversation import Conversation
 from app.models.platform import Platform
 from app.schemas.conversation import ConversationCreate, MessageCreate
 from app.services import conversation_service
-from app.services.ai.processor import process_customer_message_with_ai
+from app.ai.router.processor import process_customer_message_with_ai
 
 
 def _message_payload(message) -> dict:

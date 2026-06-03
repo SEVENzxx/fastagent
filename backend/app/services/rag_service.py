@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.integrations.reranker_client import RerankerClient
-from app.services.vector_search_service import VectorDomain, VectorSearchResult, VectorSearchService
+from app.ai.rag.vector_search import VectorDomain, VectorSearchResult, VectorSearchService
 
 logger = logging.getLogger(__name__)
 

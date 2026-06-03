@@ -14,9 +14,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.models.knowledge_chunk import KnowledgeChunk
 from app.models.knowledge_doc import KnowledgeDoc
-from app.services.ai.rag.chunker import TextChunker
-from app.services.ai.rag.parser import DocumentParser
-from app.services.vector_search_service import VectorDomain, VectorSearchService
+from app.ai.rag.chunker import TextChunker
+from app.ai.rag.parser import DocumentParser
+from app.ai.rag.vector_search import VectorDomain, VectorSearchService
 
 logger = logging.getLogger(__name__)
 

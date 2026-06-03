@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.category import Category
 from app.models.product import Product
 from app.schemas.product import ProductCreate, ProductImportError, ProductImportResponse, ProductUpdate
-from app.services.vector_search_service import VectorDomain, VectorSearchService
+from app.ai.rag.vector_search import VectorDomain, VectorSearchService
 
 
 PRODUCT_IMPORT_TEMPLATE = (

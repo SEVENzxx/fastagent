@@ -4,7 +4,7 @@ import pytest
 
 from app.config import settings
 from app.services.rag_service import RAGService
-from app.services.vector_search_service import VectorDomain, VectorSearchResult
+from app.ai.rag.vector_search import VectorDomain, VectorSearchResult
 
 
 @pytest.mark.asyncio
