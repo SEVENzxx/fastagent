@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 
 from app.services.ai.agent.types import AgentContext
 from app.services.ai.handlers.registry import RouteHandler, get_handler
@@ -12,6 +13,14 @@ from app.services.ai.intent.types import RoutedIntent
 logger = logging.getLogger(__name__)
 
 ChunkCallback = Callable[[str], Awaitable[None]]
+
+
+@dataclass
+class RenderResult:
+    """render() 返回值：文本回复 + 结构化数据（订单卡片等）。"""
+
+    text: str
+    tool_results: list[dict]
 
 
 class MessageRouter:
@@ -37,10 +46,11 @@ class MessageRouter:
         handler: RouteHandler | None = None,
         agent_context: AgentContext | None = None,
         on_chunk: ChunkCallback | None = None,
-    ) -> str:
-        """执行 route handler 并返回完整文本。
+    ) -> RenderResult:
+        """执行 route handler 并返回文本 + 结构化数据。
 
         如果传入 ``on_chunk``，每个流式片段会同步回调给上层用于 WebSocket 推送。
+        结构化数据从 handler.tool_results 读取（Agent 执行后填充）。
         """
 
         selected_handler = handler or self.resolve(routed)
@@ -49,6 +59,9 @@ class MessageRouter:
             chunks.append(chunk)
             if on_chunk is not None:
                 await on_chunk(chunk)
-        return "".join(chunks)
+        return RenderResult(
+            text="".join(chunks),
+            tool_results=getattr(selected_handler, "tool_results", []),
+        )
 
 

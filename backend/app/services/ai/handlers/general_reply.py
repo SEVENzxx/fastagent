@@ -73,6 +73,7 @@ class GeneralReplyHandler:
     send_ai_greeting = True
     show_typing = True
     requires_agent_context = False
+    tool_results: list[dict] = []
 
     async def stream(
         self, routed: RoutedIntent, *, agent_context: AgentContext | None = None,

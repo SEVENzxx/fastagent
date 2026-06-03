@@ -15,7 +15,7 @@ from app.services import conversation_service, outbound_message_service
 from app.services.ai.agent.types import AgentContext
 from app.services.ai.intent.pending_state_store import PendingStateStore
 from app.services.ai.intent.pipeline import IntentRecognitionPipeline
-from app.services.ai.message_router import MessageRouter
+from app.services.ai.message_router import MessageRouter, RenderResult
 from app.services.usage_service import bind_usage_context
 
 logger = logging.getLogger(__name__)
@@ -213,7 +213,7 @@ async def process_customer_message_with_ai(
 
     dispatch_started = time.perf_counter()
     try:
-        content = (
+        render_result = (
             await router.render(
                 result,
                 handler=handler,
@@ -223,7 +223,8 @@ async def process_customer_message_with_ai(
                     {"type": "ai.message.chunk", "content": chunk},
                 ),
             )
-        ).strip()
+        )
+        content = render_result.text.strip()
     finally:
         if handler.show_typing:
             await _publish_typing(conversation, False)
@@ -245,7 +246,7 @@ async def process_customer_message_with_ai(
         "confidence": result.confidence,
         "is_multi_intent": result.is_multi_intent,
     }
-    order_cards = _extract_order_cards(handler)
+    order_cards = _extract_order_cards(render_result.tool_results)
     if order_cards:
         metadata["order_cards"] = order_cards
 
@@ -375,9 +376,8 @@ async def _publish_typing(conversation: Conversation, typing: bool) -> None:
     )
 
 
-def _extract_order_cards(handler) -> list[dict] | None:
-    """从 handler 的 tool_results 中提取订单卡片数据。"""
-    tool_results: list[dict] = getattr(handler, "last_tool_results", []) or []
+def _extract_order_cards(tool_results: list[dict]) -> list[dict] | None:
+    """从 tool_results 中提取订单卡片数据。"""
     cards: list[dict] = []
     order_skills = {"create_order", "confirm_order", "manage_order"}
     for r in tool_results:

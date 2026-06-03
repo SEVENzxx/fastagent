@@ -23,9 +23,7 @@ class AgentHandler:
     send_ai_greeting = True
     show_typing = True
     requires_agent_context = True
-
-    def __init__(self):
-        self.last_tool_results: list[dict] = []
+    tool_results: list[dict] = []
 
     async def handle(
         self,
@@ -45,7 +43,7 @@ class AgentHandler:
         from app.services.ai.agent import run_agent
 
         result = await run_agent(agent_context, routed)
-        self.last_tool_results = result.get("tool_results", [])
+        self.tool_results = result.get("tool_results", [])
         return result["reply"]
 
     async def stream(

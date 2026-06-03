@@ -23,6 +23,7 @@ class SilentHandler:
     send_ai_greeting = False
     show_typing = False
     requires_agent_context = False
+    tool_results: list[dict] = []
 
     async def handle(
         self,
