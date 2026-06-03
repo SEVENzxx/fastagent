@@ -1,6 +1,6 @@
 """意图向量召回样本。
 
-平台默认提供一批通用电商客服意图样本，覆盖 14 个意图分类共 60+ 条语料。
+平台默认提供一批通用电商客服意图样本，覆盖 18 个意图分类共 85 条语料。
 每条样本标注了 intent（意图标识）、label（中文标签）、route（路由类型）、skill（关联技能）。
 
 索引机制：
@@ -127,6 +127,35 @@ DEFAULT_INTENT_EXAMPLES: tuple[IntentExample, ...] = (
     IntentExample("chitchat", "闲聊", "GENERAL_REPLY", "general_reply", "好的"),
     IntentExample("chitchat", "闲聊", "GENERAL_REPLY", "general_reply", "辛苦了"),
     IntentExample("chitchat", "闲聊", "GENERAL_REPLY", "general_reply", "再见"),
+
+    # ── 下单（AGENT → create_order）────────────────────────────────────────
+    IntentExample("place_order", "下单", "AGENT", "create_order", "帮我下一单"),
+    IntentExample("place_order", "下单", "AGENT", "create_order", "我要买这个"),
+    IntentExample("place_order", "下单", "AGENT", "create_order", "订一件"),
+    IntentExample("place_order", "下单", "AGENT", "create_order", "帮我下单"),
+    IntentExample("place_order", "下单", "AGENT", "create_order", "给我来一份"),
+    IntentExample("place_order", "下单", "AGENT", "create_order", "就选这款吧"),
+
+    # ── 确认订单（AGENT → confirm_order）────────────────────────────────────
+    IntentExample("confirm_order", "确认订单", "AGENT", "confirm_order", "确认订单"),
+    IntentExample("confirm_order", "确认订单", "AGENT", "confirm_order", "就这个了"),
+    IntentExample("confirm_order", "确认订单", "AGENT", "confirm_order", "帮我下了"),
+    IntentExample("confirm_order", "确认订单", "AGENT", "confirm_order", "可以下了"),
+    IntentExample("confirm_order", "确认订单", "AGENT", "confirm_order", "没问题下单吧"),
+
+    # ── 议价（AGENT → update_price_strategy）────────────────────────────────
+    IntentExample("discount_request", "议价", "AGENT", "discount_request", "能不能便宜点"),
+    IntentExample("discount_request", "议价", "AGENT", "discount_request", "打个折吧"),
+    IntentExample("discount_request", "议价", "AGENT", "discount_request", "有优惠吗"),
+    IntentExample("discount_request", "议价", "AGENT", "discount_request", "多买能便宜吗"),
+    IntentExample("discount_request", "议价", "AGENT", "discount_request", "最低多少钱"),
+
+    # ── 保存偏好（AGENT → remember_info）───────────────────────────────────
+    IntentExample("save_preference", "保存偏好", "AGENT", "remember_info", "帮我记住这个"),
+    IntentExample("save_preference", "保存偏好", "AGENT", "remember_info", "记一下我喜欢"),
+    IntentExample("save_preference", "保存偏好", "AGENT", "remember_info", "我偏好这个口味"),
+    IntentExample("save_preference", "保存偏好", "AGENT", "remember_info", "备注一下"),
+    IntentExample("save_preference", "保存偏好", "AGENT", "remember_info", "收藏这个"),
 )
 
 

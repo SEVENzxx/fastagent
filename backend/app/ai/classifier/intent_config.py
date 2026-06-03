@@ -87,7 +87,7 @@ DEFAULT_INTENT_ROUTE_MAP: dict[str, IntentRouteConfig] = {
     it.INTENT_CANCEL: IntentRouteConfig(it.ROUTE_HUMAN, it.SKILL_HUMAN_SERVICE, "取消"),
     it.INTENT_DELETE_ACCOUNT: IntentRouteConfig(it.ROUTE_HUMAN, it.SKILL_HUMAN_SERVICE, "删除账号"),
     it.INTENT_RETURN_REFUND: IntentRouteConfig(it.ROUTE_HUMAN, it.SKILL_HUMAN_SERVICE, "退货退款"),
-    # AGENT（8 个）
+    # AGENT（12 个）
     it.INTENT_PRODUCT_PRICE: IntentRouteConfig(it.ROUTE_AGENT, it.SKILL_PRODUCT_PRICE, "商品价格"),
     it.INTENT_PRODUCT_STOCK: IntentRouteConfig(it.ROUTE_AGENT, it.SKILL_PRODUCT_STOCK, "商品库存"),
     it.INTENT_DELIVERY_TIME: IntentRouteConfig(it.ROUTE_AGENT, it.SKILL_DELIVERY_TIME, "发货时效"),
@@ -96,6 +96,10 @@ DEFAULT_INTENT_ROUTE_MAP: dict[str, IntentRouteConfig] = {
     it.INTENT_INVOICE: IntentRouteConfig(it.ROUTE_AGENT, it.SKILL_INVOICE, "发票"),
     it.INTENT_PRODUCT_SEARCH: IntentRouteConfig(it.ROUTE_AGENT, it.SKILL_SEARCH_PRODUCTS, "商品搜索"),
     it.INTENT_PRODUCT_INQUIRY: IntentRouteConfig(it.ROUTE_AGENT, it.SKILL_SEARCH_PRODUCTS, "商品咨询"),
+    it.INTENT_PLACE_ORDER: IntentRouteConfig(it.ROUTE_AGENT, it.SKILL_CREATE_ORDER, "下单"),
+    it.INTENT_CONFIRM_ORDER: IntentRouteConfig(it.ROUTE_AGENT, it.SKILL_CONFIRM_ORDER, "确认订单"),
+    it.INTENT_DISCOUNT_REQUEST: IntentRouteConfig(it.ROUTE_AGENT, it.SKILL_DISCOUNT_REQUEST, "议价"),
+    it.INTENT_SAVE_PREFERENCE: IntentRouteConfig(it.ROUTE_AGENT, it.SKILL_REMEMBER_INFO, "保存偏好"),
     # GENERAL_REPLY（2 个）
     it.INTENT_UNKNOWN: IntentRouteConfig(it.ROUTE_GENERAL_REPLY, it.SKILL_GENERAL_REPLY, "未知意图"),
     it.INTENT_CHITCHAT: IntentRouteConfig(it.ROUTE_GENERAL_REPLY, it.SKILL_GENERAL_REPLY, "闲聊"),
@@ -152,6 +156,16 @@ DEFAULT_KEYWORD_BOOSTS: tuple[KeywordBoostConfig, ...] = (
     KeywordBoostConfig("价格", it.INTENT_PRODUCT_PRICE, 0.20),
     KeywordBoostConfig("有货", it.INTENT_PRODUCT_STOCK, 0.24),
     KeywordBoostConfig("库存", it.INTENT_PRODUCT_STOCK, 0.20),
+    KeywordBoostConfig("下单", it.INTENT_PLACE_ORDER, 0.26),
+    KeywordBoostConfig("帮我订", it.INTENT_PLACE_ORDER, 0.24),
+    KeywordBoostConfig("买一个", it.INTENT_PLACE_ORDER, 0.22),
+    KeywordBoostConfig("确认订单", it.INTENT_CONFIRM_ORDER, 0.28),
+    KeywordBoostConfig("就这个了", it.INTENT_CONFIRM_ORDER, 0.24),
+    KeywordBoostConfig("便宜", it.INTENT_DISCOUNT_REQUEST, 0.22),
+    KeywordBoostConfig("打折", it.INTENT_DISCOUNT_REQUEST, 0.22),
+    KeywordBoostConfig("优惠", it.INTENT_DISCOUNT_REQUEST, 0.20),
+    KeywordBoostConfig("记住", it.INTENT_SAVE_PREFERENCE, 0.26),
+    KeywordBoostConfig("备注", it.INTENT_SAVE_PREFERENCE, 0.22),
 )
 
 # ── 聚合为平台默认配置 ──

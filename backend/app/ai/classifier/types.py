@@ -22,6 +22,10 @@ SKILL_LOGISTICS_STATUS = "logistics_status"
 SKILL_INVOICE = "invoice"
 SKILL_SEARCH_PRODUCTS = "search_products"
 SKILL_GENERAL_REPLY = "general_reply"
+SKILL_CREATE_ORDER = "create_order"
+SKILL_CONFIRM_ORDER = "confirm_order"
+SKILL_DISCOUNT_REQUEST = "discount_request"
+SKILL_REMEMBER_INFO = "remember_info"
 
 # ── 意图名常量（DEFAULT_INTENT_ROUTE_MAP 的 key）──
 INTENT_TRANSFER_REQUEST = "transfer_request"
@@ -47,6 +51,10 @@ INTENT_SILENT_EMPTY = "silent_empty"
 INTENT_SILENT_NOISE = "silent_noise"
 INTENT_SILENT_ACK = "silent_ack"
 INTENT_SILENT_THANKS = "silent_thanks"
+INTENT_PLACE_ORDER = "place_order"
+INTENT_CONFIRM_ORDER = "confirm_order"
+INTENT_DISCOUNT_REQUEST = "discount_request"
+INTENT_SAVE_PREFERENCE = "save_preference"
 
 RouteType = Literal["SILENT", "GENERAL_REPLY", "AGENT", "HUMAN"]
 ROUTE_TYPES = {ROUTE_SILENT, ROUTE_GENERAL_REPLY, ROUTE_AGENT, ROUTE_HUMAN}
