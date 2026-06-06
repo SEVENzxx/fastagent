@@ -1,7 +1,10 @@
-"""Agent StateGraph 6 节点编排。
+"""Agent 子图编排（7 节点 + 1 条件路由）。
 
-流程: build_context → decide_execution_mode → (条件: CLARIFY 跳过工具)
-      → plan_tools_from_routed_intent → dispatch_tools → generate_reply → post_process → END
+流程：
+build_context（上下文注入） → decide_execution_mode（置信度门控）
+→ [条件：CLARIFY 则跳过工具执行] → plan_tools_from_routed_intent（技能规划）
+→ normalize_planned_tool_arguments（参数抽取+校验） → dispatch_tools（技能执行）
+→ generate_reply（LLM 生成回复） → post_process（格式清洗） → END
 """
 
 from __future__ import annotations
@@ -15,6 +18,7 @@ from app.ai.agent.nodes import (
     decide_execution_mode,
     dispatch_tools,
     generate_reply,
+    normalize_planned_tool_arguments,
     plan_tools_from_routed_intent,
     post_process,
 )
@@ -39,17 +43,19 @@ def build_agent_graph() -> StateGraph:
 
     builder = StateGraph(AgentState)
 
-    # ── 6 个节点 ──
-    builder.add_node("build_context", build_context)                          # 组装 AgentState 初始值
-    builder.add_node("decide_execution_mode", decide_execution_mode)          # 置信度门控：DIRECT_SKILL / CLARIFY / AGENT_PLANNER
-    builder.add_node("plan_tools_from_routed_intent", plan_tools_from_routed_intent)  # 意图 → Skill 规划
-    builder.add_node("dispatch_tools", dispatch_tools)                        # 执行 Skill / MCP 工具
-    builder.add_node("generate_reply", generate_reply)                        # LLM 生成最终回复
-    builder.add_node("post_process", post_process)                            # 后处理（落库副作用等）
+    # 注册 7 个节点
+    builder.add_node("build_context", build_context)                                        # 初始化 AgentState
+    builder.add_node("decide_execution_mode", decide_execution_mode)                        # 置信度门控
+    builder.add_node("plan_tools_from_routed_intent", plan_tools_from_routed_intent)        # 技能规划
+    builder.add_node("normalize_planned_tool_arguments", normalize_planned_tool_arguments)  # 参数抽取+校验
+    builder.add_node("dispatch_tools", dispatch_tools)                                      # 技能执行
+    builder.add_node("generate_reply", generate_reply)                                      # LLM 生成回复
+    builder.add_node("post_process", post_process)                                          # 格式清洗
 
     # ── 边 ──
     builder.set_entry_point("build_context")
     builder.add_edge("build_context", "decide_execution_mode")
+    # 置信度门控：低置信度 → CLARIFY 直奔 generate_reply，跳过工具调用
     builder.add_conditional_edges(
         "decide_execution_mode",
         _route_after_decide,
@@ -58,7 +64,8 @@ def build_agent_graph() -> StateGraph:
             "generate_reply": "generate_reply",
         },
     )
-    builder.add_edge("plan_tools_from_routed_intent", "dispatch_tools")
+    builder.add_edge("plan_tools_from_routed_intent", "normalize_planned_tool_arguments")
+    builder.add_edge("normalize_planned_tool_arguments", "dispatch_tools")
     builder.add_edge("dispatch_tools", "generate_reply")
     builder.add_edge("generate_reply", "post_process")
     builder.add_edge("post_process", END)

@@ -74,6 +74,7 @@ class Settings(BaseSettings):
     AI_AGENT_RECENT_MESSAGE_LIMIT: int = 20
     AI_AGENT_ENABLE_HITL: bool = False
     AI_AGENT_ENABLE_MCP_STUBS: bool = True
+    AI_AGENT_ENABLE_LLM_ARGUMENT_EXTRACTION: bool = False
 
     # RAG / Knowledge Base
     AI_RERANKER_PROVIDER: str = "http"

@@ -8,6 +8,8 @@ from typing import Any, TypedDict
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.ai.classifier.types import PendingIntentState
+
 
 class ExecutionMode(str, Enum):
     DIRECT_SKILL = "direct_skill"
@@ -52,3 +54,4 @@ class AgentContext:
     tenant_id: int
     conversation_id: int
     contact_id: int | None = None
+    pending_state: PendingIntentState | None = None

@@ -43,6 +43,33 @@ class ContextStateResolver:
         if not missing:
             return None
 
+        if (
+            pending_state.skill in {"create_order", "update_price_strategy"}
+            and "arguments" in pending_state.filled_entities
+        ):
+            filled = {"arguments": normalized_text}
+            route = self.config.route_for(pending_state.intent)
+            label = self.config.label_for(pending_state.intent)
+            candidate = IntentCandidate(
+                intent=pending_state.intent,
+                label=label,
+                score=0.99,
+                source="context_state",
+                matched_text=normalized_text,
+                reason="pending skill arguments",
+            )
+            return IntentHit(
+                segment=normalized_text,
+                intent=pending_state.intent,
+                label=label,
+                confidence=0.99,
+                route=route.route,
+                skill=route.skill or pending_state.skill,
+                candidates=[candidate],
+                ambiguous=False,
+                reason=f"pending skill arguments: {filled['arguments']}",
+            )
+
         filled = self._extract_pending_entity(normalized_text, signals, missing)
         if not filled:
             return None

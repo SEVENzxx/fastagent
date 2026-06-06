@@ -1,10 +1,18 @@
-"""Phase 9 Agent — 置信度门控混合架构。
+"""Agent 包公开接口。"""
 
-执行路径：
-  RoutedIntent → build_context → decide_execution_mode → plan_tools
-  → dispatch_tools → generate_reply → post_process → final_reply
-"""
+from __future__ import annotations
 
-from app.ai.agent.graph import run_agent
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from app.ai.agent.graph import run_agent as run_agent
+
+
+async def run_agent(*args, **kwargs):
+    """延迟导入 graph 模块，避免子模块导入时加载所有 skill 依赖。"""
+    from app.ai.agent.graph import run_agent as _run_agent
+
+    return await _run_agent(*args, **kwargs)
+
 
 __all__ = ["run_agent"]

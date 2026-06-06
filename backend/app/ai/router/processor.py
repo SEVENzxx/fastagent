@@ -12,6 +12,7 @@ from app.core.websocket_manager import manager
 from app.models.conversation import Conversation, Message
 from app.schemas.conversation import ConversationUpdate, MessageCreate
 from app.services import conversation_service, outbound_message_service
+from app.ai.agent.argument_pending import build_pending_state_from_tool_result
 from app.ai.agent.types import AgentContext
 from app.ai.memory.pending_state import PendingStateStore
 from app.ai.classifier.pipeline import IntentRecognitionPipeline
@@ -205,6 +206,7 @@ async def process_customer_message_with_ai(
         tenant_id=conversation.tenant_id,
         conversation_id=conversation.id,
         contact_id=conversation.contact_id,
+        pending_state=pending_state,
     )
 
     # ── 17: 流式渲染 AI 回复 ──
@@ -249,6 +251,15 @@ async def process_customer_message_with_ai(
     order_cards = _extract_order_cards(render_result.tool_results)
     if order_cards:
         metadata["order_cards"] = order_cards
+
+    pending_to_save = _build_pending_state_from_tool_results(
+        render_result.tool_results,
+        intent=result.primary_intent,
+    )
+    if pending_to_save is not None:
+        await pending_store.set(conversation.tenant_id, conversation.id, pending_to_save)
+    elif pending_state is not None and _has_successful_agent_tool_result(render_result.tool_results):
+        await pending_store.delete(conversation.tenant_id, conversation.id)
 
     # ── 19: 落库 + WebSocket 广播 + 渠道出站投递 ──
     await _create_deliver_and_broadcast_reply_message(
@@ -395,3 +406,22 @@ def _extract_order_cards(tool_results: list[dict]) -> list[dict] | None:
                     "message": result_data.get("message"),
                 })
     return cards or None
+
+
+def _build_pending_state_from_tool_results(tool_results: list[dict], *, intent: str | None):
+    for result in tool_results:
+        skill_name = result.get("skill_name")
+        if not isinstance(skill_name, str):
+            continue
+        pending = build_pending_state_from_tool_result(
+            result,
+            intent=intent,
+            skill_name=skill_name,
+        )
+        if pending is not None:
+            return pending
+    return None
+
+
+def _has_successful_agent_tool_result(tool_results: list[dict]) -> bool:
+    return any(bool(result.get("ok")) for result in tool_results)

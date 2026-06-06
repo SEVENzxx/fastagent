@@ -5,6 +5,10 @@ import time
 
 from langgraph.types import RunnableConfig
 
+from app.ai.agent.argument_extractor import extract_arguments_for_plan
+from app.ai.agent.argument_pending import merge_pending_arguments
+from app.ai.agent.business_resolver import enrich_plan_with_business_context
+from app.ai.agent.llm_argument_extractor import extract_arguments_with_llm
 from app.ai.agent.skill_registry import SKILL_REGISTRY, resolve_skill
 from app.ai.agent.types import AgentContext, AgentState, ExecutionMode, ToolResult
 from app.ai.classifier.types import RoutedIntent
@@ -113,9 +117,56 @@ async def plan_tools_from_routed_intent(state: AgentState, config: RunnableConfi
     return state
 
 
-# Node 4: dispatch_tools — 顺序执行技能
+# Node 4: normalize_planned_tool_arguments — 参数抽取与校验
+async def normalize_planned_tool_arguments(state: AgentState, config: RunnableConfig | None = None) -> AgentState:
+    """对每个技能调用计划执行确定性参数提取和 schema 校验。
+
+    此处不从 LLM 获取参数，而是用正则+规则引擎从客户原文中抽取，
+    确保参数质量，避免后续 dispatch_tools 时因参数缺失而失败。
+    """
+    ctx: AgentContext | None = _cfg(config).get("agent_context")
+    normalized_plans: list[dict] = []
+    for plan in state.get("planned_tool_calls", []):
+        normalized = extract_arguments_for_plan(plan)
+        if settings.AI_AGENT_ENABLE_LLM_ARGUMENT_EXTRACTION and (
+            normalized.get("missing_arguments") or normalized.get("argument_errors")
+        ):
+            llm_args = await extract_arguments_with_llm(
+                str(normalized.get("skill_name") or ""),
+                str((normalized.get("arguments") or {}).get("customer_text") or ""),
+                dict(normalized.get("arguments") or {}),
+                tenant_id=ctx.tenant_id if ctx else state.get("tenant_id"),
+            )
+            if llm_args:
+                llm_plan = dict(normalized)
+                llm_plan["arguments"] = {**dict(normalized.get("arguments") or {}), **llm_args}
+                normalized = extract_arguments_for_plan(llm_plan)
+        if ctx is not None and ctx.pending_state is not None:
+            pending_plan = dict(normalized)
+            pending_plan["arguments"] = merge_pending_arguments(
+                dict(normalized.get("arguments") or {}),
+                ctx.pending_state,
+                skill_name=str(normalized.get("skill_name") or ""),
+            )
+            normalized = extract_arguments_for_plan(pending_plan)
+        if ctx is not None:
+            normalized = await enrich_plan_with_business_context(
+                normalized,
+                db=ctx.db,
+                tenant_id=ctx.tenant_id,
+            )
+        normalized_plans.append(normalized)
+    state["planned_tool_calls"] = normalized_plans
+    return state
+
+
 async def dispatch_tools(state: AgentState, config: RunnableConfig | None = None) -> AgentState:
-    """顺序执行技能调用，受 AI_AGENT_MAX_TOOL_CALLS 上限约束。"""
+    """顺序执行技能调用，受 AI_AGENT_MAX_TOOL_CALLS 上限约束。
+
+    执行前检查参数校验错误和缺失必填参数：
+    - argument_errors → 直接标记失败，不执行技能
+    - missing_arguments → 返回缺参提示，不执行技能
+    """
     started = time.perf_counter()
     ctx: AgentContext = _cfg(config).get("agent_context")
     if ctx is None:
@@ -136,6 +187,31 @@ async def dispatch_tools(state: AgentState, config: RunnableConfig | None = None
             results.append({"skill_name": skill_name, "ok": False, "result": None, "error": f"Unknown: {skill_name}"})
             continue
 
+        # 步骤 1：检查 Pydantic 参数校验错误
+        if plan.get("argument_errors"):
+            results.append({
+                "skill_name": skill_name,
+                "ok": False,
+                "result": None,
+                "error": "参数校验失败: " + "; ".join(plan["argument_errors"]),
+            })
+            count += 1
+            continue
+
+        # 步骤 2：检查缺失的必填参数
+        if plan.get("missing_arguments"):
+            results.append({
+                "skill_name": skill_name,
+                "ok": False,
+                "result": None,
+                "error": plan.get("missing_prompt") or "缺少必要参数。",
+                "missing_arguments": plan["missing_arguments"],
+                "pending_arguments": plan.get("arguments", {}),
+            })
+            count += 1
+            continue
+
+        # 步骤 3：通过校验后执行技能
         try:
             result: ToolResult = await skill_func(
                 tenant_id=ctx.tenant_id, contact_id=ctx.contact_id, db=ctx.db,
@@ -169,6 +245,9 @@ async def generate_reply(state: AgentState) -> AgentState:
 
     if mode == ExecutionMode.CLARIFY.value:
         state["final_reply"] = await _generate_clarify_reply(customer_text)
+    elif missing_reply := _missing_argument_reply(tool_results):
+        # 技能因缺参未执行 → 直接返回追问话术，不调 LLM
+        state["final_reply"] = missing_reply
     elif not tool_results:
         state["final_reply"] = await _generate_fallback_reply(customer_text)
     else:
@@ -248,6 +327,17 @@ def _template_fallback(tool_results: list[dict]) -> str:
         elif isinstance(result, str):
             parts.append(result)
     return "\n\n".join(parts) or FALLBACK_MESSAGES["template_fallback"]
+
+
+def _missing_argument_reply(tool_results: list[dict]) -> str | None:
+    """收集所有技能调用中缺失参数的追问话术，去重后拼接返回。"""
+    prompts = [
+        str(result.get("error") or "").strip()
+        for result in tool_results
+        if result.get("missing_arguments")
+    ]
+    prompts = [prompt for prompt in prompts if prompt]
+    return "\n".join(dict.fromkeys(prompts)) if prompts else None
 
 
 def _extract_customer_text(routed: RoutedIntent) -> str:
