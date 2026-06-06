@@ -36,6 +36,7 @@ def setup_logging() -> None:
     logging.getLogger("uvicorn").setLevel(logging.INFO)
     logging.getLogger("uvicorn.error").setLevel(logging.INFO)
     logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
+    logging.getLogger("watchfiles.main").setLevel(logging.WARNING)
 
 
 def _resolve_log_level() -> int:

@@ -10,6 +10,20 @@ from app.ai.classifier.types import IntentCandidate, IntentHit, KeywordEntityRes
 
 BARE_ORDER_NO_PATTERN = re.compile(r"^[A-Za-z0-9\-]{8,32}$")
 
+PENDING_INTERRUPT_KEYWORDS = (
+    "优惠活动", "促销活动", "有什么优惠", "有优惠吗", "优惠券", "满减", "满赠",
+    "支付方式", "怎么支付", "如何支付", "付款方式", "怎么付款", "如何付款",
+    "支付有哪些", "支付有", "支持什么支付", "支持哪些支付",
+    "你在说什么", "什么意思", "没听懂", "不明白", "算了", "取消",
+)
+
+GENERIC_QUESTION_KEYWORDS = ("什么", "哪些", "怎么", "如何", "有没有", "为啥", "为什么", "?")
+
+PENDING_CONTINUE_KEYWORDS = (
+    "下单", "买", "要", "来", "订", "拍", "就要", "就下", "这个", "这款",
+    "瓶", "箱", "件", "个", "斤", "袋", "盒",
+)
+
 
 class ContextStateResolver:
     """优先处理上一轮正在等待的槽位。
@@ -41,6 +55,9 @@ class ContextStateResolver:
             if name not in pending_state.filled_entities
         ]
         if not missing:
+            return None
+
+        if self._should_interrupt_pending(normalized_text):
             return None
 
         if (
@@ -122,3 +139,13 @@ class ContextStateResolver:
                 result[entity_name] = normalized_text
 
         return result
+
+    def _should_interrupt_pending(self, normalized_text: str) -> bool:
+        text = normalized_text.strip()
+        if not text:
+            return False
+        if any(keyword in text for keyword in PENDING_INTERRUPT_KEYWORDS):
+            return True
+        if any(keyword in text for keyword in GENERIC_QUESTION_KEYWORDS):
+            return not any(keyword in text for keyword in PENDING_CONTINUE_KEYWORDS)
+        return False

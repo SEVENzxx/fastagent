@@ -46,6 +46,7 @@ class Settings(BaseSettings):
     AI_LLM_BASE_URL: str = "http://127.0.0.1:8003"
     AI_LLM_MODEL: str = "qwen2.5-0.5b-local"
     AI_LLM_TIMEOUT_SECONDS: float = 30.0
+    AI_GENERAL_REPLY_TIMEOUT_SECONDS: float = 5.0
     AI_LLM_MAX_TOKENS: int = 128
 
     # ── Embedding ──
@@ -89,7 +90,7 @@ class Settings(BaseSettings):
     AI_KNOWLEDGE_CHUNK_OVERLAP: int = 100
     AI_KNOWLEDGE_MIN_CHUNK_SIZE: int = 100
     AI_KNOWLEDGE_BATCH_SIZE: int = 32
-    AI_KNOWLEDGE_QA_MIN_SCORE: float = 0.85
+    AI_KNOWLEDGE_QA_MIN_SCORE: float = 0.75
     AI_KNOWLEDGE_QA_TOP_K: int = 3
     AI_GENERAL_REPLY_RAG_TOP_K: int = 3
     AI_GENERAL_REPLY_RAG_MIN_SCORE: float = 0.7

@@ -54,6 +54,8 @@ INTENT_SILENT_THANKS = "silent_thanks"
 INTENT_PLACE_ORDER = "place_order"
 INTENT_CONFIRM_ORDER = "confirm_order"
 INTENT_DISCOUNT_REQUEST = "discount_request"
+INTENT_PROMOTION_INQUIRY = "promotion_inquiry"
+INTENT_PAYMENT_INQUIRY = "payment_inquiry"
 INTENT_SAVE_PREFERENCE = "save_preference"
 
 RouteType = Literal["SILENT", "GENERAL_REPLY", "AGENT", "HUMAN"]

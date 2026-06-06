@@ -77,7 +77,7 @@ class IntentRecognitionConfig:
 
 # ── intent → (route, skill) 映射 ──
 DEFAULT_INTENT_ROUTE_MAP: dict[str, IntentRouteConfig] = {
-    # HUMAN（9 个）
+    # HUMAN
     it.INTENT_TRANSFER_REQUEST: IntentRouteConfig(it.ROUTE_HUMAN, it.SKILL_HUMAN_SERVICE, "转人工"),
     it.INTENT_COMPLAINT: IntentRouteConfig(it.ROUTE_HUMAN, it.SKILL_HUMAN_SERVICE, "投诉"),
     it.INTENT_ABUSE: IntentRouteConfig(it.ROUTE_HUMAN, it.SKILL_HUMAN_SERVICE, "辱骂攻击"),
@@ -87,23 +87,21 @@ DEFAULT_INTENT_ROUTE_MAP: dict[str, IntentRouteConfig] = {
     it.INTENT_CANCEL: IntentRouteConfig(it.ROUTE_HUMAN, it.SKILL_HUMAN_SERVICE, "取消"),
     it.INTENT_DELETE_ACCOUNT: IntentRouteConfig(it.ROUTE_HUMAN, it.SKILL_HUMAN_SERVICE, "删除账号"),
     it.INTENT_RETURN_REFUND: IntentRouteConfig(it.ROUTE_HUMAN, it.SKILL_HUMAN_SERVICE, "退货退款"),
-    # AGENT（12 个）
+    # AGENT
     it.INTENT_PRODUCT_PRICE: IntentRouteConfig(it.ROUTE_AGENT, it.SKILL_PRODUCT_PRICE, "商品价格"),
     it.INTENT_PRODUCT_STOCK: IntentRouteConfig(it.ROUTE_AGENT, it.SKILL_PRODUCT_STOCK, "商品库存"),
-    it.INTENT_DELIVERY_TIME: IntentRouteConfig(it.ROUTE_AGENT, it.SKILL_DELIVERY_TIME, "发货时效"),
     it.INTENT_ORDER_STATUS: IntentRouteConfig(it.ROUTE_AGENT, it.SKILL_ORDER_STATUS, "订单状态"),
     it.INTENT_LOGISTICS_STATUS: IntentRouteConfig(it.ROUTE_AGENT, it.SKILL_LOGISTICS_STATUS, "物流状态"),
-    it.INTENT_INVOICE: IntentRouteConfig(it.ROUTE_AGENT, it.SKILL_INVOICE, "发票"),
     it.INTENT_PRODUCT_SEARCH: IntentRouteConfig(it.ROUTE_AGENT, it.SKILL_SEARCH_PRODUCTS, "商品搜索"),
     it.INTENT_PRODUCT_INQUIRY: IntentRouteConfig(it.ROUTE_AGENT, it.SKILL_SEARCH_PRODUCTS, "商品咨询"),
     it.INTENT_PLACE_ORDER: IntentRouteConfig(it.ROUTE_AGENT, it.SKILL_CREATE_ORDER, "下单"),
     it.INTENT_CONFIRM_ORDER: IntentRouteConfig(it.ROUTE_AGENT, it.SKILL_CONFIRM_ORDER, "确认订单"),
-    it.INTENT_DISCOUNT_REQUEST: IntentRouteConfig(it.ROUTE_AGENT, it.SKILL_DISCOUNT_REQUEST, "议价"),
     it.INTENT_SAVE_PREFERENCE: IntentRouteConfig(it.ROUTE_AGENT, it.SKILL_REMEMBER_INFO, "保存偏好"),
-    # GENERAL_REPLY（2 个）
+
+    # 仅保留 INTENT_UNKNOWN 作为 GENERAL_REPLY 兜底，其余自动 fallback
     it.INTENT_UNKNOWN: IntentRouteConfig(it.ROUTE_GENERAL_REPLY, it.SKILL_GENERAL_REPLY, "未知意图"),
-    it.INTENT_CHITCHAT: IntentRouteConfig(it.ROUTE_GENERAL_REPLY, it.SKILL_GENERAL_REPLY, "闲聊"),
-    # SILENT（4 个）
+
+    # SILENT
     it.INTENT_SILENT_EMPTY: IntentRouteConfig(it.ROUTE_SILENT, None, "空消息"),
     it.INTENT_SILENT_NOISE: IntentRouteConfig(it.ROUTE_SILENT, None, "噪音消息"),
     it.INTENT_SILENT_ACK: IntentRouteConfig(it.ROUTE_SILENT, None, "确认类短句"),
@@ -112,7 +110,7 @@ DEFAULT_INTENT_ROUTE_MAP: dict[str, IntentRouteConfig] = {
 
 # ── 强规则 — 按风险降序，命中即停止 ──
 DEFAULT_RULES: tuple[StrongRuleConfig, ...] = (
-    # ══ HUMAN（7 个）══
+    # ══ HUMAN ══
     StrongRuleConfig(it.INTENT_TRANSFER_REQUEST, "转人工",
         ("转人工", "人工客服", "真人客服", "找客服", "我要人工", "人工", "给我转人工"),
         it.ROUTE_HUMAN, it.SKILL_HUMAN_SERVICE, 1.0, True, "用户明确要求人工介入"),
@@ -134,8 +132,7 @@ DEFAULT_RULES: tuple[StrongRuleConfig, ...] = (
     StrongRuleConfig(it.INTENT_UNSUBSCRIBE, "退订",
         ("退订", "别发了", "不要推送", "别再发了"),
         it.ROUTE_HUMAN, it.SKILL_HUMAN_SERVICE, 0.96, True, "退订需人工确认"),
-
-    # ══ SILENT（2 个）══
+    # ══ SILENT ══
     StrongRuleConfig(it.INTENT_SILENT_ACK, "确认类短句",
         ("好的", "知道了", "嗯", "哦", "OK", "ok", "收到", "明白", "行", "好"),
         it.ROUTE_SILENT, None, 1.0, True, "纯确认/收到"),
@@ -163,7 +160,6 @@ DEFAULT_KEYWORD_BOOSTS: tuple[KeywordBoostConfig, ...] = (
     KeywordBoostConfig("就这个了", it.INTENT_CONFIRM_ORDER, 0.24),
     KeywordBoostConfig("便宜", it.INTENT_DISCOUNT_REQUEST, 0.22),
     KeywordBoostConfig("打折", it.INTENT_DISCOUNT_REQUEST, 0.22),
-    KeywordBoostConfig("优惠", it.INTENT_DISCOUNT_REQUEST, 0.20),
     KeywordBoostConfig("记住", it.INTENT_SAVE_PREFERENCE, 0.26),
     KeywordBoostConfig("备注", it.INTENT_SAVE_PREFERENCE, 0.22),
 )

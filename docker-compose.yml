@@ -47,6 +47,7 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     container_name: fastagent-backend
+    command: ["./docker-entrypoint.sh"]
     restart: unless-stopped
     env_file:
       - ./.env
@@ -54,6 +55,8 @@ services:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       DATABASE_URL_SYNC: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       REDIS_URL: redis://redis:6379/0
+      QDRANT_URL: http://qdrant:6333
+      UV_LINK_MODE: copy
     ports:
       - "${PORT}:8000"
     depends_on:
@@ -70,8 +73,10 @@ services:
       retries: 3
     volumes:
       - ./backend:/app
+      - backend_venv:/app/.venv
 
 volumes:
   pgdata:
   redisdata:
   qdrantdata:
+  backend_venv:

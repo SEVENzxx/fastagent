@@ -61,14 +61,6 @@ DEFAULT_INTENT_EXAMPLES: tuple[IntentExample, ...] = (
     IntentExample("product_stock", "商品库存", "AGENT", "product_stock", "什么时候补货"),
     IntentExample("product_stock", "商品库存", "AGENT", "product_stock", "帮我查一下库存"),
 
-    # ── 发货时效（AGENT → search_products）─────────────────────────────────
-    IntentExample("delivery_time", "发货时效", "AGENT", "delivery_time", "今天能发吗"),
-    IntentExample("delivery_time", "发货时效", "AGENT", "delivery_time", "什么时候发货"),
-    IntentExample("delivery_time", "发货时效", "AGENT", "delivery_time", "几天能到"),
-    IntentExample("delivery_time", "发货时效", "AGENT", "delivery_time", "发货要多久"),
-    IntentExample("delivery_time", "发货时效", "AGENT", "delivery_time", "明天能收到吗"),
-    IntentExample("delivery_time", "发货时效", "AGENT", "delivery_time", "配送要几天"),
-
     # ── 订单状态（AGENT → manage_order）────────────────────────────────────
     IntentExample("order_status", "订单状态", "AGENT", "order_status", "我的订单怎么还没发货"),
     IntentExample("order_status", "订单状态", "AGENT", "order_status", "订单处理到哪了"),
@@ -83,13 +75,6 @@ DEFAULT_INTENT_EXAMPLES: tuple[IntentExample, ...] = (
     IntentExample("logistics_status", "物流状态", "AGENT", "logistics_status", "包裹到哪了"),
     IntentExample("logistics_status", "物流状态", "AGENT", "logistics_status", "帮我查下快递"),
     IntentExample("logistics_status", "物流状态", "AGENT", "logistics_status", "怎么还没送到"),
-
-    # ── 发票（AGENT → manage_order）────────────────────────────────────────
-    IntentExample("invoice", "发票", "AGENT", "invoice", "可以开发票吗"),
-    IntentExample("invoice", "发票", "AGENT", "invoice", "帮我开发票"),
-    IntentExample("invoice", "发票", "AGENT", "invoice", "电子发票怎么开"),
-    IntentExample("invoice", "发票", "AGENT", "invoice", "我要发票"),
-    IntentExample("invoice", "发票", "AGENT", "invoice", "发票什么时候发"),
 
     # ── 商品搜索/推荐（AGENT → search_products）────────────────────────────
     IntentExample("product_search", "商品搜索", "AGENT", "search_products", "帮我推荐商品"),
@@ -143,12 +128,40 @@ DEFAULT_INTENT_EXAMPLES: tuple[IntentExample, ...] = (
     IntentExample("confirm_order", "确认订单", "AGENT", "confirm_order", "可以下了"),
     IntentExample("confirm_order", "确认订单", "AGENT", "confirm_order", "没问题下单吧"),
 
-    # ── 议价（AGENT → update_price_strategy）────────────────────────────────
-    IntentExample("discount_request", "议价", "AGENT", "discount_request", "能不能便宜点"),
-    IntentExample("discount_request", "议价", "AGENT", "discount_request", "打个折吧"),
-    IntentExample("discount_request", "议价", "AGENT", "discount_request", "有优惠吗"),
-    IntentExample("discount_request", "议价", "AGENT", "discount_request", "多买能便宜吗"),
-    IntentExample("discount_request", "议价", "AGENT", "discount_request", "最低多少钱"),
+    # ── 发货时效（GENERAL_REPLY → QA/RAG）─────────────────────────────────
+    IntentExample("delivery_time", "发货时效", "GENERAL_REPLY", "general_reply", "今天能发吗"),
+    IntentExample("delivery_time", "发货时效", "GENERAL_REPLY", "general_reply", "什么时候发货"),
+    IntentExample("delivery_time", "发货时效", "GENERAL_REPLY", "general_reply", "几天能到"),
+    IntentExample("delivery_time", "发货时效", "GENERAL_REPLY", "general_reply", "发货要多久"),
+    IntentExample("delivery_time", "发货时效", "GENERAL_REPLY", "general_reply", "明天能收到吗"),
+    IntentExample("delivery_time", "发货时效", "GENERAL_REPLY", "general_reply", "配送要几天"),
+
+    # ── 议价（GENERAL_REPLY → QA/RAG）────────────────────────────────
+    IntentExample("discount_request", "议价", "GENERAL_REPLY", "general_reply", "能不能便宜点"),
+    IntentExample("discount_request", "议价", "GENERAL_REPLY", "general_reply", "打个折吧"),
+    IntentExample("discount_request", "议价", "GENERAL_REPLY", "general_reply", "多买能便宜吗"),
+    IntentExample("discount_request", "议价", "GENERAL_REPLY", "general_reply", "最低多少钱"),
+
+    # ── 优惠活动咨询（GENERAL_REPLY → QA/RAG）───────────────────────────────
+    IntentExample("promotion_inquiry", "优惠活动咨询", "GENERAL_REPLY", "general_reply", "有没有优惠活动"),
+    IntentExample("promotion_inquiry", "优惠活动咨询", "GENERAL_REPLY", "general_reply", "有什么优惠"),
+    IntentExample("promotion_inquiry", "优惠活动咨询", "GENERAL_REPLY", "general_reply", "有优惠吗"),
+    IntentExample("promotion_inquiry", "优惠活动咨询", "GENERAL_REPLY", "general_reply", "最近有什么促销"),
+    IntentExample("promotion_inquiry", "优惠活动咨询", "GENERAL_REPLY", "general_reply", "有没有满减活动"),
+
+    # ── 支付方式咨询（GENERAL_REPLY → QA/RAG）───────────────────────────────
+    IntentExample("payment_inquiry", "支付方式咨询", "GENERAL_REPLY", "general_reply", "支付有哪些方式"),
+    IntentExample("payment_inquiry", "支付方式咨询", "GENERAL_REPLY", "general_reply", "支持什么支付"),
+    IntentExample("payment_inquiry", "支付方式咨询", "GENERAL_REPLY", "general_reply", "怎么付款"),
+    IntentExample("payment_inquiry", "支付方式咨询", "GENERAL_REPLY", "general_reply", "可以微信支付吗"),
+    IntentExample("payment_inquiry", "支付方式咨询", "GENERAL_REPLY", "general_reply", "付款方式有哪些"),
+
+    # ── 发票（AGENT → GENERAL_REPLY）────────────────────────────────────────
+    IntentExample("invoice", "发票", "GENERAL_REPLY", "general_reply", "可以开发票吗"),
+    IntentExample("invoice", "发票", "GENERAL_REPLY", "general_reply", "帮我开发票"),
+    IntentExample("invoice", "发票", "GENERAL_REPLY", "general_reply", "电子发票怎么开"),
+    IntentExample("invoice", "发票", "GENERAL_REPLY", "general_reply", "我要发票"),
+    IntentExample("invoice", "发票", "GENERAL_REPLY", "general_reply", "发票什么时候发"),
 
     # ── 保存偏好（AGENT → remember_info）───────────────────────────────────
     IntentExample("save_preference", "保存偏好", "AGENT", "remember_info", "帮我记住这个"),

@@ -20,6 +20,11 @@ from app.config import settings
 
 logger = logging.getLogger(__name__)
 
+LITELLM_DASHSCOPE_PROVIDER = "dashscope"
+QWEN_PROVIDER_ALIASES = {"qwen", "dashscope", "aliyun", "alibaba"}
+LITELLM_GENERIC_PROVIDERS = {"litellm"}
+PROVIDERS_WITH_NATIVE_MODEL_NAMES = {"http", "openai", "ollama", "deepseek", "zhipu"}
+
 
 class LLMClientError(RuntimeError):
     """模型服务不可用、配置缺失或返回格式异常时抛出。"""
@@ -53,8 +58,10 @@ class LLMClient:
         self.provider = (provider or settings.AI_LLM_PROVIDER).strip().lower()
         self.api_key = api_key if api_key is not None else settings.AI_LLM_API_KEY
         self.base_url = base_url if base_url is not None else settings.AI_LLM_BASE_URL
-        self.model = model or settings.AI_LLM_MODEL
+        raw_model = model or settings.AI_LLM_MODEL
+        self.model = normalize_litellm_model(raw_model, self.provider)
         self.timeout_seconds = timeout_seconds or settings.AI_LLM_TIMEOUT_SECONDS
+        logger.info("LLM client configured: provider=%s model=%s raw_model=%s", self.provider, self.model, raw_model)
 
     # ═══════════════════════════ 租户配置 ═══════════════════════════
 
@@ -67,6 +74,8 @@ class LLMClient:
     ) -> LLMClient:
         """按用途选择模型。租户未配置模型时回退到平台本地模型。"""
         if not use_case.uses_tenant_config:
+            if use_case == LLMUseCase.GENERAL_REPLY:
+                return cls(timeout_seconds=settings.AI_GENERAL_REPLY_TIMEOUT_SECONDS)
             return cls()
         if tenant_id is None:
             logger.warning("租户模型调用缺少 tenant_id：use_case=%s，回退本地模型", use_case.value)
@@ -232,6 +241,8 @@ class LLMClient:
             "temperature": temperature,
             "timeout": self.timeout_seconds,
             "stream": stream,
+            "max_retries": 0,
+            "num_retries": 0,
         }
         if self.api_key:
             kwargs["api_key"] = self.api_key
@@ -241,9 +252,30 @@ class LLMClient:
         try:
             t0 = time.perf_counter()
             return await asyncio.wait_for(acompletion(**kwargs), timeout=self.timeout_seconds + 1)
+        except TimeoutError as exc:
+            elapsed = (time.perf_counter() - t0) * 1000
+            logger.warning(
+                "LiteLLM timeout: provider=%s model=%s api_base=%s stream=%s elapsed=%.0fms timeout=%ss",
+                self.provider,
+                self.model,
+                self.base_url,
+                stream,
+                elapsed,
+                self.timeout_seconds,
+            )
+            raise LLMClientError(f"litellm timeout: model={self.model}") from exc
         except Exception as exc:
             elapsed = (time.perf_counter() - t0) * 1000
-            logger.warning("LiteLLM 失败：model=%s stream=%s elapsed=%.0fms error=%s", self.model, stream, elapsed, exc)
+            logger.warning(
+                "LiteLLM failed: provider=%s model=%s api_base=%s stream=%s elapsed=%.0fms error_type=%s error=%r",
+                self.provider,
+                self.model,
+                self.base_url,
+                stream,
+                elapsed,
+                type(exc).__name__,
+                exc,
+            )
             raise LLMClientError(f"litellm: {exc}") from exc
 
     async def _http_post(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
@@ -253,13 +285,35 @@ class LLMClient:
         url = f"{self.base_url.rstrip('/')}{path}"
         t0 = time.perf_counter()
         try:
+            logger.debug(
+                "HTTP LLM request started: model=%s url=%s timeout=%ss",
+                self.model,
+                url,
+                self.timeout_seconds,
+            )
             async with httpx.AsyncClient(timeout=self.timeout_seconds, trust_env=False) as client:
                 resp = await client.post(url, json=payload)
                 resp.raise_for_status()
                 data = resp.json()
+        except httpx.TimeoutException as exc:
+            elapsed = (time.perf_counter() - t0) * 1000
+            logger.warning(
+                "HTTP LLM timeout: model=%s url=%s elapsed=%.0fms timeout=%ss",
+                self.model,
+                url,
+                elapsed,
+                self.timeout_seconds,
+            )
+            raise LLMClientError(f"http llm timeout: model={self.model}") from exc
         except httpx.HTTPError as exc:
             elapsed = (time.perf_counter() - t0) * 1000
-            logger.warning("HTTP LLM 失败：path=%s elapsed=%.0fms error=%s", path, elapsed, exc)
+            logger.warning(
+                "HTTP LLM failed: model=%s url=%s elapsed=%.0fms error=%s",
+                self.model,
+                url,
+                elapsed,
+                exc,
+            )
             raise LLMClientError(f"http llm: {exc}") from exc
         except ValueError as exc:
             raise LLMClientError("http llm response is not valid json") from exc
@@ -323,3 +377,26 @@ class LLMClient:
             )
         except Exception:
             pass
+
+
+def normalize_litellm_model(model: str | None, provider: str | None) -> str:
+    """Normalize model names for LiteLLM without changing explicit non-Qwen providers."""
+    clean_model = str(model or "").strip()
+    clean_provider = str(provider or "").strip().lower()
+    if not clean_model:
+        return clean_model
+    if clean_provider in PROVIDERS_WITH_NATIVE_MODEL_NAMES:
+        return clean_model
+    if clean_model.startswith("dashscope/"):
+        return clean_model
+    if clean_provider in QWEN_PROVIDER_ALIASES or clean_provider in LITELLM_GENERIC_PROVIDERS:
+        if clean_model.startswith("qwen/"):
+            suffix = clean_model.split("/", 1)[1].strip()
+            return f"{LITELLM_DASHSCOPE_PROVIDER}/{suffix}" if suffix else clean_model
+        if "/" not in clean_model and _looks_like_qwen_model(clean_model):
+            return f"{LITELLM_DASHSCOPE_PROVIDER}/{clean_model}"
+    return clean_model
+
+
+def _looks_like_qwen_model(model: str) -> bool:
+    return model.lower().startswith(("qwen", "qwq", "qvq"))

@@ -150,12 +150,14 @@ async def _seed_intent_samples() -> None:
         return
 
     vs = VectorSearchService()
+    await vs.delete_points(domain=VectorDomain.INTENT_SAMPLE, tenant_id=0)
+
     indexed = 0
-    for index, example in enumerate(DEFAULT_INTENT_EXAMPLES):
+    for example in DEFAULT_INTENT_EXAMPLES:
         point_id = await vs.upsert_text(
             domain=VectorDomain.INTENT_SAMPLE,
             tenant_id=0,
-            business_id=f"{example.intent}:{index}",
+            business_id=f"{example.intent}:{example.example_text}",
             text=example.example_text,
             payload={
                 "intent": example.intent,
@@ -164,6 +166,7 @@ async def _seed_intent_samples() -> None:
                 "skill": example.skill,
                 "example_text": example.example_text,
                 "is_active": True,
+                "source": "platform_default",
             },
         )
         if point_id:

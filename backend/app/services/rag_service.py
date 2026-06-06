@@ -73,6 +73,13 @@ class RAGService:
             min_score=self.qa_min_score,
             filters={"is_active": True},
         )
+        logger.info(
+            "QA search params: query=%r tenant_id=%s top_k=%s min_score=%s",
+            query,
+            tenant_id,
+            self.qa_top_k,
+            self.qa_min_score,
+        )
         return [self._qa_hit_to_dict(hit) for hit in hits]
 
     async def search(self, query: str, tenant_id: int, db: AsyncSession | None = None) -> dict:

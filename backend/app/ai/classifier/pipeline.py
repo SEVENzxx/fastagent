@@ -19,7 +19,7 @@ from app.ai.classifier.normalizer import TextNormalizer
 from app.ai.classifier.router import IntentRouter
 from app.ai.classifier.rule_matcher import RuleMatcher
 from app.ai.classifier.segmenter import MessageSegmenter
-from app.ai.classifier.types import IntentCandidate, IntentHit, IntentResult, PendingIntentState, ROUTE_HUMAN, \
+from app.ai.classifier.types import IntentCandidate, IntentHit, IntentResult, PendingIntentState, ROUTE_GENERAL_REPLY, ROUTE_HUMAN, \
     ROUTE_SILENT, RoutedIntent
 from app.ai.classifier.vector_retriever import VectorIntentRetriever
 
@@ -52,6 +52,7 @@ class IntentRecognitionPipeline:
         self,
         text: str | None,
         *,
+        tenant_id: int = 0,
         pending_state: PendingIntentState | None = None,
     ) -> IntentResult:
         """识别意图，返回 IntentResult。
@@ -76,7 +77,7 @@ class IntentRecognitionPipeline:
 
         # ── 2: 强规则匹配（转人工/投诉/辱骂等高优先级规则）──
         strong_hit = self.rule_matcher.match(normalized)
-        if strong_hit is not None and strong_hit.route in {ROUTE_HUMAN, ROUTE_SILENT}:
+        if strong_hit is not None and strong_hit.route in {ROUTE_HUMAN, ROUTE_SILENT, ROUTE_GENERAL_REPLY}:
             logger.info(
                 "意图识别 — 强规则命中：intent=%s route=%s confidence=%.2f",
                 strong_hit.intent, strong_hit.route, strong_hit.confidence,
@@ -84,10 +85,12 @@ class IntentRecognitionPipeline:
             return self._early_result(original, normalized, strong_hit, "rule_matcher")
 
         # ── 3: 关键词/实体抽取 ──
-        signals = self.keyword_entity.extract(normalized)
+        # 全文信号只用于多轮槽位补全；每个 segment 融合打分时必须重新抽取自己的关键词，
+        # 避免“能开发票不？你们有门店吗？”里第二句继承第一句的“发票”加权。
+        full_text_signals = self.keyword_entity.extract(normalized)
 
         # ── 4: 多轮槽位补全 ──
-        context_hit = self.context_state.resolve(normalized, signals, pending_state)
+        context_hit = self.context_state.resolve(normalized, full_text_signals, pending_state)
         if context_hit is not None:
             logger.info(
                 "意图识别 — 槽位补全命中：intent=%s route=%s elapsed_ms=%.0f",
@@ -106,7 +109,8 @@ class IntentRecognitionPipeline:
         # ── 6-9: 每个 segment 独立走 向量召回 → 融合打分 → 歧义判断 → LLM 精判 ──
         hits: list[IntentHit] = []
         for segment in segments:
-            hits.append(await self._recognize_segment(segment, normalized, signals))
+            signals = self.keyword_entity.extract(segment)
+            hits.append(await self._recognize_segment(segment, normalized, signals, tenant_id=tenant_id))
 
         # ── 组装 IntentResult ──
         primary_hit = max(hits, key=lambda item: item.confidence) if hits else None
@@ -134,12 +138,13 @@ class IntentRecognitionPipeline:
         self,
         text: str | None,
         *,
+        tenant_id: int = 0,
         pending_state: PendingIntentState | None = None,
     ) -> RoutedIntent:
         """意图识别 + 路由，返回 RoutedIntent。"""
 
         # ── 1: 意图识别 ──
-        result = await self.recognize(text, pending_state=pending_state)
+        result = await self.recognize(text, tenant_id=tenant_id, pending_state=pending_state)
 
         # ── 2: 路由映射 ──
         routed = self.router.route(result)
@@ -150,7 +155,7 @@ class IntentRecognitionPipeline:
     # ------------------------------------------------------------------
 
     async def _recognize_segment(
-        self, segment: str, full_text: str, signals,
+        self, segment: str, full_text: str, signals, *, tenant_id: int = 0,
     ) -> IntentHit:
         """单个 segment 的意图识别（步骤 6-9）。
 
@@ -158,7 +163,7 @@ class IntentRecognitionPipeline:
         """
 
         # ── 6: 向量意图召回 ──
-        vector_candidates = await self.vector_retriever.retrieve(segment)
+        vector_candidates = await self.vector_retriever.retrieve(segment, tenant_id=tenant_id)
 
         # ── 7: 融合打分（vector + keyword + context）──
         fused = self.fusion_scorer.score(

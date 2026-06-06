@@ -167,6 +167,7 @@ async def process_customer_message_with_ai(
     # ── 9: 意图识别流水线 ──
     result = await IntentRecognitionPipeline().recognize_and_route(
         customer_message.content or "",
+        tenant_id=conversation.tenant_id,
         pending_state=pending_state,
     )
 

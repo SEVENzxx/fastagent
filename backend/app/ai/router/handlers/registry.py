@@ -112,7 +112,7 @@ def autodiscover_handlers() -> None:
     if _DISCOVERED:
         return
 
-    import app.ai.handlers as handlers_package
+    import app.ai.router.handlers as handlers_package
 
     package_prefix = handlers_package.__name__ + "."
     for module in pkgutil.iter_modules(handlers_package.__path__, package_prefix):
