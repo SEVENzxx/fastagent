@@ -9,6 +9,7 @@ from app.ai.agent.argument_extractor import extract_arguments_for_plan
 from app.ai.agent.argument_pending import merge_pending_arguments
 from app.ai.agent.business_resolver import enrich_plan_with_business_context
 from app.ai.agent.llm_argument_extractor import extract_arguments_with_llm
+from app.ai.agent.reply_templates import render_agent_template_reply
 from app.ai.agent.skill_registry import SKILL_REGISTRY, resolve_skill
 from app.ai.agent.types import AgentContext, AgentState, ExecutionMode, ToolResult
 from app.ai.classifier.types import RoutedIntent
@@ -285,6 +286,9 @@ async def generate_reply(state: AgentState) -> AgentState:
     elif not tool_results:
         logger.info("[generate] 模式=无技能结果兜底, text=%s", customer_text[:40])
         state["final_reply"] = await _generate_fallback_reply(customer_text)
+    elif template_reply := render_agent_template_reply(state):
+        logger.info("[generate] 模式=确定性模板回复, text=%s", customer_text[:40])
+        state["final_reply"] = template_reply
     else:
         tool_count = len([r for r in tool_results if r.get("ok")])
         logger.info("[generate] 模式=基于技能结果合成, text=%s 成功技能=%s/%s",

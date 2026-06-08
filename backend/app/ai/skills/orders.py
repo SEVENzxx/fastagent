@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import re
+from decimal import Decimal
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -83,14 +84,73 @@ async def create_order(
             error="无法识别商品信息，请告知商品名称。",
         )
 
+    return await _create_order_with_status(
+        tenant_id=tenant_id,
+        contact_id=contact_id,
+        db=db,
+        order_items=order_items,
+        kwargs=kwargs,
+        status="pending_customer_confirm",
+        skill_name="create_order",
+    )
+
+
+async def create_order_draft(
+    *,
+    tenant_id: int,
+    contact_id: int | None = None,
+    db: AsyncSession,
+    **kwargs,
+) -> ToolResult:
+    """创建订单草稿。商品必须已经明确，不能用整句用户话术兜底成商品名。"""
+    items_raw = kwargs.get("items") or []
+    order_items = []
+    for it in items_raw:
+        if not isinstance(it, dict):
+            continue
+        name = str(it.get("product_name") or it.get("name") or "").strip()
+        qty = int(it.get("quantity") or 1)
+        if name:
+            order_items.append(OrderItemCreate(product_name=name, quantity=max(qty, 1)))
+
+    if not order_items:
+        return ToolResult(
+            ok=False,
+            skill_name="create_order_draft",
+            error="商品还没有确定，请先让用户选择要购买的具体商品。",
+            missing_arguments=["items"],
+        )
+
+    return await _create_order_with_status(
+        tenant_id=tenant_id,
+        contact_id=contact_id,
+        db=db,
+        order_items=order_items,
+        kwargs=kwargs,
+        status="draft",
+        skill_name="create_order_draft",
+    )
+
+
+async def _create_order_with_status(
+    *,
+    tenant_id: int,
+    contact_id: int | None,
+    db: AsyncSession,
+    order_items: list[OrderItemCreate],
+    kwargs: dict,
+    status: str,
+    skill_name: str,
+) -> ToolResult:
     body = OrderCreateSchema(
         contact_id=contact_id or 0,
+        conversation_id=kwargs.get("conversation_id"),
         items=order_items,
         shipping_address=str(kwargs.get("shipping_address") or "").strip() or None,
         receiver_name=str(kwargs.get("receiver_name") or "").strip() or None,
         receiver_phone=str(kwargs.get("receiver_phone") or "").strip() or None,
         remark=str(kwargs.get("remark") or "").strip() or None,
-        status="pending_customer_confirm",
+        status=status,
     )
 
     try:
@@ -102,28 +162,16 @@ async def create_order(
             created_by_type="ai",
         )
     except ValueError as exc:
-        logger.warning("Skill create_order 创建失败：%s", exc)
+        logger.warning("Skill %s 创建失败：%s", skill_name, exc)
         return ToolResult(
             ok=False,
-            skill_name="create_order",
+            skill_name=skill_name,
             error=str(exc),
         )
 
-    items_display = [
-        {
-            "id": str(item.id),
-            "product_name": item.product_snapshot.get("product_name") if item.product_snapshot else "",
-            "quantity": item.quantity,
-            "unit_price": float(item.unit_price),
-            "subtotal": float(item.subtotal),
-        }
-        for item in order.items
-    ]
-
-    missing = order.metadata_.get("missing_info", []) if order.metadata_ else []
-
     logger.info(
-        "Skill create_order 成功：order_id=%s tenant_id=%s contact_id=%s status=%s total=%.2f items=%s",
+        "Skill %s 成功：order_id=%s tenant_id=%s contact_id=%s status=%s total=%.2f items=%s",
+        skill_name,
         order.id,
         tenant_id,
         contact_id,
@@ -132,20 +180,11 @@ async def create_order(
         len(order.items),
     )
 
+    payload = _order_payload(order)
     return ToolResult(
         ok=True,
-        skill_name="create_order",
-        result={
-            "order_id": str(order.id),
-            "status": order.status,
-            "status_label": _status_label(order.status),
-            "total_amount": float(order.total_amount),
-            "payable_amount": float(order.payable_amount),
-            "items": items_display,
-            "shipping_address": order.shipping_address,
-            "missing_info": missing,
-            "message": _build_create_message(items_display, order.payable_amount, missing),
-        },
+        skill_name=skill_name,
+        result=payload | {"message": _build_create_message(payload["items"], order.payable_amount, payload["missing_info"])},
     )
 
 
@@ -223,6 +262,14 @@ async def confirm_order(
             skill_name="confirm_order",
             error=f"未找到订单 #{order_id}。",
         )
+
+    if order.status == "draft":
+        try:
+            order = await order_service.transition_order_status(
+                db, order_id, tenant_id, "pending_customer_confirm"
+            )
+        except ValueError as exc:
+            return ToolResult(ok=False, skill_name="confirm_order", error=str(exc))
 
     if order.status != "pending_customer_confirm":
         return ToolResult(
@@ -311,15 +358,91 @@ async def manage_order(
                     "message": f"该客户暂无订单记录。",
                 },
             )
+        order_summaries = [_order_summary(o) for o in orders]
         return ToolResult(
             ok=True,
             skill_name="manage_order",
             result={
-                "orders": [_order_summary(o) for o in orders],
+                "orders": order_summaries,
                 "count": total,
-                "message": f"该客户共有 {total} 个订单，以下是最近的 {len(orders)} 个。",
+                "message": _format_order_list_message(order_summaries, total),
             },
         )
+
+
+async def update_order_draft(
+    *,
+    tenant_id: int,
+    contact_id: int | None = None,
+    db: AsyncSession,
+    **kwargs,
+) -> ToolResult:
+    """更新订单草稿：补收货信息、改数量或替换商品后重新返回订单详情。"""
+    _ = contact_id
+    order_id = kwargs.get("order_id")
+    if order_id is None:
+        return ToolResult(ok=False, skill_name="update_order_draft", error="缺少订单号。")
+    try:
+        order_id = int(order_id)
+    except (TypeError, ValueError):
+        return ToolResult(ok=False, skill_name="update_order_draft", error=f"无效订单号：{order_id}")
+
+    order = await order_service.get_order(db, order_id, tenant_id)
+    if order is None:
+        return ToolResult(ok=False, skill_name="update_order_draft", error=f"未找到订单 #{order_id}。")
+    if order.status not in {"draft", "pending_customer_confirm"}:
+        return ToolResult(
+            ok=False,
+            skill_name="update_order_draft",
+            error=f"订单 #{order_id} 当前状态为「{_status_label(order.status)}」，不能由智能客服修改。",
+        )
+
+    update = OrderUpdate(
+        shipping_address=str(kwargs.get("shipping_address") or "").strip() or None,
+        receiver_name=str(kwargs.get("receiver_name") or "").strip() or None,
+        receiver_phone=str(kwargs.get("receiver_phone") or "").strip() or None,
+        remark=str(kwargs.get("remark") or "").strip() or None,
+    )
+    if any(
+        value is not None
+        for value in (update.shipping_address, update.receiver_name, update.receiver_phone, update.remark)
+    ):
+        order = await order_service.update_order(db, order_id, tenant_id, update)
+        if order is None:
+            return ToolResult(ok=False, skill_name="update_order_draft", error=f"未找到订单 #{order_id}。")
+
+    product_name = str(kwargs.get("product_name") or "").strip()
+    quantity = kwargs.get("quantity")
+    if product_name or quantity is not None:
+        try:
+            order = await _update_first_order_item(
+                db,
+                tenant_id=tenant_id,
+                order=order,
+                product_name=product_name or None,
+                quantity=int(quantity) if quantity is not None else None,
+            )
+        except ValueError as exc:
+            return ToolResult(ok=False, skill_name="update_order_draft", error=str(exc))
+
+    metadata = dict(order.metadata_ or {})
+    metadata["missing_info"] = _detect_missing_info_from_order(order)
+    order.metadata_ = metadata
+    await db.commit()
+    await db.refresh(order)
+
+    payload = _order_payload(order)
+    logger.info(
+        "Skill update_order_draft 成功：order_id=%s tenant_id=%s missing=%s",
+        order.id,
+        tenant_id,
+        payload["missing_info"],
+    )
+    return ToolResult(
+        ok=True,
+        skill_name="update_order_draft",
+        result=payload | {"message": _format_order_message(order, payload["items"])},
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -361,20 +484,100 @@ def _build_create_message(
 
 
 def _order_summary(order: Order) -> dict:
+    items = [
+        {
+            "product_name": item.product_snapshot.get("product_name") if item.product_snapshot else "",
+            "quantity": item.quantity,
+            "subtotal": float(item.subtotal),
+        }
+        for item in (order.items or [])
+    ]
     return {
         "order_id": str(order.id),
         "status": order.status,
         "status_label": _status_label(order.status),
         "payable_amount": float(order.payable_amount),
         "created_at": order.created_at.isoformat() if order.created_at else None,
-        "items_count": len(order.items) if order.items else 0,
+        "items_count": len(items),
+        "items": items,
     }
 
 
+def _format_order_list_message(orders: list[dict], total: int) -> str:
+    if not orders:
+        return "该客户暂无订单记录。"
+    lines = [f"该客户共有 {total} 个订单，以下是最近的 {len(orders)} 个："]
+    for index, order in enumerate(orders, start=1):
+        lines.append(
+            f"{index}. 订单 #{order['order_id']}：{order['status_label']}，"
+            f"应付 ¥{order['payable_amount']:.2f}"
+        )
+        for item in order.get("items") or []:
+            name = str(item.get("product_name") or "商品").strip()
+            lines.append(f"   - {name} ×{item.get('quantity', 1)}，小计 ¥{float(item.get('subtotal') or 0):.2f}")
+    return "\n".join(lines)
+
+
 def _build_query_result(order: Order) -> ToolResult:
+    payload = _order_payload(order)
+
+    return ToolResult(
+        ok=True,
+        skill_name="manage_order",
+        result={
+            **payload,
+            "created_at": order.created_at.isoformat() if order.created_at else None,
+            "message": _format_order_message(order, payload["items"]),
+        },
+    )
+
+
+async def _update_first_order_item(
+    db: AsyncSession,
+    *,
+    tenant_id: int,
+    order: Order,
+    product_name: str | None,
+    quantity: int | None,
+) -> Order:
+    item = (order.items or [None])[0]
+    if item is None:
+        raise ValueError("订单没有商品明细，无法修改。")
+
+    if product_name:
+        product = await db.scalar(
+            select(Product).where(
+                Product.tenant_id == tenant_id,
+                Product.is_active.is_(True),
+                Product.name == product_name,
+            )
+        )
+        if product is None:
+            raise ValueError(f"未找到可替换商品：{product_name}")
+        item.product_id = product.id
+        item.product_snapshot = {
+            "product_name": product.name,
+            "sku": product.sku,
+            "specs": product.specs,
+            "original_price": float(product.price) if product.price else None,
+            "floor_price": float(product.floor_price) if product.floor_price else None,
+        }
+        item.unit_price = product.price if product.price else Decimal("0")
+
+    if quantity is not None:
+        item.quantity = max(int(quantity), 1)
+
+    item.subtotal = round(float(item.unit_price) * item.quantity, 2)
+    order.total_amount = round(sum(float(it.subtotal) for it in order.items), 2)
+    order.payable_amount = round(order.total_amount - float(order.discount_amount), 2)
+    return order
+
+
+def _order_payload(order: Order) -> dict:
     items = [
         {
             "id": str(item.id),
+            "product_id": str(item.product_id) if item.product_id is not None else None,
             "product_name": item.product_snapshot.get("product_name") if item.product_snapshot else "",
             "quantity": item.quantity,
             "unit_price": float(item.unit_price),
@@ -382,24 +585,28 @@ def _build_query_result(order: Order) -> ToolResult:
         }
         for item in (order.items or [])
     ]
+    missing = _detect_missing_info_from_order(order)
+    return {
+        "order_id": str(order.id),
+        "status": order.status,
+        "status_label": _status_label(order.status),
+        "total_amount": float(order.total_amount),
+        "payable_amount": float(order.payable_amount),
+        "items": items,
+        "shipping_address": order.shipping_address,
+        "receiver_name": order.receiver_name,
+        "receiver_phone": order.receiver_phone,
+        "missing_info": missing,
+    }
 
-    return ToolResult(
-        ok=True,
-        skill_name="manage_order",
-        result={
-            "order_id": str(order.id),
-            "status": order.status,
-            "status_label": _status_label(order.status),
-            "total_amount": float(order.total_amount),
-            "payable_amount": float(order.payable_amount),
-            "items": items,
-            "shipping_address": order.shipping_address,
-            "receiver_name": order.receiver_name,
-            "receiver_phone": order.receiver_phone,
-            "created_at": order.created_at.isoformat() if order.created_at else None,
-            "message": _format_order_message(order, items),
-        },
-    )
+
+def _detect_missing_info_from_order(order: Order) -> list[str]:
+    missing: list[str] = []
+    if not order.shipping_address:
+        missing.append("address")
+    if not order.receiver_phone:
+        missing.append("phone")
+    return missing
 
 
 def _format_order_message(order: Order, items: list[dict]) -> str:

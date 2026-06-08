@@ -55,6 +55,8 @@ class SearchProductsArgs(SkillArgs):
     """商品搜索：按关键词或模糊语义搜索商品。"""
     query: str | None = None
     keyword: str | None = None
+    category: str | None = None
+    product_name: str | None = None
     customer_text: str | None = None
 
 
@@ -79,6 +81,18 @@ class CreateOrderArgs(SkillArgs):
     receiver_name: str | None = None
     receiver_phone: str | None = None
     remark: str | None = None
+
+
+class UpdateOrderDraftArgs(SkillArgs):
+    """更新订单草稿：补地址电话、改数量或换商品。"""
+    query: str | None = None
+    customer_text: str | None = None
+    order_id: int
+    shipping_address: str | None = None
+    receiver_phone: str | None = None
+    receiver_name: str | None = None
+    quantity: int | None = Field(default=None, ge=1)
+    product_name: str | None = None
 
 
 class ConfirmOrderArgs(SkillArgs):
@@ -151,8 +165,18 @@ SKILL_SPECS: dict[str, SkillSpec] = {
         args_model=StoreShowcaseArgs,
         risk_level="read",
     ),
+    "list_product_categories": SkillSpec(
+        name="list_product_categories",
+        args_model=StoreShowcaseArgs,
+        risk_level="read",
+    ),
     "search_products": SkillSpec(
         name="search_products",
+        args_model=SearchProductsArgs,
+        risk_level="read",
+    ),
+    "get_product_detail": SkillSpec(
+        name="get_product_detail",
         args_model=SearchProductsArgs,
         risk_level="read",
     ),
@@ -169,6 +193,20 @@ SKILL_SPECS: dict[str, SkillSpec] = {
         required_args=("items",),
         risk_level="write_confirm",  # 下单操作需二次确认
         missing_prompts={"items": "请告诉我要下单的商品和数量。"},
+    ),
+    "create_order_draft": SkillSpec(
+        name="create_order_draft",
+        args_model=CreateOrderArgs,
+        required_args=("items",),
+        risk_level="write_confirm",
+        missing_prompts={"items": "请告诉我要下单的商品和数量。"},
+    ),
+    "update_order_draft": SkillSpec(
+        name="update_order_draft",
+        args_model=UpdateOrderDraftArgs,
+        required_args=("order_id",),
+        risk_level="write_confirm",
+        missing_prompts={"order_id": "请提供要修改的订单号。"},
     ),
     "confirm_order": SkillSpec(
         name="confirm_order",

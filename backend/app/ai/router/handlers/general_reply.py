@@ -8,6 +8,7 @@ from collections.abc import AsyncIterator
 from typing import TYPE_CHECKING
 
 from app.config import settings
+from app.ai.agent.reply_templates import fixed_policy_reply
 from app.ai.router.handlers.registry import register_handler
 from app.ai.classifier.types import ROUTE_GENERAL_REPLY, RoutedIntent
 from app.ai.llm.gateway import LLMClientError, LLMUseCase, stream
@@ -169,6 +170,12 @@ class GeneralReplyHandler:
         if qa_reply:
             logger.info("GENERAL_REPLY 路径: QA 直接命中, query=%s qa_count=%s", user_text[:40], len(qa_items))
             yield qa_reply
+            return
+
+        fixed_reply = fixed_policy_reply(routed.primary_intent)
+        if fixed_reply:
+            logger.info("GENERAL_REPLY 路径: 固定政策模板, intent=%s", routed.primary_intent)
+            yield fixed_reply
             return
 
         # ── 路径 3：知识库命中 → LLM 基于知识库合成 ──

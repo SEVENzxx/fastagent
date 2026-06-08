@@ -325,6 +325,16 @@ def _build_extractor_registry() -> None:
         "create_order": {
             "__composite__": _extract_create_order_args,  # CompositeExtractor
         },
+        "create_order_draft": {
+            "__composite__": _extract_create_order_args,  # CompositeExtractor
+        },
+        "update_order_draft": {
+            "order_id": _extract_order_id,  # FieldExtractor
+            "receiver_phone": _extract_phone,
+            "shipping_address": _extract_address,
+            "quantity": _extract_quantity,
+            "product_name": _extract_product_phrase,
+        },
     })
 
 

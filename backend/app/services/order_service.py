@@ -229,6 +229,9 @@ async def update_order(
                 await db.delete(item)
 
     order.payable_amount = round(order.total_amount - order.discount_amount, 2)
+    metadata = dict(order.metadata_ or {})
+    metadata["missing_info"] = _detect_missing_info_from_order(order)
+    order.metadata_ = metadata
     order.updated_at = datetime.now(timezone.utc)
     await db.commit()
     await db.refresh(order)
@@ -424,6 +427,15 @@ def _detect_missing_info(body: OrderCreate) -> list[str]:
     if not body.shipping_address:
         missing.append("address")
     if not body.receiver_phone:
+        missing.append("phone")
+    return missing
+
+
+def _detect_missing_info_from_order(order: Order) -> list[str]:
+    missing: list[str] = []
+    if not order.shipping_address:
+        missing.append("address")
+    if not order.receiver_phone:
         missing.append("phone")
     return missing
 

@@ -14,6 +14,8 @@ from app.schemas.conversation import ConversationUpdate, MessageCreate
 from app.services import conversation_service, outbound_message_service
 from app.ai.agent.argument_pending import build_pending_state_from_tool_result
 from app.ai.agent.types import AgentContext
+from app.ai.commerce_flow import handle_commerce_flow
+from app.ai.memory.conversation_state import ConversationStateStore
 from app.ai.memory.pending_state import PendingStateStore
 from app.ai.classifier.pipeline import IntentRecognitionPipeline
 from app.ai.router.message_router import MessageRouter, RenderResult
@@ -164,30 +166,76 @@ async def process_customer_message_with_ai(
             pending_state.required_entities,
         )
 
-    # ── 9: 意图识别流水线 ──
+    # ── 9: 商品咨询/订单草稿多轮状态机优先处理 ──
+    # 必须在通用意图识别之前执行，否则“确认”等短句可能先被 SILENT 规则吞掉。
+    agent_ctx = AgentContext(
+        db=db,
+        tenant_id=conversation.tenant_id,
+        conversation_id=conversation.id,
+        contact_id=conversation.contact_id,
+        pending_state=pending_state,
+    )
+    commerce_store = ConversationStateStore()
+    commerce_state = await commerce_store.get(conversation.tenant_id, conversation.id)
+    commerce_result = await handle_commerce_flow(
+        agent_ctx,
+        customer_message.content or "",
+        commerce_state,
+    )
+    if commerce_result is not None:
+        await commerce_store.set(conversation.tenant_id, conversation.id, commerce_result.state)
+        metadata = {
+            "ai_route": "COMMERCE_FLOW",
+            "skill": commerce_result.state.last_agent_action,
+            "intent": commerce_result.state.last_intent,
+            "confidence": 1.0,
+            "is_multi_intent": False,
+            "conversation_state": commerce_result.state.to_dict(),
+        }
+        order_cards = _extract_order_cards(commerce_result.tool_results)
+        if order_cards:
+            metadata["order_cards"] = order_cards
+        logger.info(
+            "商品订单状态机已处理：conversation_id=%s stage=%s intent=%s action=%s content_len=%s",
+            conversation.id,
+            commerce_result.state.stage.value,
+            commerce_result.state.last_intent,
+            commerce_result.state.last_agent_action,
+            len(commerce_result.text),
+        )
+        await _create_deliver_and_broadcast_reply_message(
+            db,
+            conversation,
+            commerce_result.text.strip(),
+            sender_type="AI",
+            metadata=metadata,
+        )
+        return
+
+    # ── 10: 意图识别流水线 ──
     result = await IntentRecognitionPipeline().recognize_and_route(
         customer_message.content or "",
         tenant_id=conversation.tenant_id,
         pending_state=pending_state,
     )
 
-    # ── 10: 路由分发 → Handler ──
+    # ── 11: 路由分发 → Handler ──
     router = MessageRouter()
     handler = router.resolve(result)
 
-    # ── 11: Silent → 直接返回 ──
+    # ── 12: Silent → 直接返回 ──
     if handler.reply_sender_type is None:
         return
 
-    # ── 12: 清理 PendingState ──
+    # ── 13: 清理 PendingState ──
     if handler.clear_pending_state:
         await pending_store.delete(conversation.tenant_id, conversation.id)
 
-    # ── 13: 转人工 ──
+    # ── 14: 转人工 ──
     if handler.transfer_to_human:
         await _mark_pending_human(db, conversation, result.reason or result.primary_intent or "需要人工处理")
 
-    # ── 14: 首次 AI 问候 ──
+    # ── 15: 首次 AI 问候 ──
     if handler.send_ai_greeting and "ai_greeting_sent" not in (conversation.tags or []):
         from app.ai.tenant_config import get_ai_greeting
         greeting = await get_ai_greeting(db, conversation.tenant_id)
@@ -199,18 +247,7 @@ async def process_customer_message_with_ai(
         )
         conversation.tags = (conversation.tags or []) + ["ai_greeting_sent"]
 
-    # ── 15: 构建 AgentContext ──
-    # AGENT 路由需要完整 db session 供 Skill 函数使用；
-    # GENERAL_REPLY 只需要 tenant_id（用于 RAG 知识库检索）
-    agent_ctx = AgentContext(
-        db=db,
-        tenant_id=conversation.tenant_id,
-        conversation_id=conversation.id,
-        contact_id=conversation.contact_id,
-        pending_state=pending_state,
-    )
-
-    # ── 17: 流式渲染 AI 回复 ──
+    # ── 16: 流式渲染 AI 回复 ──
     if handler.show_typing:
         await _publish_typing(conversation, True)
 
@@ -391,7 +428,7 @@ async def _publish_typing(conversation: Conversation, typing: bool) -> None:
 def _extract_order_cards(tool_results: list[dict]) -> list[dict] | None:
     """从 tool_results 中提取订单卡片数据。"""
     cards: list[dict] = []
-    order_skills = {"create_order", "confirm_order", "manage_order"}
+    order_skills = {"create_order", "create_order_draft", "update_order_draft", "confirm_order", "manage_order"}
     for r in tool_results:
         if r.get("skill_name") in order_skills and r.get("ok"):
             result_data = r.get("result")
