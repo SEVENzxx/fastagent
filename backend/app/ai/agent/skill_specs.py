@@ -95,6 +95,16 @@ class UpdateOrderDraftArgs(SkillArgs):
     product_name: str | None = None
 
 
+class UpdateDraftOrderQuantityArgs(SkillArgs):
+    """修改订单草稿数量：支持设置固定数量或按当前数量增减。"""
+    query: str | None = None
+    customer_text: str | None = None
+    order_id: int | None = None
+    quantity: int | None = Field(default=None, ge=1)
+    quantity_delta: int | None = None
+    product_name: str | None = None
+
+
 class ConfirmOrderArgs(SkillArgs):
     """确认订单：锁定订单前二次确认。"""
     query: str | None = None
@@ -207,6 +217,11 @@ SKILL_SPECS: dict[str, SkillSpec] = {
         required_args=("order_id",),
         risk_level="write_confirm",
         missing_prompts={"order_id": "请提供要修改的订单号。"},
+    ),
+    "update_draft_order_quantity": SkillSpec(
+        name="update_draft_order_quantity",
+        args_model=UpdateDraftOrderQuantityArgs,
+        risk_level="write_confirm",
     ),
     "confirm_order": SkillSpec(
         name="confirm_order",

@@ -473,7 +473,14 @@ async def _publish_typing(conversation: Conversation, typing: bool) -> None:
 def _extract_order_cards(tool_results: list[dict]) -> list[dict] | None:
     """从 tool_results 中提取订单卡片数据。"""
     cards: list[dict] = []
-    order_skills = {"create_order", "create_order_draft", "update_order_draft", "confirm_order", "manage_order"}
+    order_skills = {
+        "create_order",
+        "create_order_draft",
+        "update_order_draft",
+        "update_draft_order_quantity",
+        "confirm_order",
+        "manage_order",
+    }
     for r in tool_results:
         if r.get("skill_name") in order_skills and r.get("ok"):
             result_data = r.get("result")

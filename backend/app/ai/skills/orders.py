@@ -500,6 +500,80 @@ async def update_order_draft(
     )
 
 
+async def update_draft_order_quantity(
+    *,
+    tenant_id: int,
+    contact_id: int | None = None,
+    db: AsyncSession,
+    **kwargs,
+) -> ToolResult:
+    """修改当前订单草稿中的商品数量，并同步重算明细小计和订单金额。"""
+    _ = contact_id
+    order_id = kwargs.get("order_id")
+    if order_id is None:
+        return ToolResult(ok=False, skill_name="update_draft_order_quantity", error="缺少订单号。")
+    try:
+        order_id = int(order_id)
+    except (TypeError, ValueError):
+        return ToolResult(ok=False, skill_name="update_draft_order_quantity", error=f"无效订单号：{order_id}")
+
+    quantity = kwargs.get("quantity")
+    quantity_delta = kwargs.get("quantity_delta")
+    if quantity is None and quantity_delta is None:
+        return ToolResult(ok=False, skill_name="update_draft_order_quantity", error="请提供要修改的数量。")
+
+    order = await order_service.get_order(db, order_id, tenant_id)
+    if order is None:
+        return ToolResult(ok=False, skill_name="update_draft_order_quantity", error=f"未找到订单 #{order_id}。")
+    if order.status not in {"draft", "pending_customer_confirm"}:
+        return ToolResult(
+            ok=False,
+            skill_name="update_draft_order_quantity",
+            error=f"订单 #{order_id} 当前状态为「{_status_label(order.status)}」，不能由智能客服修改数量。",
+        )
+
+    product_name = str(kwargs.get("product_name") or "").strip() or None
+    item = _find_order_item_for_quantity(order, product_name)
+    if item is None:
+        return ToolResult(ok=False, skill_name="update_draft_order_quantity", error="订单没有可修改的商品明细。")
+
+    before_quantity = int(item.quantity or 1)
+    if quantity_delta is not None:
+        after_quantity = max(before_quantity + int(quantity_delta), 1)
+    else:
+        after_quantity = max(int(quantity), 1)
+
+    item.quantity = after_quantity
+    item.subtotal = round(float(item.unit_price) * item.quantity, 2)
+    order.total_amount = round(sum(float(it.subtotal) for it in order.items), 2)
+    order.payable_amount = round(order.total_amount - float(order.discount_amount), 2)
+    metadata = dict(order.metadata_ or {})
+    metadata["missing_info"] = _detect_missing_info_from_order(order)
+    order.metadata_ = metadata
+    await db.commit()
+    await db.refresh(order)
+
+    payload = _order_payload(order)
+    updated_item = _find_payload_item(payload["items"], item.id)
+    logger.info(
+        "Skill update_draft_order_quantity 成功：order_id=%s tenant_id=%s before_quantity=%s after_quantity=%s total=%.2f",
+        order.id,
+        tenant_id,
+        before_quantity,
+        after_quantity,
+        payload["payable_amount"],
+    )
+    return ToolResult(
+        ok=True,
+        skill_name="update_draft_order_quantity",
+        result=payload | {
+            "previous_quantity": before_quantity,
+            "new_quantity": after_quantity,
+            "message": _build_quantity_update_message(updated_item or payload["items"][0], payload["payable_amount"]),
+        },
+    )
+
+
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
@@ -628,6 +702,26 @@ async def _update_first_order_item(
     return order
 
 
+def _find_order_item_for_quantity(order: Order, product_name: str | None):
+    items = list(order.items or [])
+    if not items:
+        return None
+    if not product_name:
+        return items[0]
+    return next(
+        (
+            item for item in items
+            if item.product_snapshot
+            and str(item.product_snapshot.get("product_name") or "") == product_name
+        ),
+        items[0],
+    )
+
+
+def _find_payload_item(items: list[dict], item_id: int | None) -> dict | None:
+    return next((item for item in items if str(item.get("id")) == str(item_id)), None)
+
+
 def _order_payload(order: Order) -> dict:
     items = [
         {
@@ -662,6 +756,15 @@ def _detect_missing_info_from_order(order: Order) -> list[str]:
     if not order.receiver_phone:
         missing.append("phone")
     return missing
+
+
+def _build_quantity_update_message(item: dict, payable: float) -> str:
+    product_name = str(item.get("product_name") or "商品")
+    quantity = int(item.get("quantity") or 1)
+    return "\n".join([
+        f"已修改数量：已帮您把 {product_name} 修改为 {quantity} 个。",
+        f"应付金额：¥{payable:.2f}",
+    ])
 
 
 def _format_order_message(order: Order, items: list[dict]) -> str:

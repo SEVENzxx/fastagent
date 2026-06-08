@@ -217,6 +217,17 @@ def _extract_quantity(text: str) -> int:
     return 1
 
 
+def _extract_quantity_delta(text: str) -> int | None:
+    """抽取数量增减意图：再来/多买为正，少/减为负。"""
+    increment_words = ("再来", "再加", "多买", "加一个", "加一件", "加1个", "加1件")
+    decrement_words = ("少一个", "少一件", "少1个", "少1件", "减一个", "减一件", "减1个", "减1件")
+    if any(word in text for word in increment_words):
+        return _extract_quantity(text)
+    if any(word in text for word in decrement_words):
+        return -_extract_quantity(text)
+    return None
+
+
 def _has_quantity(text: str) -> bool:
     return QUANTITY_PATTERN.search(text) is not None or CHINESE_QUANTITY_PATTERN.search(text) is not None
 
@@ -333,6 +344,12 @@ def _build_extractor_registry() -> None:
             "receiver_phone": _extract_phone,
             "shipping_address": _extract_address,
             "quantity": _extract_quantity,
+            "product_name": _extract_product_phrase,
+        },
+        "update_draft_order_quantity": {
+            "order_id": _extract_order_id,
+            "quantity": _extract_quantity,
+            "quantity_delta": _extract_quantity_delta,
             "product_name": _extract_product_phrase,
         },
     })

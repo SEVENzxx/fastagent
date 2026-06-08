@@ -19,7 +19,13 @@ from sqlalchemy import select
 
 from app.ai.agent.types import AgentContext, ToolResult
 from app.ai.memory.conversation_state import ConversationCommerceState, ConversationStage
-from app.ai.skills.orders import cancel_order_draft, confirm_order, create_order_draft, update_order_draft
+from app.ai.skills.orders import (
+    cancel_order_draft,
+    confirm_order,
+    create_order_draft,
+    update_draft_order_quantity,
+    update_order_draft,
+)
 from app.ai.skills.products import get_product_detail, list_product_categories, search_products
 from app.models.category import Category
 from app.models.product import Product
@@ -40,6 +46,8 @@ BUY_WORDS = ("我要买", "帮我下单", "买一个", "买一", "买个", "确�
 CONFIRM_WORDS = ("确认下单", "确认", "没问题", "可以", "就这样", "就这么定")
 CANCEL_WORDS = ("取消", "取消订单", "不买了", "我不想买了", "不要了", "算了", "退出", "放弃", "先不买")
 MODIFY_WORDS = ("改地址", "修改地址", "换地址", "改数量", "修改数量", "换成", "改成")
+INCREMENT_QUANTITY_WORDS = ("再来", "再加", "多买", "加一个", "加一件", "加1个", "加1件")
+DECREMENT_QUANTITY_WORDS = ("少一个", "少一件", "少1个", "少1件", "减一个", "减一件", "减1个", "减1件")
 OVERVIEW_WORDS = ("公司有什么产品", "你们有什么产品", "有什么产品", "产品有哪些", "卖什么")
 DETAIL_WORDS = ("怎么卖", "多少钱", "价格", "有货", "库存", "介绍一下")
 ADDRESS_HINTS = ("地址", "收货", "寄到", "送到", "发到")
@@ -58,6 +66,13 @@ class CommerceFlowResult:
     text: str
     state: ConversationCommerceState
     tool_results: list[dict[str, Any]]
+
+
+@dataclass(frozen=True, slots=True)
+class QuantityUpdateIntent:
+    """草稿订单数量修改意图。quantity 是设置值，quantity_delta 是增减值。"""
+    quantity: int | None = None
+    quantity_delta: int | None = None
 
 
 # ═══════════════════════════ 主入口 ═══════════════════════════
@@ -229,9 +244,24 @@ async def _handle_pending_order_message(
 ) -> CommerceFlowResult:
     """处理已有订单草稿后的后续消息：取消、补信息、修改或确认。"""
     previous = state.stage
+    quantity_update = _extract_quantity_update_intent(text)
+
+    logger.info(
+        "[commerce] pending_order_action tenant=%s conversation=%s order_id=%s stage=%s action=%s quantity=%s quantity_delta=%s",
+        ctx.tenant_id,
+        ctx.conversation_id,
+        state.pending_order_id,
+        state.stage.value,
+        "cancel" if _contains_any(text, CANCEL_WORDS) else "quantity_update" if quantity_update else "pending_info_or_confirm",
+        quantity_update.quantity if quantity_update else None,
+        quantity_update.quantity_delta if quantity_update else None,
+    )
 
     if _contains_any(text, CANCEL_WORDS):
         return await _handle_order_cancel(ctx, text, state)
+
+    if quantity_update is not None:
+        return await _handle_order_quantity_update(ctx, text, state, quantity_update)
 
     if state.stage == ConversationStage.ORDER_PENDING_CONFIRM:
         if _contains_any(text, CONFIRM_WORDS):
@@ -259,6 +289,35 @@ async def _handle_pending_order_message(
     if _contains_any(text, CONFIRM_WORDS):
         return await _handle_order_confirm(ctx, text, state)
     return await _handle_order_update(ctx, text, state, require_slot=True)
+
+
+async def _handle_order_quantity_update(
+    ctx: AgentContext,
+    text: str,
+    state: ConversationCommerceState,
+    quantity_update: QuantityUpdateIntent,
+) -> CommerceFlowResult:
+    """更新当前草稿订单的商品数量，不受地址/电话缺失影响。"""
+    _ = text
+    previous = state.stage
+    if not state.pending_order_id:
+        return CommerceFlowResult("请先确认要修改的订单。", state, [])
+
+    result = await _call_tool(
+        "update_draft_order_quantity",
+        update_draft_order_quantity,
+        ctx,
+        order_id=state.pending_order_id,
+        quantity=quantity_update.quantity,
+        quantity_delta=quantity_update.quantity_delta,
+    )
+    payload = result.result if isinstance(result.result, dict) else {}
+    state.last_intent = "order_quantity_update"
+    state.missing_slots = [str(slot) for slot in payload.get("missing_info", state.missing_slots)]
+    state.stage = ConversationStage.ORDER_PENDING_INFO if state.missing_slots else ConversationStage.ORDER_PENDING_CONFIRM
+    state.last_agent_action = "update_draft_order_quantity"
+    _log_transition(ctx, previous, state)
+    return CommerceFlowResult(_render_order_next_step(payload), state, [_tool_dict(result)])
 
 
 async def _handle_order_update(
@@ -515,6 +574,18 @@ def _extract_quantity(text: str) -> int | None:
     return None
 
 
+def _extract_quantity_update_intent(text: str) -> QuantityUpdateIntent | None:
+    """识别草稿订单数量修改：设置为固定数量，或在当前数量上增减。"""
+    quantity = _extract_quantity(text)
+    if _contains_any(text, INCREMENT_QUANTITY_WORDS):
+        return QuantityUpdateIntent(quantity_delta=quantity or 1)
+    if _contains_any(text, DECREMENT_QUANTITY_WORDS):
+        return QuantityUpdateIntent(quantity_delta=-(quantity or 1))
+    if quantity is not None and _looks_like_quantity_update(text):
+        return QuantityUpdateIntent(quantity=quantity)
+    return None
+
+
 # ═══════════════════════════ 判断辅助 ═══════════════════════════
 
 def _is_create_order_intent(text: str) -> bool:
@@ -540,6 +611,18 @@ def _contains_any(text: str, words: tuple[str, ...]) -> bool:
 def _has_order_update_content(text: str) -> bool:
     """判断文本是否包含可用于更新订单草稿的信息。"""
     return bool(_extract_order_slots(text) or _extract_quantity(text) is not None)
+
+
+def _looks_like_quantity_update(text: str) -> bool:
+    """判断带数量的短句是否是在修改当前草稿数量。"""
+    quantity_words = ("数量", "改成", "改为", "要", "买", "来", "订", "拍")
+    units = ("个", "件", "台", "部", "盒", "瓶", "箱", "包", "袋", "份", "套")
+    if any(word in text for word in quantity_words):
+        return True
+    if any(unit in text for unit in units):
+        return True
+    # “两个摄像头”这类表达可能只有量词 + 商品名，进入草稿态时优先视为修改数量。
+    return any(f"{char}个" in text or f"{char}件" in text for char in CHINESE_QUANTITIES)
 
 
 def _ordinal_from_text(text: str) -> int | None:
@@ -590,7 +673,13 @@ async def _call_tool(
     **kwargs: Any,
 ) -> ToolResult:
     """调用一个 Agent 技能并记录日志。"""
-    logger.info("[commerce] tool_call name=%s tenant=%s conversation=%s args=%s", name, ctx.tenant_id, ctx.conversation_id, kwargs)
+    logger.info(
+        "[commerce] tool_call name=%s tenant=%s conversation=%s args=%s",
+        name,
+        ctx.tenant_id,
+        ctx.conversation_id,
+        _safe_tool_args(kwargs),
+    )
     result = await func(tenant_id=ctx.tenant_id, contact_id=ctx.contact_id, db=ctx.db, **kwargs)
     logger.info("[commerce] tool_result name=%s ok=%s error=%s", name, result.ok, result.error)
     return result
@@ -618,6 +707,19 @@ def _log_transition(
 def _tool_dict(result: ToolResult) -> dict[str, Any]:
     """将 ToolResult 转为结构化字典。"""
     return {"skill_name": result.skill_name, "ok": result.ok, "result": result.result, "error": result.error}
+
+
+def _safe_tool_args(kwargs: dict[str, Any]) -> dict[str, Any]:
+    """日志参数脱敏：不记录完整手机号、地址、收货人。"""
+    safe = dict(kwargs)
+    if safe.get("receiver_phone"):
+        phone = str(safe["receiver_phone"])
+        safe["receiver_phone"] = phone[:3] + "****" + phone[-4:] if len(phone) >= 7 else "***"
+    if safe.get("shipping_address"):
+        safe["shipping_address"] = "<redacted>"
+    if safe.get("receiver_name"):
+        safe["receiver_name"] = "<redacted>"
+    return safe
 
 
 # ═══════════════════════════ 回复模板 ═══════════════════════════
