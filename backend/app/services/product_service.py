@@ -191,11 +191,12 @@ async def attach_category_names(db: AsyncSession, products: list[Product]) -> No
         product._category_name = category_map.get(product.category_id)
 
 
-def _product_search_text(product: Product) -> str:
+def _product_search_text(product: Product, category_path: str | None = None) -> str:
     specs = json.dumps(product.specs, ensure_ascii=False, sort_keys=True) if product.specs else ""
     return "\n".join(
         part
         for part in [
+            category_path,  # 完整分类路径优先（如"电子产品/手机/智能手机"）
             product.name,
             product.sku or "",
             product.description or "",
@@ -205,17 +206,44 @@ def _product_search_text(product: Product) -> str:
     )
 
 
-async def _index_product(product: Product) -> None:
+async def _resolve_category_path(db: AsyncSession, category_id: int | None, provided_path: str | None) -> str | None:
+    """从 category_id 逆向构建完整分类路径，作为前端未传 category_path 时的后备"""
+    if provided_path:
+        return provided_path
+    if category_id is None:
+        return None
+
+    result = await db.execute(
+        select(Category.id, Category.name, Category.parent_id).where(Category.id == category_id)
+    )
+    row = result.one_or_none()
+    if row is None:
+        return None
+
+    names = [row.name]
+    parent_id = row.parent_id
+    while parent_id is not None:
+        parent = await db.get(Category, parent_id)
+        if parent is None:
+            break
+        names.append(parent.name)
+        parent_id = parent.parent_id
+
+    return "/".join(reversed(names))
+
+
+async def _index_product(product: Product, category_path: str | None = None) -> None:
     point_id = await _vector_search.upsert_text(
         domain=VectorDomain.PRODUCT,
         tenant_id=product.tenant_id,
         business_id=product.id,
-        text=_product_search_text(product),
+        text=_product_search_text(product, category_path),
         payload={
             "product_id": str(product.id),
             "name": product.name,
             "sku": product.sku,
             "category_id": str(product.category_id) if product.category_id is not None else None,
+            "category_path": category_path,  # 完整分类路径，用于向量语义匹配
             "is_active": product.is_active,
             "is_sample": product.is_sample,
             "price": float(product.price) if product.price is not None else None,
@@ -266,9 +294,11 @@ async def create_product(
         specs=body.specs,
         is_active=body.is_active,
     )
+    # 解析完整分类路径（前端传入优先，否则从 DB 逆向构建）
+    category_path = await _resolve_category_path(db, body.category_id, body.category_path)
     db.add(product)
     await db.flush()
-    await _index_product(product)
+    await _index_product(product, category_path)
     await db.commit()
     await db.refresh(product)
     await attach_category_names(db, [product])
@@ -315,8 +345,10 @@ async def update_product(
     for key, value in data.items():
         setattr(product, key, value)
 
+    # 解析完整分类路径（前端传入优先，否则从 DB 逆向构建）
+    category_path = await _resolve_category_path(db, data.get("category_id", product.category_id), data.get("category_path"))
     product.updated_at = datetime.now(timezone.utc)
-    await _index_product(product)
+    await _index_product(product, category_path)
     await db.commit()
     await db.refresh(product)
     await attach_category_names(db, [product])
@@ -485,10 +517,16 @@ async def import_products_csv(
             row_errors.append(ProductImportError(row=index, field="商品名称", message="商品名称不能超过300个字符"))
 
         category_id: int | None = None
+        category_path: str | None = None  # CSV 导入时的完整分类路径，用于向量索引
         try:
             category_id = await _resolve_import_category(row, categories_by_id, category_paths)
         except ValueError as exc:
             row_errors.append(ProductImportError(row=index, field="分类", message=str(exc)))
+        # 如果 CSV 有"分类路径"列，归一化后保留用于向量索引
+        if not row_errors:
+            raw_path = row.get("category_path", "")
+            if raw_path:
+                category_path = "/".join(part.strip() for part in raw_path.split("/") if part.strip())
 
         sku = row.get("sku", "").strip() or None
         if sku and len(sku) > 100:
@@ -558,6 +596,7 @@ async def import_products_csv(
                 {
                     "name": name,
                     "category_id": category_id,
+                    "category_path": category_path,  # 完整分类路径，用于向量索引
                     "description": row.get("description", "").strip() or None,
                     "price": price,
                     "floor_price": floor_price,
@@ -616,13 +655,16 @@ async def import_products_csv(
             errors=errors,
         )
 
+    indexed_paths: list[str | None] = []
     for _, payload, sku, _ in import_rows:
+        category_path = payload.pop("category_path", None)  # category_path 不存 DB，只用于向量索引
+        indexed_paths.append(category_path)
         products_to_create.append(Product(tenant_id=tenant_id, sku=sku, **payload))
 
     db.add_all(products_to_create)
     await db.flush()
-    for product in products_to_create:
-        await _index_product(product)
+    for product, category_path in zip(products_to_create, indexed_paths):
+        await _index_product(product, category_path)
     await db.commit()
     return ProductImportResponse(
         success=True,

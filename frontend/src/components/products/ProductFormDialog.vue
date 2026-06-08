@@ -18,6 +18,19 @@ const emit = defineEmits<{
 const formRef = ref()
 const submitting = ref(false)
 
+// 从分类树中根据 id 递归查找完整路径（如"电子产品/手机/智能手机"）
+function findCategoryPath(tree: CategoryTreeResponse[] | undefined, id: string | null): string {
+  if (!tree || !id) return ''
+  for (const node of tree) {
+    if (node.id === id) return node.name
+    if (node.children?.length) {
+      const childPath = findCategoryPath(node.children, id)
+      if (childPath) return `${node.name}/${childPath}`
+    }
+  }
+  return ''
+}
+
 const form = reactive({
   name: '',
   categoryId: null as string | null,
@@ -100,9 +113,12 @@ async function handleSubmit() {
   }
 
   submitting.value = true
+  // 从分类树中计算完整路径，用于向量索引匹配
+  const categoryPath = findCategoryPath(props.categories, form.categoryId)
   emit('submit', {
     name: form.name.trim(),
     categoryId: form.categoryId || undefined,
+    categoryPath: categoryPath || undefined,
     sku: form.sku.trim() || undefined,
     description: form.description.trim() || undefined,
     price: form.price,

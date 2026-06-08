@@ -11,6 +11,7 @@ class ProductCreate(CamelModel):
 
     name: str
     category_id: int | None = None
+    category_path: str | None = None  # 完整分类路径（如"电子产品/手机/智能手机"），用于向量索引
     sku: str | None = None
     description: str | None = None
     price: float | None = None
@@ -34,6 +35,7 @@ class ProductUpdate(CamelModel):
 
     name: str | None = None
     category_id: int | None = None
+    category_path: str | None = None  # 完整分类路径，用于向量索引
     sku: str | None = None
     description: str | None = None
     price: float | None = None

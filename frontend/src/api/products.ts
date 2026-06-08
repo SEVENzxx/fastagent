@@ -29,6 +29,7 @@ export interface ProductListResponse {
 export interface ProductCreate {
   name: string
   categoryId?: string | number | null
+  categoryPath?: string | null
   sku?: string | null
   description?: string | null
   price?: number | null
@@ -43,6 +44,7 @@ export interface ProductCreate {
 export interface ProductUpdate {
   name?: string | null
   categoryId?: string | number | null
+  categoryPath?: string | null
   sku?: string | null
   description?: string | null
   price?: number | null
