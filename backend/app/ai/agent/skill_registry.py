@@ -12,7 +12,7 @@ from typing import Any
 
 from app.ai.skills.memory import remember_info
 from app.ai.skills.operations import list_documents, manage_todos, update_price_strategy
-from app.ai.skills.orders import confirm_order, create_order, create_order_draft, manage_order, update_order_draft
+from app.ai.skills.orders import cancel_order_draft, confirm_order, create_order, create_order_draft, manage_order, update_order_draft
 from app.ai.skills.products import get_product_detail, list_product_categories, search_products
 from app.ai.skills.store import get_store_showcase
 
@@ -28,6 +28,7 @@ SKILL_REGISTRY: dict[str, Callable[..., Any]] = {
     "create_order": create_order,
     "create_order_draft": create_order_draft,
     "update_order_draft": update_order_draft,
+    "cancel_order_draft": cancel_order_draft,
     "confirm_order": confirm_order,
     "manage_order": manage_order,
     "update_price_strategy": update_price_strategy,

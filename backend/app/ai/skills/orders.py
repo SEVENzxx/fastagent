@@ -306,6 +306,61 @@ async def confirm_order(
         )
 
 
+async def cancel_order_draft(
+    *,
+    tenant_id: int,
+    contact_id: int | None = None,
+    db: AsyncSession,
+    **kwargs,
+) -> ToolResult:
+    """取消当前订单草稿或待客户确认订单。"""
+    _ = contact_id
+    order_id = kwargs.get("order_id")
+    if order_id is None:
+        return ToolResult(ok=False, skill_name="cancel_order_draft", error="缺少订单号。")
+    try:
+        order_id = int(order_id)
+    except (TypeError, ValueError):
+        return ToolResult(ok=False, skill_name="cancel_order_draft", error=f"无效订单号：{order_id}")
+
+    order = await order_service.get_order(db, order_id, tenant_id)
+    if order is None:
+        return ToolResult(ok=False, skill_name="cancel_order_draft", error=f"未找到订单 #{order_id}。")
+    if order.status == "cancelled":
+        return ToolResult(
+            ok=True,
+            skill_name="cancel_order_draft",
+            result={
+                "order_id": str(order.id),
+                "status": order.status,
+                "status_label": _status_label(order.status),
+                "message": "已取消当前订单。如需继续了解商品或重新下单，可以随时告诉我。",
+            },
+        )
+
+    try:
+        order = await order_service.transition_order_status(db, order_id, tenant_id, "cancelled")
+    except ValueError as exc:
+        return ToolResult(ok=False, skill_name="cancel_order_draft", error=str(exc))
+
+    logger.info(
+        "Skill cancel_order_draft 成功：order_id=%s tenant_id=%s new_status=%s",
+        order_id,
+        tenant_id,
+        order.status if order else None,
+    )
+    return ToolResult(
+        ok=True,
+        skill_name="cancel_order_draft",
+        result={
+            "order_id": str(order.id),
+            "status": order.status,
+            "status_label": _status_label(order.status),
+            "message": "已取消当前订单。如需继续了解商品或重新下单，可以随时告诉我。",
+        },
+    )
+
+
 async def manage_order(
     *,
     tenant_id: int,

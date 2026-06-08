@@ -16,6 +16,7 @@ from app.ai.agent.argument_pending import build_pending_state_from_tool_result
 from app.ai.agent.types import AgentContext
 from app.ai.commerce_flow import handle_commerce_flow
 from app.ai.memory.conversation_state import ConversationStateStore
+from app.ai.memory.message_buffer import ConversationMessageBuffer
 from app.ai.memory.pending_state import PendingStateStore
 from app.ai.classifier.pipeline import IntentRecognitionPipeline
 from app.ai.router.message_router import MessageRouter, RenderResult
@@ -145,168 +146,212 @@ async def process_customer_message_with_ai(
     if customer_message.sender_type != Conversation.SENDER_CUSTOMER or customer_message.content_type != "text":
         return
 
+    # ── 7: 同会话快速消息缓冲 + 串行锁 ──
+    # 客户常把一个意图拆成多条短消息。这里先按 conversation 聚合短窗口内的文本，
+    # 并通过 Redis lock 保证同一会话同一时间只有一个 AI 任务处理状态。
+    customer_text = (customer_message.content or "").strip()
+    message_buffer: ConversationMessageBuffer | None = ConversationMessageBuffer()
+    try:
+        batch = await message_buffer.wait_for_batch(
+            tenant_id=conversation.tenant_id,
+            conversation_id=conversation.id,
+            message_id=customer_message.id,
+            text=customer_text,
+        )
+    except Exception as exc:
+        logger.warning(
+            "AI 消息缓冲失败，降级为单条消息处理：conversation_id=%s message_id=%s error=%s",
+            conversation.id,
+            customer_message.id,
+            exc,
+        )
+        batch = None
+        message_buffer = None
+
+    if message_buffer is not None and batch is None:
+        return
+    if batch is not None:
+        customer_text = batch.text.strip()
+        if not customer_text:
+            if message_buffer is not None:
+                await message_buffer.release_lock(conversation.tenant_id, conversation.id)
+            return
+        logger.info(
+            "AI 消息缓冲批次就绪：conversation_id=%s count=%s message_ids=%s text_len=%s",
+            conversation.id,
+            batch.message_count,
+            batch.message_ids,
+            len(customer_text),
+        )
+
     # ═══════════════════════ 主管线 ═══════════════════════
 
-    # ── 7: 绑定计量上下文 ──
-    bind_usage_context(
-        tenant_id=conversation.tenant_id,
-        conversation_id=conversation.id,
-        message_id=customer_message.id,
-    )
-
-    # ── 8: 读取 PendingState（多轮槽位补全）──
-    pending_store = PendingStateStore()
-    pending_state = await pending_store.get(conversation.tenant_id, conversation.id)
-    if pending_state is not None:
-        logger.info(
-            "读取到 AI 待补槽状态：tenant_id=%s conversation_id=%s intent=%s required_entities=%s",
-            conversation.tenant_id,
-            conversation.id,
-            pending_state.intent,
-            pending_state.required_entities,
+    try:
+        # ── 8: 绑定计量上下文 ──
+        bind_usage_context(
+            tenant_id=conversation.tenant_id,
+            conversation_id=conversation.id,
+            message_id=customer_message.id,
         )
 
-    # ── 9: 商品咨询/订单草稿多轮状态机优先处理 ──
-    # 必须在通用意图识别之前执行，否则“确认”等短句可能先被 SILENT 规则吞掉。
-    agent_ctx = AgentContext(
-        db=db,
-        tenant_id=conversation.tenant_id,
-        conversation_id=conversation.id,
-        contact_id=conversation.contact_id,
-        pending_state=pending_state,
-    )
-    commerce_store = ConversationStateStore()
-    commerce_state = await commerce_store.get(conversation.tenant_id, conversation.id)
-    commerce_result = await handle_commerce_flow(
-        agent_ctx,
-        customer_message.content or "",
-        commerce_state,
-    )
-    if commerce_result is not None:
-        await commerce_store.set(conversation.tenant_id, conversation.id, commerce_result.state)
-        metadata = {
-            "ai_route": "COMMERCE_FLOW",
-            "skill": commerce_result.state.last_agent_action,
-            "intent": commerce_result.state.last_intent,
-            "confidence": 1.0,
-            "is_multi_intent": False,
-            "conversation_state": commerce_result.state.to_dict(),
+        # ── 9: 读取 PendingState（多轮槽位补全）──
+        pending_store = PendingStateStore()
+        pending_state = await pending_store.get(conversation.tenant_id, conversation.id)
+        if pending_state is not None:
+            logger.info(
+                "读取到 AI 待补槽状态：tenant_id=%s conversation_id=%s intent=%s required_entities=%s",
+                conversation.tenant_id,
+                conversation.id,
+                pending_state.intent,
+                pending_state.required_entities,
+            )
+
+        # ── 10: 商品咨询/订单草稿多轮状态机优先处理 ──
+        # 必须在通用意图识别之前执行，否则“确认”等短句可能先被 SILENT 规则吞掉。
+        agent_ctx = AgentContext(
+            db=db,
+            tenant_id=conversation.tenant_id,
+            conversation_id=conversation.id,
+            contact_id=conversation.contact_id,
+            pending_state=pending_state,
+        )
+        commerce_store = ConversationStateStore()
+        commerce_state = await commerce_store.get(conversation.tenant_id, conversation.id)
+        commerce_result = await handle_commerce_flow(
+            agent_ctx,
+            customer_text,
+            commerce_state,
+        )
+        if commerce_result is not None:
+            await commerce_store.set(conversation.tenant_id, conversation.id, commerce_result.state)
+            metadata = {
+                "ai_route": "COMMERCE_FLOW",
+                "skill": commerce_result.state.last_agent_action,
+                "intent": commerce_result.state.last_intent,
+                "confidence": 1.0,
+                "is_multi_intent": False,
+                "conversation_state": commerce_result.state.to_dict(),
+                "merged_customer_text": customer_text,
+            }
+            order_cards = _extract_order_cards(commerce_result.tool_results)
+            if order_cards:
+                metadata["order_cards"] = order_cards
+            logger.info(
+                "商品订单状态机已处理：conversation_id=%s stage=%s intent=%s action=%s content_len=%s",
+                conversation.id,
+                commerce_result.state.stage.value,
+                commerce_result.state.last_intent,
+                commerce_result.state.last_agent_action,
+                len(commerce_result.text),
+            )
+            await _create_deliver_and_broadcast_reply_message(
+                db,
+                conversation,
+                commerce_result.text.strip(),
+                sender_type="AI",
+                metadata=metadata,
+            )
+            return
+
+        # ── 11: 意图识别流水线 ──
+        result = await IntentRecognitionPipeline().recognize_and_route(
+            customer_text,
+            tenant_id=conversation.tenant_id,
+            pending_state=pending_state,
+        )
+
+        # ── 12: 路由分发 → Handler ──
+        router = MessageRouter()
+        handler = router.resolve(result)
+
+        # ── 13: Silent → 直接返回 ──
+        if handler.reply_sender_type is None:
+            return
+
+        # ── 14: 清理 PendingState ──
+        if handler.clear_pending_state:
+            await pending_store.delete(conversation.tenant_id, conversation.id)
+
+        # ── 15: 转人工 ──
+        if handler.transfer_to_human:
+            await _mark_pending_human(db, conversation, result.reason or result.primary_intent or "需要人工处理")
+
+        # ── 16: 首次 AI 问候 ──
+        if handler.send_ai_greeting and "ai_greeting_sent" not in (conversation.tags or []):
+            from app.ai.tenant_config import get_ai_greeting
+            greeting = await get_ai_greeting(db, conversation.tenant_id)
+            await _create_and_broadcast_system_message(
+                db,
+                conversation,
+                greeting,
+                metadata={"type": "ai_greeting"},
+            )
+            conversation.tags = (conversation.tags or []) + ["ai_greeting_sent"]
+
+        # ── 17: 流式渲染 AI 回复 ──
+        if handler.show_typing:
+            await _publish_typing(conversation, True)
+
+        dispatch_started = time.perf_counter()
+        try:
+            render_result = (
+                await router.render(
+                    result,
+                    handler=handler,
+                    agent_context=agent_ctx,
+                    on_chunk=lambda chunk: manager.publish(
+                        conversation.id,
+                        {"type": "ai.message.chunk", "content": chunk},
+                    ),
+                )
+            )
+            content = render_result.text.strip()
+        finally:
+            if handler.show_typing:
+                await _publish_typing(conversation, False)
+
+        logger.info(
+            "AI 回复生成完成：conversation_id=%s route=%s sender_type=%s content_len=%s elapsed_ms=%.0f",
+            conversation.id, result.route, handler.reply_sender_type,
+            len(content), (time.perf_counter() - dispatch_started) * 1000,
+        )
+
+        if not content:
+            return
+
+        # ── 18: 组装回复 metadata ──
+        metadata: dict = {
+            "ai_route": result.route,
+            "skill": result.skill,
+            "intent": result.primary_intent,
+            "confidence": result.confidence,
+            "is_multi_intent": result.is_multi_intent,
+            "merged_customer_text": customer_text,
         }
-        order_cards = _extract_order_cards(commerce_result.tool_results)
+        order_cards = _extract_order_cards(render_result.tool_results)
         if order_cards:
             metadata["order_cards"] = order_cards
-        logger.info(
-            "商品订单状态机已处理：conversation_id=%s stage=%s intent=%s action=%s content_len=%s",
-            conversation.id,
-            commerce_result.state.stage.value,
-            commerce_result.state.last_intent,
-            commerce_result.state.last_agent_action,
-            len(commerce_result.text),
+
+        pending_to_save = _build_pending_state_from_tool_results(
+            render_result.tool_results,
+            intent=result.primary_intent,
         )
+        if pending_to_save is not None:
+            await pending_store.set(conversation.tenant_id, conversation.id, pending_to_save)
+        elif pending_state is not None and _has_successful_agent_tool_result(render_result.tool_results):
+            await pending_store.delete(conversation.tenant_id, conversation.id)
+
+        # ── 19: 落库 + WebSocket 广播 + 渠道出站投递 ──
         await _create_deliver_and_broadcast_reply_message(
             db,
             conversation,
-            commerce_result.text.strip(),
-            sender_type="AI",
+            content,
+            sender_type=handler.reply_sender_type or "AI",
             metadata=metadata,
         )
-        return
-
-    # ── 10: 意图识别流水线 ──
-    result = await IntentRecognitionPipeline().recognize_and_route(
-        customer_message.content or "",
-        tenant_id=conversation.tenant_id,
-        pending_state=pending_state,
-    )
-
-    # ── 11: 路由分发 → Handler ──
-    router = MessageRouter()
-    handler = router.resolve(result)
-
-    # ── 12: Silent → 直接返回 ──
-    if handler.reply_sender_type is None:
-        return
-
-    # ── 13: 清理 PendingState ──
-    if handler.clear_pending_state:
-        await pending_store.delete(conversation.tenant_id, conversation.id)
-
-    # ── 14: 转人工 ──
-    if handler.transfer_to_human:
-        await _mark_pending_human(db, conversation, result.reason or result.primary_intent or "需要人工处理")
-
-    # ── 15: 首次 AI 问候 ──
-    if handler.send_ai_greeting and "ai_greeting_sent" not in (conversation.tags or []):
-        from app.ai.tenant_config import get_ai_greeting
-        greeting = await get_ai_greeting(db, conversation.tenant_id)
-        await _create_and_broadcast_system_message(
-            db,
-            conversation,
-            greeting,
-            metadata={"type": "ai_greeting"},
-        )
-        conversation.tags = (conversation.tags or []) + ["ai_greeting_sent"]
-
-    # ── 16: 流式渲染 AI 回复 ──
-    if handler.show_typing:
-        await _publish_typing(conversation, True)
-
-    dispatch_started = time.perf_counter()
-    try:
-        render_result = (
-            await router.render(
-                result,
-                handler=handler,
-                agent_context=agent_ctx,
-                on_chunk=lambda chunk: manager.publish(
-                    conversation.id,
-                    {"type": "ai.message.chunk", "content": chunk},
-                ),
-            )
-        )
-        content = render_result.text.strip()
     finally:
-        if handler.show_typing:
-            await _publish_typing(conversation, False)
-
-    logger.info(
-        "AI 回复生成完成：conversation_id=%s route=%s sender_type=%s content_len=%s elapsed_ms=%.0f",
-        conversation.id, result.route, handler.reply_sender_type,
-        len(content), (time.perf_counter() - dispatch_started) * 1000,
-    )
-
-    if not content:
-        return
-
-    # ── 18: 组装回复 metadata ──
-    metadata: dict = {
-        "ai_route": result.route,
-        "skill": result.skill,
-        "intent": result.primary_intent,
-        "confidence": result.confidence,
-        "is_multi_intent": result.is_multi_intent,
-    }
-    order_cards = _extract_order_cards(render_result.tool_results)
-    if order_cards:
-        metadata["order_cards"] = order_cards
-
-    pending_to_save = _build_pending_state_from_tool_results(
-        render_result.tool_results,
-        intent=result.primary_intent,
-    )
-    if pending_to_save is not None:
-        await pending_store.set(conversation.tenant_id, conversation.id, pending_to_save)
-    elif pending_state is not None and _has_successful_agent_tool_result(render_result.tool_results):
-        await pending_store.delete(conversation.tenant_id, conversation.id)
-
-    # ── 19: 落库 + WebSocket 广播 + 渠道出站投递 ──
-    await _create_deliver_and_broadcast_reply_message(
-        db,
-        conversation,
-        content,
-        sender_type=handler.reply_sender_type or "AI",
-        metadata=metadata,
-    )
+        if message_buffer is not None:
+            await message_buffer.release_lock(conversation.tenant_id, conversation.id)
 
 
 async def _mark_pending_human(db: AsyncSession, conversation: Conversation, reason: str) -> None:

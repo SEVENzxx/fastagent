@@ -19,7 +19,7 @@ from sqlalchemy import select
 
 from app.ai.agent.types import AgentContext, ToolResult
 from app.ai.memory.conversation_state import ConversationCommerceState, ConversationStage
-from app.ai.skills.orders import confirm_order, create_order_draft, update_order_draft
+from app.ai.skills.orders import cancel_order_draft, confirm_order, create_order_draft, update_order_draft
 from app.ai.skills.products import get_product_detail, list_product_categories, search_products
 from app.models.category import Category
 from app.models.product import Product
@@ -28,17 +28,28 @@ logger = logging.getLogger(__name__)
 
 # ── 正则与语义常量 ──
 PHONE_PATTERN = re.compile(r"(?<!\d)(1[3-9]\d{9})(?!\d)")       # 手机号
-QUANTITY_PATTERN = re.compile(r"(\d+)\s*(?:件|个|台|部|盒|瓶|箱|包|袋|份|套)?")  # 数量：数字+单位
+ARABIC_QUANTITY_PATTERNS = (
+    re.compile(r"(?:买|要|下单|来|订|拍|数量(?:改成|改为)?|改成)\s*(\d{1,2})\s*(?:件|个|台|部|盒|瓶|箱|包|袋|份|套)?"),
+    re.compile(r"(\d{1,2})\s*(?:件|个|台|部|盒|瓶|箱|包|袋|份|套)"),
+)
 CHINESE_QUANTITIES = {"一": 1, "二": 2, "两": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9, "十": 10}
+CHINESE_QUANTITY_PATTERN = re.compile(r"(?:买|要|下单|来|订|拍|数量(?:改成|改为)?|改成)?\s*(一|二|两|三|四|五|六|七|八|九|十)\s*(?:件|个|台|部|盒|瓶|箱|包|袋|份|套)?")
 
 # 关键词匹配元组（按语义分组，便于后续扩展）
 BUY_WORDS = ("我要买", "帮我下单", "买一个", "买一", "买个", "确认购买", "下单", "来一个", "订一个")
 CONFIRM_WORDS = ("确认下单", "确认", "没问题", "可以", "就这样", "就这么定")
+CANCEL_WORDS = ("取消", "取消订单", "不买了", "我不想买了", "不要了", "算了", "退出", "放弃", "先不买")
 MODIFY_WORDS = ("改地址", "修改地址", "换地址", "改数量", "修改数量", "换成", "改成")
 OVERVIEW_WORDS = ("公司有什么产品", "你们有什么产品", "有什么产品", "产品有哪些", "卖什么")
 DETAIL_WORDS = ("怎么卖", "多少钱", "价格", "有货", "库存", "介绍一下")
 ADDRESS_HINTS = ("地址", "收货", "寄到", "送到", "发到")
+ADDRESS_KEYWORDS = ("省", "市", "区", "县", "镇", "乡", "街道", "路", "号", "小区", "单元", "楼", "室", "村", "组")
 ORDINALS = {"第一个": 0, "第1个": 0, "1": 0, "第二个": 1, "第2个": 1, "2": 1, "第三个": 2, "第3个": 2, "3": 2}
+ORDER_STAGES = {
+    ConversationStage.ORDER_DRAFTING,
+    ConversationStage.ORDER_PENDING_INFO,
+    ConversationStage.ORDER_PENDING_CONFIRM,
+}
 
 
 @dataclass(slots=True)
@@ -80,19 +91,9 @@ async def handle_commerce_flow(
         text[:80],
     )
 
-    # ── 优先级 1：等待确认阶段，用户同意 → 提交订单 ──
-    if state.stage == ConversationStage.ORDER_PENDING_CONFIRM and _contains_any(text, CONFIRM_WORDS):
-        return await _handle_order_confirm(ctx, text, state)
-
-    # ── 优先级 2：等待确认阶段，用户要求修改 → 更新订单 ──
-    if state.stage == ConversationStage.ORDER_PENDING_CONFIRM and _contains_any(text, MODIFY_WORDS):
-        return await _handle_order_update(ctx, text, state, require_slot=False)
-
-    # ── 优先级 3：等待补信息 或 有未完成的订单号 → 补填收货信息 ──
-    if state.stage == ConversationStage.ORDER_PENDING_INFO or state.pending_order_id:
-        slots = _extract_order_slots(text)
-        if slots or state.stage == ConversationStage.ORDER_PENDING_INFO:
-            return await _handle_order_update(ctx, text, state, require_slot=True)
+    # ── 优先级 1：已有订单草稿时，先处理取消/确认/补槽/修改，避免普通意图误抢。──
+    if state.pending_order_id and state.stage in ORDER_STAGES:
+        return await _handle_pending_order_message(ctx, text, state)
 
     # ── 优先级 4：用户要求下单 → 创建订单 ──
     if _is_create_order_intent(text):
@@ -221,6 +222,45 @@ async def _handle_create_order(
     return CommerceFlowResult(_render_order_next_step(payload), state, [_tool_dict(result)])
 
 
+async def _handle_pending_order_message(
+    ctx: AgentContext,
+    text: str,
+    state: ConversationCommerceState,
+) -> CommerceFlowResult:
+    """处理已有订单草稿后的后续消息：取消、补信息、修改或确认。"""
+    previous = state.stage
+
+    if _contains_any(text, CANCEL_WORDS):
+        return await _handle_order_cancel(ctx, text, state)
+
+    if state.stage == ConversationStage.ORDER_PENDING_CONFIRM:
+        if _contains_any(text, CONFIRM_WORDS):
+            return await _handle_order_confirm(ctx, text, state)
+        if _contains_any(text, MODIFY_WORDS) or _has_order_update_content(text):
+            return await _handle_order_update(ctx, text, state, require_slot=False)
+
+        state.last_intent = "order_confirm_pending"
+        state.last_agent_action = "ask_order_confirm"
+        _log_transition(ctx, previous, state)
+        return CommerceFlowResult(
+            "请确认是否提交当前订单。确认请回复「确认下单」，需要调整请告诉我要修改的内容。",
+            state,
+            [],
+        )
+
+    if state.stage == ConversationStage.ORDER_PENDING_INFO:
+        if _contains_any(text, CONFIRM_WORDS):
+            state.last_intent = "confirm_order_missing_info"
+            state.last_agent_action = "ask_order_info"
+            _log_transition(ctx, previous, state)
+            return CommerceFlowResult(_missing_info_prompt(state.missing_slots), state, [])
+        return await _handle_order_update(ctx, text, state, require_slot=True)
+
+    if _contains_any(text, CONFIRM_WORDS):
+        return await _handle_order_confirm(ctx, text, state)
+    return await _handle_order_update(ctx, text, state, require_slot=True)
+
+
 async def _handle_order_update(
     ctx: AgentContext,
     text: str,
@@ -260,6 +300,33 @@ async def _handle_order_update(
     state.last_agent_action = "ask_order_info" if state.missing_slots else "ask_order_confirm"
     _log_transition(ctx, previous, state)
     return CommerceFlowResult(_render_order_next_step(payload), state, [_tool_dict(result)])
+
+
+async def _handle_order_cancel(
+    ctx: AgentContext,
+    text: str,
+    state: ConversationCommerceState,
+) -> CommerceFlowResult:
+    """取消当前订单草稿，并清理会话中的待确认订单状态。"""
+    _ = text
+    previous = state.stage
+    if not state.pending_order_id:
+        state.stage = ConversationStage.IDLE
+        state.last_intent = "cancel_order"
+        state.last_agent_action = "cancel_order_missing_order"
+        _log_transition(ctx, previous, state)
+        return CommerceFlowResult("当前没有待取消的订单。", state, [])
+
+    result = await _call_tool("cancel_order_draft", cancel_order_draft, ctx, order_id=state.pending_order_id)
+    state.last_intent = "cancel_order"
+    state.last_agent_action = "cancel_order_draft"
+    if result.ok:
+        state.stage = ConversationStage.IDLE
+        state.pending_order_id = None
+        state.missing_slots = []
+        state.selected_product = None
+    _log_transition(ctx, previous, state)
+    return CommerceFlowResult(_message_from_result(result), state, [_tool_dict(result)])
 
 
 async def _handle_order_confirm(
@@ -438,13 +505,14 @@ def _extract_quantity(text: str) -> int | None:
     for char, value in CHINESE_QUANTITIES.items():
         if f"{char}个" in text or f"{char}台" in text or f"{char}部" in text or f"{char}件" in text:
             return value
-    match = QUANTITY_PATTERN.search(text)
-    if not match:
-        return None
-    try:
-        return max(int(match.group(1)), 1)
-    except ValueError:
-        return None
+    for pattern in ARABIC_QUANTITY_PATTERNS:
+        match = pattern.search(text)
+        if match:
+            return max(int(match.group(1)), 1)
+    chinese_match = CHINESE_QUANTITY_PATTERN.search(text)
+    if chinese_match:
+        return CHINESE_QUANTITIES.get(chinese_match.group(1))
+    return None
 
 
 # ═══════════════════════════ 判断辅助 ═══════════════════════════
@@ -467,6 +535,11 @@ def _has_possible_product_text(text: str) -> bool:
 def _contains_any(text: str, words: tuple[str, ...]) -> bool:
     """检查文本是否包含任意一个关键词。"""
     return any(word in text for word in words)
+
+
+def _has_order_update_content(text: str) -> bool:
+    """判断文本是否包含可用于更新订单草稿的信息。"""
+    return bool(_extract_order_slots(text) or _extract_quantity(text) is not None)
 
 
 def _ordinal_from_text(text: str) -> int | None:

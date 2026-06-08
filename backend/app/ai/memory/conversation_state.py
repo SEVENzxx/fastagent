@@ -26,6 +26,7 @@ class ConversationStage(str, Enum):
     ORDER_DRAFTING = "ORDER_DRAFTING"       # 草拟订单
     ORDER_PENDING_INFO = "ORDER_PENDING_INFO"   # 等待补充收货信息
     ORDER_PENDING_CONFIRM = "ORDER_PENDING_CONFIRM"  # 等待用户确认下单
+    ORDER_CANCELLED = "ORDER_CANCELLED" # 用户取消
 
 
 @dataclass

@@ -120,7 +120,7 @@ async def list_product_categories(
     db: AsyncSession,
     **kwargs,
 ) -> ToolResult:
-    """列出租户当前商品分类。"""
+    """列出当前商品分类（以树形结构展示完整层级路径）。"""
     _ = contact_id, kwargs
     logger.info("Skill list_product_categories called: tenant_id=%s", tenant_id)
     result = await db.execute(
@@ -129,11 +129,27 @@ async def list_product_categories(
         .order_by(Category.sort_order.asc(), Category.created_at.asc())
     )
     categories = [
-        {"id": str(category.id), "name": category.name, "parent_id": str(category.parent_id) if category.parent_id else None}
-        for category in result.scalars().all()
+        {"id": str(c.id), "name": c.name, "parent_id": str(c.parent_id) if c.parent_id else None}
+        for c in result.scalars().all()
     ]
-    names = "、".join(item["name"] for item in categories) if categories else ""
-    message = f"目前有这些商品分类：{names}。您想看哪一类？" if categories else "目前还没有配置商品分类。"
+
+    # 构建父子映射，生成消息文本时展示完整层级路径
+    children_map: dict[str | None, list[dict]] = {}
+    for cat in categories:
+        pid = cat["parent_id"]
+        children_map.setdefault(pid, []).append(cat)
+
+    lines: list[str] = []
+    def render_tree(parent_id: str | None, depth: int = 0) -> None:
+        for cat in children_map.get(parent_id, []):
+            prefix = "  " * depth + ("└ " if depth > 0 else "")
+            lines.append(f"{prefix}{cat['name']}")
+            render_tree(cat["id"], depth + 1)
+
+    render_tree(None)  # 从根分类开始渲染
+    tree_text = "\n".join(lines)
+    message = f"目前商品分类如下：\n{tree_text}\n您想看哪一类？" if lines else "目前还没有配置商品分类。"
+
     return ToolResult(
         ok=True,
         skill_name="list_product_categories",
