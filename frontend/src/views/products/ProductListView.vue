@@ -31,10 +31,14 @@ async function loadCategories() {
   }
 }
 
-const categoryTreeProps = {
+// 级联选择器配置——展示完整分类层级路径（如"电子产品 / 手机"）
+const cascaderProps = {
   value: 'id',
   label: 'name',
   children: 'children',
+  expandTrigger: 'hover' as const,
+  checkStrictly: true,
+  emitPath: false,
 }
 
 async function loadData() {
@@ -140,16 +144,14 @@ onMounted(() => {
           <span style="color: var(--text-muted)">🔍</span>
         </template>
       </el-input>
-      <el-tree-select
+      <el-cascader
         v-model="filterCategoryId"
-        :data="categories"
-        :props="categoryTreeProps"
+        :options="categories"
+        :props="cascaderProps"
         placeholder="全部分类"
         clearable
-        check-strictly
-        default-expand-all
         @change="onSearch"
-        style="width: 180px"
+        style="width: 220px"
       />
       <el-button @click="onSearch">搜索</el-button>
     </section>

@@ -40,10 +40,14 @@ const rules = {
   floorPrice: [{ type: 'number', min: 0, message: '底价不能为负数', trigger: 'blur' }],
 }
 
-const categoryTreeProps = {
+// 级联选择器配置：value=id, label=name, children=children 与后端 CategoryTreeResponse 字段映射
+const cascaderProps = {
   value: 'id',
   label: 'name',
   children: 'children',
+  expandTrigger: 'hover' as const,
+  checkStrictly: true,
+  emitPath: false, // v-model 只保存选中的叶子节点 id（兼容原来的 categoryId 类型）
 }
 
 watch(
@@ -135,14 +139,12 @@ async function handleSubmit() {
       </el-row>
 
       <el-form-item label="所属分类">
-        <el-tree-select
+        <el-cascader
           v-model="form.categoryId"
-          :data="categories"
-          :props="categoryTreeProps"
-          placeholder="选择分类"
+          :options="categories"
+          :props="cascaderProps"
+          placeholder="选择分类（将显示完整层级路径）"
           clearable
-          check-strictly
-          default-expand-all
           style="width: 100%"
         />
       </el-form-item>
