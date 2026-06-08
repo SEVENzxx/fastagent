@@ -105,7 +105,7 @@ async function loadEmployees() {
 
 async function loadMessages(conversationId: string) {
   const result = await conversationsApi.getMessages(conversationId, 1, 200)
-  messages.value = result.items
+  messages.value = result.items.reverse()
   await conversationsApi.markMessagesRead(conversationId)
 }
 

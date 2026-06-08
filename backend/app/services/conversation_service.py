@@ -277,7 +277,7 @@ async def list_messages(
     base_query = select(Message).where(Message.conversation_id == conversation_id)
     total = await db.scalar(select(func.count()).select_from(base_query.subquery()))
     result = await db.execute(
-        base_query.order_by(Message.created_at.asc())
+        base_query.order_by(Message.created_at.desc())
         .offset((page - 1) * page_size)
         .limit(page_size)
     )
