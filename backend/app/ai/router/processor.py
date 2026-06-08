@@ -1,9 +1,16 @@
-"""AI 入站消息处理编排。"""
+"""AI 入站消息处理编排。
+
+采用 Pipeline 步骤模式，每个步骤是可测试的独立单元。
+编排器只负责：① 按序执行步骤 ② 短路跳过 ③ 统一释放资源。
+"""
 
 from __future__ import annotations
 
 import logging
 import time
+from abc import ABC, abstractmethod
+from dataclasses import dataclass
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -14,16 +21,398 @@ from app.schemas.conversation import ConversationUpdate, MessageCreate
 from app.services import conversation_service, outbound_message_service
 from app.ai.agent.argument_pending import build_pending_state_from_tool_result
 from app.ai.agent.types import AgentContext
-from app.ai.commerce_flow import handle_commerce_flow
+from app.ai.commerce_flow import handle_commerce_flow, CommerceFlowResult
 from app.ai.memory.conversation_state import ConversationStateStore
 from app.ai.memory.message_buffer import ConversationMessageBuffer
 from app.ai.memory.pending_state import PendingStateStore
 from app.ai.classifier.pipeline import IntentRecognitionPipeline
-from app.ai.router.message_router import MessageRouter, RenderResult
+from app.ai.router.message_router import MessageRouter
 from app.services.usage_service import bind_usage_context
 
 logger = logging.getLogger(__name__)
 
+
+# ──────────────────────────────────────────────
+#   Pipeline 数据上下文
+# ──────────────────────────────────────────────
+
+@dataclass
+class ProcessingContext:
+    """AI 消息处理的管道上下文，在步骤间传递。"""
+
+    db: AsyncSession
+    conversation: Conversation
+    customer_message: Message
+    customer_text: str = ""
+    message_buffer: ConversationMessageBuffer | None = None
+    pending_state: Any = None
+    agent_ctx: AgentContext | None = None
+    batch: Any = None
+
+    # 步骤执行结果（后续步骤可读取）
+    commerce_result: CommerceFlowResult | None = None
+    routed_intent: Any = None
+    render_result: RenderResult | None = None
+    should_stop: bool = False  # 设为 True 则终止后续步骤
+    release_lock: bool = True  # 结束时是否释放锁
+
+
+# ──────────────────────────────────────────────
+#   Pipeline 步骤基类
+# ──────────────────────────────────────────────
+
+class PipelineStep(ABC):
+    """一步处理。子类实现 execute()，返回 True 继续，False 短路。"""
+
+    @abstractmethod
+    async def execute(self, ctx: ProcessingContext) -> bool:
+        ...
+
+
+# ──────────────────────────────────────────────
+#   各步骤实现
+# ──────────────────────────────────────────────
+
+class FilterClosedOrHumanProcessing(PipelineStep):
+    """步骤 1: 已关闭 / human_processing → 跳过"""
+
+    async def execute(self, ctx: ProcessingContext) -> bool:
+        if ctx.conversation.status in {Conversation.STATUS_CLOSED, Conversation.STATUS_HUMAN_PROCESSING}:
+            ctx.should_stop = True
+        return True
+
+
+class FilterPendingHuman(PipelineStep):
+    """步骤 2-4: pending_human 排队状态处理"""
+
+    async def execute(self, ctx: ProcessingContext) -> bool:
+        if ctx.conversation.status != Conversation.STATUS_PENDING_HUMAN:
+            return True
+
+        if ctx.conversation.employee_id is not None:
+            ctx.should_stop = True  # 坐席已接管
+            return True
+
+        text = (ctx.customer_message.content or "").strip()
+        if text == "智能客服":
+            logger.info("客户要求切回 AI：conversation_id=%s", ctx.conversation.id)
+            await conversation_service.update_conversation(
+                ctx.db, ctx.conversation.id, ctx.conversation.tenant_id,
+                ConversationUpdate(
+                    status=Conversation.STATUS_AI_PROCESSING,
+                    handling_type=Conversation.HANDLING_AI_ONLY,
+                ),
+            )
+            ctx.conversation = await conversation_service.get_conversation(
+                ctx.db, ctx.conversation.id, ctx.conversation.tenant_id,
+            )
+            return True  # 继续走 AI 管线
+
+        queue_msg = (
+            "当前人工客服繁忙，您正在排队等待中，请耐心等候。"
+            "如需继续由智能客服为您服务，请回复「智能客服」。"
+        )
+        await _create_deliver_and_broadcast_reply_message(
+            ctx.db, ctx.conversation, queue_msg,
+            sender_type="SYSTEM",
+            metadata={"type": "queue_notice", "status": "pending_human"},
+        )
+        ctx.should_stop = True
+        return True
+
+
+class FilterHandlingHuman(PipelineStep):
+    """步骤 5: 已由人工接待 → 跳过"""
+
+    async def execute(self, ctx: ProcessingContext) -> bool:
+        if ctx.conversation.handling_type == Conversation.HANDLING_HUMAN:
+            ctx.should_stop = True
+        return True
+
+
+class FilterNonCustomerText(PipelineStep):
+    """步骤 6: 非客户文本消息 → 跳过"""
+
+    async def execute(self, ctx: ProcessingContext) -> bool:
+        msg = ctx.customer_message
+        if msg.sender_type != Conversation.SENDER_CUSTOMER or msg.content_type != "text":
+            ctx.should_stop = True
+        return True
+
+
+class BufferAndDeduplicate(PipelineStep):
+    """步骤 7: 同会话快速消息缓冲 + 串行锁"""
+
+    async def execute(self, ctx: ProcessingContext) -> bool:
+        text = (ctx.customer_message.content or "").strip()
+        buf = ConversationMessageBuffer()
+        ctx.message_buffer = buf
+        try:
+            batch = await buf.wait_for_batch(
+                tenant_id=ctx.conversation.tenant_id,
+                conversation_id=ctx.conversation.id,
+                message_id=ctx.customer_message.id,
+                text=text,
+            )
+        except Exception as exc:
+            logger.warning(
+                "AI 消息缓冲失败，降级为单条处理：conversation_id=%s message_id=%s error=%s",
+                ctx.conversation.id, ctx.customer_message.id, exc,
+            )
+            batch = None
+            ctx.message_buffer = None  # 标记降级，短路时不拦截
+
+        # batch 为空分两种情况：
+        #   a) 缓冲器正常→消息正在缓冲中，等待后续合并 → 短路
+        #   b) 缓冲器异常降级→视为单条消息直接处理
+        if batch is None:
+            if ctx.message_buffer is not None:
+                ctx.should_stop = True
+            return True
+
+        ctx.batch = batch
+        ctx.customer_text = batch.text.strip()
+        if not ctx.customer_text:
+            ctx.should_stop = True
+            return True
+
+        logger.info(
+            "AI 消息缓冲批次就绪：conversation_id=%s count=%s message_ids=%s text_len=%s",
+            ctx.conversation.id, batch.message_count, batch.message_ids, len(ctx.customer_text),
+        )
+        return True
+
+
+class ExecuteCommerceFlow(PipelineStep):
+    """步骤 8-10: 商品/订单多轮状态机优先处理"""
+
+    async def execute(self, ctx: ProcessingContext) -> bool:
+        bind_usage_context(
+            tenant_id=ctx.conversation.tenant_id,
+            conversation_id=ctx.conversation.id,
+            message_id=ctx.customer_message.id,
+        )
+
+        pending_store = PendingStateStore()
+        ctx.pending_state = await pending_store.get(ctx.conversation.tenant_id, ctx.conversation.id)
+        if ctx.pending_state is not None:
+            logger.info(
+                "待补槽状态：tenant_id=%s conversation_id=%s intent=%s required_entities=%s",
+                ctx.conversation.tenant_id, ctx.conversation.id,
+                ctx.pending_state.intent, ctx.pending_state.required_entities,
+            )
+
+        ctx.agent_ctx = AgentContext(
+            db=ctx.db,
+            tenant_id=ctx.conversation.tenant_id,
+            conversation_id=ctx.conversation.id,
+            contact_id=ctx.conversation.contact_id,
+            pending_state=ctx.pending_state,
+        )
+
+        commerce_store = ConversationStateStore()
+        commerce_state = await commerce_store.get(ctx.conversation.tenant_id, ctx.conversation.id)
+        result = await handle_commerce_flow(ctx.agent_ctx, ctx.customer_text, commerce_state)
+
+        if result is None:
+            return True  # 未命中状态机，继续走通用意图识别
+
+        # 状态机命中，直接输出回复
+        ctx.commerce_result = result
+        await commerce_store.set(ctx.conversation.tenant_id, ctx.conversation.id, result.state)
+        metadata = {
+            "ai_route": "COMMERCE_FLOW",
+            "skill": result.state.last_agent_action,
+            "intent": result.state.last_intent,
+            "confidence": 1.0,
+            "is_multi_intent": False,
+            "conversation_state": result.state.to_dict(),
+            "merged_customer_text": ctx.customer_text,
+        }
+        order_cards = _extract_order_cards(result.tool_results)
+        if order_cards:
+            metadata["order_cards"] = order_cards
+        logger.info(
+            "商品订单状态机已处理：conversation_id=%s stage=%s intent=%s action=%s content_len=%s",
+            ctx.conversation.id, result.state.stage.value,
+            result.state.last_intent, result.state.last_agent_action, len(result.text),
+        )
+        await _create_deliver_and_broadcast_reply_message(
+            ctx.db, ctx.conversation, result.text.strip(),
+            sender_type="AI", metadata=metadata,
+        )
+        ctx.should_stop = True
+        return True
+
+
+class RecognizeIntent(PipelineStep):
+    """步骤 11: 意图识别 + 路由分发"""
+
+    async def execute(self, ctx: ProcessingContext) -> bool:
+        result = await IntentRecognitionPipeline().recognize_and_route(
+            ctx.customer_text,
+            tenant_id=ctx.conversation.tenant_id,
+            pending_state=ctx.pending_state,
+        )
+        ctx.routed_intent = result
+        return True
+
+
+class HandleSilent(PipelineStep):
+    """步骤 12-13: Silent 路由 → 直接返回"""
+
+    async def execute(self, ctx: ProcessingContext) -> bool:
+        router = MessageRouter()
+        handler = router.resolve(ctx.routed_intent)
+
+        if handler.reply_sender_type is None:
+            ctx.should_stop = True
+            return True
+
+        # 清理 PendingState
+        if handler.clear_pending_state:
+            pending_store = PendingStateStore()
+            await pending_store.delete(ctx.conversation.tenant_id, ctx.conversation.id)
+
+        # 转人工
+        if handler.transfer_to_human:
+            await _mark_pending_human(
+                ctx.db, ctx.conversation,
+                ctx.routed_intent.reason or ctx.routed_intent.primary_intent or "需要人工处理",
+            )
+
+        # 首次 AI 问候
+        if handler.send_ai_greeting and "ai_greeting_sent" not in (ctx.conversation.tags or []):
+            from app.ai.tenant_config import get_ai_greeting
+            greeting = await get_ai_greeting(ctx.db, ctx.conversation.tenant_id)
+            await _create_and_broadcast_system_message(
+                ctx.db, ctx.conversation, greeting,
+                metadata={"type": "ai_greeting"},
+            )
+            ctx.conversation.tags = (ctx.conversation.tags or []) + ["ai_greeting_sent"]
+
+        self._handler = handler
+        self._router = router
+        return True
+
+
+class RenderReply(PipelineStep):
+    """步骤 14-17: 流式渲染 AI 回复"""
+
+    def __init__(self) -> None:
+        self._handler: Any = None
+        self._router: Any = None
+
+    async def execute(self, ctx: ProcessingContext) -> bool:
+        handler = self._handler
+        router = self._router
+
+        if handler.show_typing:
+            await _publish_typing(ctx.conversation, True)
+
+        dispatch_started = time.perf_counter()
+        try:
+            render_result = await router.render(
+                ctx.routed_intent,
+                handler=handler,
+                agent_context=ctx.agent_ctx,
+                on_chunk=lambda chunk: manager.publish(
+                    ctx.conversation.id,
+                    {"type": "ai.message.chunk", "content": chunk},
+                ),
+            )
+            content = render_result.text.strip()
+        finally:
+            if handler.show_typing:
+                await _publish_typing(ctx.conversation, False)
+
+        logger.info(
+            "AI 回复生成完成：conversation_id=%s route=%s sender_type=%s content_len=%s elapsed_ms=%.0f",
+            ctx.conversation.id, ctx.routed_intent.route, handler.reply_sender_type,
+            len(content), (time.perf_counter() - dispatch_started) * 1000,
+        )
+
+        if not content:
+            ctx.should_stop = True
+            return True
+
+        ctx.render_result = render_result
+
+        # 组装回复 metadata
+        metadata: dict = {
+            "ai_route": ctx.routed_intent.route,
+            "skill": ctx.routed_intent.skill,
+            "intent": ctx.routed_intent.primary_intent,
+            "confidence": ctx.routed_intent.confidence,
+            "is_multi_intent": ctx.routed_intent.is_multi_intent,
+            "merged_customer_text": ctx.customer_text,
+        }
+        order_cards = _extract_order_cards(render_result.tool_results)
+        if order_cards:
+            metadata["order_cards"] = order_cards
+
+        # PendingState 持久化
+        pending_store = PendingStateStore()
+        pending_to_save = _build_pending_state_from_tool_results(
+            render_result.tool_results,
+            intent=ctx.routed_intent.primary_intent,
+        )
+        if pending_to_save is not None:
+            await pending_store.set(ctx.conversation.tenant_id, ctx.conversation.id, pending_to_save)
+        elif ctx.pending_state is not None and _has_successful_agent_tool_result(render_result.tool_results):
+            await pending_store.delete(ctx.conversation.tenant_id, ctx.conversation.id)
+
+        # 落库 + WebSocket + 出站
+        await _create_deliver_and_broadcast_reply_message(
+            ctx.db, ctx.conversation, content,
+            sender_type=handler.reply_sender_type or "AI",
+            metadata=metadata,
+        )
+        ctx.should_stop = True
+        return True
+
+
+# ──────────────────────────────────────────────
+#   编排器
+# ──────────────────────────────────────────────
+
+async def process_customer_message_with_ai(
+    db: AsyncSession,
+    conversation: Conversation,
+    customer_message: Message,
+) -> None:
+    """AI 消息处理编排入口。按序执行步骤管线，遇到 should_stop 提前终止。"""
+
+    ctx = ProcessingContext(
+        db=db,
+        conversation=conversation,
+        customer_message=customer_message,
+    )
+    steps: list[PipelineStep] = [
+        FilterClosedOrHumanProcessing(),
+        FilterPendingHuman(),
+        FilterHandlingHuman(),
+        FilterNonCustomerText(),
+        BufferAndDeduplicate(),
+        ExecuteCommerceFlow(),
+        RecognizeIntent(),
+        HandleSilent(),
+        RenderReply(),
+    ]
+
+    try:
+        for step in steps:
+            await step.execute(ctx)
+            if ctx.should_stop:
+                break
+    finally:
+        if ctx.message_buffer is not None and ctx.release_lock:
+            await ctx.message_buffer.release_lock(ctx.conversation.tenant_id, ctx.conversation.id)
+
+
+# ──────────────────────────────────────────────
+#   辅助函数（消息序列化、落库、广播、转人工等）
+# ──────────────────────────────────────────────
 
 def message_payload(message: Message) -> dict:
     """生成 WebSocket 消息事件 payload。"""
@@ -59,299 +448,6 @@ def conversation_payload(conversation: Conversation) -> dict:
         "createdAt": conversation.created_at.isoformat(),
         "closedAt": conversation.closed_at.isoformat() if conversation.closed_at else None,
     }
-
-
-async def process_customer_message_with_ai(
-    db: AsyncSession,
-    conversation: Conversation,
-    customer_message: Message,
-) -> None:
-    """对客户入站消息执行 AI 识别、路由和回复。
-
-    ═══════════════ 前置过滤 ═══════════════
-      1. closed / human_processing           → 跳过
-      2. pending_human + 坐席已接管          → 跳过
-      3. pending_human + 客户说「智能客服」  → 切回 ai_processing，继续走 AI
-      4. pending_human + 无坐席 + 其他消息   → 排队兜底提示
-      5. handling_type=human                 → 跳过（已由人工接待）
-      6. 非客户文本消息                      → 跳过
-
-    ═══════════════ 主管线 ═══════════════
-      7.  bind_usage_context    绑定计量上下文（ContextVar）
-      8.  读取 PendingState      多轮槽位补全
-      9.  意图识别流水线         → RoutedIntent (route + skill + confidence)
-      10. WebSocket 广播          ai.routed 事件
-      11. 路由分发               MessageRouter → Handler
-      12. Silent / 无需回复      → 直接返回
-      13. 清理 PendingState      转人工 / 明确回复时清除
-      14. 转人工                 自动分配在线坐席 + 通知
-      15. 首次 AI 问候          租户配置读取
-      16. 构建 AgentContext      仅 AGENT 路由
-      17. 流式渲染 AI 回复      SSE chunk 推送
-      18. 组装 metadata          路由信息 + 订单卡片
-      19. 落库 + 广播 + 投递     Message 表 → WS → 渠道出站
-    """
-
-    # ═══════════════════════ 前置过滤 ═══════════════════════
-
-    # ── 1: closed / human_processing → 跳过 ──
-    if conversation.status in {Conversation.STATUS_CLOSED, Conversation.STATUS_HUMAN_PROCESSING}:
-        return
-
-    # ── 2-4: pending_human 排队状态 ──
-    if conversation.status == Conversation.STATUS_PENDING_HUMAN:
-        # ── 2: 坐席已接管 → 跳过 ──
-        if conversation.employee_id is not None:
-            return
-
-        customer_text = (customer_message.content or "").strip()
-
-        # ── 3: 客户说「智能客服」→ 切回 AI ──
-        if customer_text == "智能客服":
-            logger.info("客户要求切回 AI：conversation_id=%s", conversation.id)
-            await conversation_service.update_conversation(
-                db,
-                conversation.id,
-                conversation.tenant_id,
-                ConversationUpdate(
-                    status=Conversation.STATUS_AI_PROCESSING,
-                    handling_type=Conversation.HANDLING_AI_ONLY,
-                ),
-            )
-            conversation = await conversation_service.get_conversation(
-                db, conversation.id, conversation.tenant_id
-            )
-            # 不 return，继续走下面的 AI 管线
-
-        else:
-            # ── 4: 无坐席在线 → 排队兜底提示 ──
-            queue_msg = (
-                "当前人工客服繁忙，您正在排队等待中，请耐心等候。"
-                "如需继续由智能客服为您服务，请回复「智能客服」。"
-            )
-            await _create_deliver_and_broadcast_reply_message(
-                db,
-                conversation,
-                queue_msg,
-                sender_type="SYSTEM",
-                metadata={"type": "queue_notice", "status": "pending_human"},
-            )
-            return
-
-    # ── 5: 已由人工接待 → 跳过 ──
-    if conversation.handling_type == Conversation.HANDLING_HUMAN:
-        return
-
-    # ── 6: 过滤非客户文本消息 ──
-    if customer_message.sender_type != Conversation.SENDER_CUSTOMER or customer_message.content_type != "text":
-        return
-
-    # ── 7: 同会话快速消息缓冲 + 串行锁 ──
-    # 客户常把一个意图拆成多条短消息。这里先按 conversation 聚合短窗口内的文本，
-    # 并通过 Redis lock 保证同一会话同一时间只有一个 AI 任务处理状态。
-    customer_text = (customer_message.content or "").strip()
-    message_buffer: ConversationMessageBuffer | None = ConversationMessageBuffer()
-    try:
-        batch = await message_buffer.wait_for_batch(
-            tenant_id=conversation.tenant_id,
-            conversation_id=conversation.id,
-            message_id=customer_message.id,
-            text=customer_text,
-        )
-    except Exception as exc:
-        logger.warning(
-            "AI 消息缓冲失败，降级为单条消息处理：conversation_id=%s message_id=%s error=%s",
-            conversation.id,
-            customer_message.id,
-            exc,
-        )
-        batch = None
-        message_buffer = None
-
-    if message_buffer is not None and batch is None:
-        return
-    if batch is not None:
-        customer_text = batch.text.strip()
-        if not customer_text:
-            if message_buffer is not None:
-                await message_buffer.release_lock(conversation.tenant_id, conversation.id)
-            return
-        logger.info(
-            "AI 消息缓冲批次就绪：conversation_id=%s count=%s message_ids=%s text_len=%s",
-            conversation.id,
-            batch.message_count,
-            batch.message_ids,
-            len(customer_text),
-        )
-
-    # ═══════════════════════ 主管线 ═══════════════════════
-
-    try:
-        # ── 8: 绑定计量上下文 ──
-        bind_usage_context(
-            tenant_id=conversation.tenant_id,
-            conversation_id=conversation.id,
-            message_id=customer_message.id,
-        )
-
-        # ── 9: 读取 PendingState（多轮槽位补全）──
-        pending_store = PendingStateStore()
-        pending_state = await pending_store.get(conversation.tenant_id, conversation.id)
-        if pending_state is not None:
-            logger.info(
-                "读取到 AI 待补槽状态：tenant_id=%s conversation_id=%s intent=%s required_entities=%s",
-                conversation.tenant_id,
-                conversation.id,
-                pending_state.intent,
-                pending_state.required_entities,
-            )
-
-        # ── 10: 商品咨询/订单草稿多轮状态机优先处理 ──
-        # 必须在通用意图识别之前执行，否则“确认”等短句可能先被 SILENT 规则吞掉。
-        agent_ctx = AgentContext(
-            db=db,
-            tenant_id=conversation.tenant_id,
-            conversation_id=conversation.id,
-            contact_id=conversation.contact_id,
-            pending_state=pending_state,
-        )
-        commerce_store = ConversationStateStore()
-        commerce_state = await commerce_store.get(conversation.tenant_id, conversation.id)
-        commerce_result = await handle_commerce_flow(
-            agent_ctx,
-            customer_text,
-            commerce_state,
-        )
-        if commerce_result is not None:
-            await commerce_store.set(conversation.tenant_id, conversation.id, commerce_result.state)
-            metadata = {
-                "ai_route": "COMMERCE_FLOW",
-                "skill": commerce_result.state.last_agent_action,
-                "intent": commerce_result.state.last_intent,
-                "confidence": 1.0,
-                "is_multi_intent": False,
-                "conversation_state": commerce_result.state.to_dict(),
-                "merged_customer_text": customer_text,
-            }
-            order_cards = _extract_order_cards(commerce_result.tool_results)
-            if order_cards:
-                metadata["order_cards"] = order_cards
-            logger.info(
-                "商品订单状态机已处理：conversation_id=%s stage=%s intent=%s action=%s content_len=%s",
-                conversation.id,
-                commerce_result.state.stage.value,
-                commerce_result.state.last_intent,
-                commerce_result.state.last_agent_action,
-                len(commerce_result.text),
-            )
-            await _create_deliver_and_broadcast_reply_message(
-                db,
-                conversation,
-                commerce_result.text.strip(),
-                sender_type="AI",
-                metadata=metadata,
-            )
-            return
-
-        # ── 11: 意图识别流水线 ──
-        result = await IntentRecognitionPipeline().recognize_and_route(
-            customer_text,
-            tenant_id=conversation.tenant_id,
-            pending_state=pending_state,
-        )
-
-        # ── 12: 路由分发 → Handler ──
-        router = MessageRouter()
-        handler = router.resolve(result)
-
-        # ── 13: Silent → 直接返回 ──
-        if handler.reply_sender_type is None:
-            return
-
-        # ── 14: 清理 PendingState ──
-        if handler.clear_pending_state:
-            await pending_store.delete(conversation.tenant_id, conversation.id)
-
-        # ── 15: 转人工 ──
-        if handler.transfer_to_human:
-            await _mark_pending_human(db, conversation, result.reason or result.primary_intent or "需要人工处理")
-
-        # ── 16: 首次 AI 问候 ──
-        if handler.send_ai_greeting and "ai_greeting_sent" not in (conversation.tags or []):
-            from app.ai.tenant_config import get_ai_greeting
-            greeting = await get_ai_greeting(db, conversation.tenant_id)
-            await _create_and_broadcast_system_message(
-                db,
-                conversation,
-                greeting,
-                metadata={"type": "ai_greeting"},
-            )
-            conversation.tags = (conversation.tags or []) + ["ai_greeting_sent"]
-
-        # ── 17: 流式渲染 AI 回复 ──
-        if handler.show_typing:
-            await _publish_typing(conversation, True)
-
-        dispatch_started = time.perf_counter()
-        try:
-            render_result = (
-                await router.render(
-                    result,
-                    handler=handler,
-                    agent_context=agent_ctx,
-                    on_chunk=lambda chunk: manager.publish(
-                        conversation.id,
-                        {"type": "ai.message.chunk", "content": chunk},
-                    ),
-                )
-            )
-            content = render_result.text.strip()
-        finally:
-            if handler.show_typing:
-                await _publish_typing(conversation, False)
-
-        logger.info(
-            "AI 回复生成完成：conversation_id=%s route=%s sender_type=%s content_len=%s elapsed_ms=%.0f",
-            conversation.id, result.route, handler.reply_sender_type,
-            len(content), (time.perf_counter() - dispatch_started) * 1000,
-        )
-
-        if not content:
-            return
-
-        # ── 18: 组装回复 metadata ──
-        metadata: dict = {
-            "ai_route": result.route,
-            "skill": result.skill,
-            "intent": result.primary_intent,
-            "confidence": result.confidence,
-            "is_multi_intent": result.is_multi_intent,
-            "merged_customer_text": customer_text,
-        }
-        order_cards = _extract_order_cards(render_result.tool_results)
-        if order_cards:
-            metadata["order_cards"] = order_cards
-
-        pending_to_save = _build_pending_state_from_tool_results(
-            render_result.tool_results,
-            intent=result.primary_intent,
-        )
-        if pending_to_save is not None:
-            await pending_store.set(conversation.tenant_id, conversation.id, pending_to_save)
-        elif pending_state is not None and _has_successful_agent_tool_result(render_result.tool_results):
-            await pending_store.delete(conversation.tenant_id, conversation.id)
-
-        # ── 19: 落库 + WebSocket 广播 + 渠道出站投递 ──
-        await _create_deliver_and_broadcast_reply_message(
-            db,
-            conversation,
-            content,
-            sender_type=handler.reply_sender_type or "AI",
-            metadata=metadata,
-        )
-    finally:
-        if message_buffer is not None:
-            await message_buffer.release_lock(conversation.tenant_id, conversation.id)
 
 
 async def _mark_pending_human(db: AsyncSession, conversation: Conversation, reason: str) -> None:
