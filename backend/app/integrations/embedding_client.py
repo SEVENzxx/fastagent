@@ -62,7 +62,9 @@ class EmbeddingClient:
         # 兼容只支持单条 text 的服务实现。
         if len(clean_texts) == 1 and len(embeddings) == 1:
             logger.info(
-                "Embedding 请求完成：texts=1 vectors=1 elapsed_ms=%.0f",
+                "Embedding 请求完成：texts=%s vectors=%s elapsed_ms=%.0f",
+                len(clean_texts),
+                len(embeddings),
                 (time.perf_counter() - started) * 1000,
             )
             return embeddings

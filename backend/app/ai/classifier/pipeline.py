@@ -9,17 +9,18 @@ from __future__ import annotations
 import logging
 import time
 
-from app.ai.classifier.intent_config import DEFAULT_INTENT_CONFIG, IntentRecognitionConfig
 from app.ai.classifier.ambiguity import AmbiguityDetector
 from app.ai.classifier.context_state import ContextStateResolver
 from app.ai.classifier.fusion_scorer import IntentFusionScorer
+from app.ai.classifier.intent_config import DEFAULT_INTENT_CONFIG, IntentRecognitionConfig
 from app.ai.classifier.keyword_entity import KeywordEntityExtractor
 from app.ai.classifier.llm_judge import LLMIntentJudge
 from app.ai.classifier.normalizer import TextNormalizer
 from app.ai.classifier.router import IntentRouter
 from app.ai.classifier.rule_matcher import RuleMatcher
 from app.ai.classifier.segmenter import MessageSegmenter
-from app.ai.classifier.types import IntentCandidate, IntentHit, IntentResult, PendingIntentState, ROUTE_GENERAL_REPLY, ROUTE_HUMAN, \
+from app.ai.classifier.types import IntentCandidate, IntentHit, IntentResult, PendingIntentState, ROUTE_GENERAL_REPLY, \
+    ROUTE_HUMAN, \
     ROUTE_SILENT, RoutedIntent
 from app.ai.classifier.vector_retriever import VectorIntentRetriever
 
@@ -105,6 +106,7 @@ class IntentRecognitionPipeline:
         )
         if not segments:
             return self._unknown_result(original, normalized, "空文本或无法拆分")
+        logger.info("意图识别 — 多意图分句：len=%d", len(segments))
 
         # ── 6-9: 每个 segment 独立走 向量召回 → 融合打分 → 歧义判断 → LLM 精判 ──
         hits: list[IntentHit] = []
@@ -123,7 +125,7 @@ class IntentRecognitionPipeline:
             hits=hits,
             candidates=candidates,
             is_multi_intent=len([h for h in hits if h.intent != "unknown_intent"]) > 1,
-            need_clarification=any(h.ambiguous for h in hits),
+            need_clarification=any(h.ambiguous or h.need_clarification for h in hits),
             source=self._source_for_hits(hits),
             reason="多意图识别完成" if len(hits) > 1 else (primary_hit.reason if primary_hit else "无候选"),
         )
@@ -177,13 +179,36 @@ class IntentRecognitionPipeline:
 
         # ── 9: LLM 精判（仅模糊候选触发，节省 LLM 调用）──
         if need_llm:
+            logger.info("意图识别 — 触发 LLM 精判：top=%s fused=%s", top, fused)
             judged = await self.llm_judge.judge(segment, fused)
             if judged is not None:
-                primary_intent, _, _, judge_reason = judged
+                primary_intent, _, judge_need_clarification, judge_reason = judged
                 selected = next((c for c in fused if c.intent == primary_intent), top)
-                return self._make_hit(segment, selected, fused, False, judge_reason)
+                return self._make_hit(
+                    segment,
+                    selected,
+                    fused,
+                    False,
+                    judge_reason,
+                    need_clarification=judge_need_clarification,
+                )
+            return self._make_hit(
+                segment,
+                top,
+                fused,
+                is_ambiguous,
+                "LLM intent judge returned no trusted result",
+                need_clarification=True,
+            )
 
-        return self._make_hit(segment, top, fused, is_ambiguous, amb_reason)
+        return self._make_hit(
+            segment,
+            top,
+            fused,
+            is_ambiguous,
+            amb_reason,
+            need_clarification=need_clarification,
+        )
 
     def _make_hit(
         self,
@@ -192,6 +217,8 @@ class IntentRecognitionPipeline:
         candidates: list[IntentCandidate],
         ambiguous: bool,
         reason: str | None,
+        *,
+        need_clarification: bool = False,
     ) -> IntentHit:
         """从候选构造 IntentHit。"""
         route = self.config.route_for(candidate.intent)
@@ -204,6 +231,7 @@ class IntentRecognitionPipeline:
             skill=route.skill,
             candidates=candidates,
             ambiguous=ambiguous,
+            need_clarification=need_clarification,
             reason=reason,
         )
 

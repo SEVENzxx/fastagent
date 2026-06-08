@@ -41,6 +41,14 @@ async def build_context(state: AgentState, config: RunnableConfig | None = None)
         state["error"] = "missing_context"
         return state
 
+    customer_text = _extract_customer_text(routed)
+    logger.info(
+        "[build_context] tenant=%s conversation=%s intent=%s conf=%.2f text=%s",
+        ctx.tenant_id, ctx.conversation_id,
+        routed.primary_intent, routed.confidence,
+        customer_text[:60],
+    )
+
     state.update({
         "tenant_id": ctx.tenant_id,
         "conversation_id": ctx.conversation_id,
@@ -52,7 +60,7 @@ async def build_context(state: AgentState, config: RunnableConfig | None = None)
         "tool_call_count": 0,
         "final_reply": None,
         "error": None,
-        "messages": [{"role": "user", "content": _extract_customer_text(routed)}],
+        "messages": [{"role": "user", "content": customer_text}],
     })
     return state
 
@@ -66,6 +74,9 @@ async def decide_execution_mode(state: AgentState, config: RunnableConfig | None
         return state
 
     hits = routed.hits
+    if routed.need_clarification:
+        state["execution_mode"] = ExecutionMode.CLARIFY.value
+        return state
     # 无命中或极低置信 → 追问澄清
     if not hits or routed.confidence < 0.5:
         state["execution_mode"] = ExecutionMode.CLARIFY.value
@@ -86,7 +97,7 @@ async def decide_execution_mode(state: AgentState, config: RunnableConfig | None
 def _can_direct(hit) -> bool:
     """单个意图候选是否满足 DIRECT_SKILL 条件"""
     skill = resolve_skill(hit.skill)
-    return skill is not None and hit.confidence >= 0.86 and not hit.ambiguous
+    return skill is not None and hit.confidence >= 0.86 and not hit.ambiguous and not hit.need_clarification
 
 
 def _decide_single(hit) -> str:
@@ -101,10 +112,11 @@ async def plan_tools_from_routed_intent(state: AgentState, config: RunnableConfi
     """从意图命中生成技能调用计划（DIRECT_SKILL / AGENT_PLANNER 均生成）。"""
     routed: RoutedIntent | None = _cfg(config).get("routed_intent")
     if routed is None:
+        logger.info("[plan_tools] 无 routed_intent，清空工具计划")
         state["planned_tool_calls"] = []
         return state
 
-    state["planned_tool_calls"] = [
+    plans = [
         {
             "skill_name": skill_name,
             "arguments": {"query": hit.segment, "customer_text": _extract_customer_text(routed)},
@@ -114,6 +126,8 @@ async def plan_tools_from_routed_intent(state: AgentState, config: RunnableConfi
         for hit in routed.hits
         if (skill_name := resolve_skill(hit.skill)) is not None
     ]
+    logger.info("[plan_tools] 生成 %s 个技能计划: %s", len(plans), [p["skill_name"] for p in plans])
+    state["planned_tool_calls"] = plans
     return state
 
 
@@ -127,12 +141,15 @@ async def normalize_planned_tool_arguments(state: AgentState, config: RunnableCo
     ctx: AgentContext | None = _cfg(config).get("agent_context")
     normalized_plans: list[dict] = []
     for plan in state.get("planned_tool_calls", []):
+        skill = str(plan.get("skill_name") or "?")
         normalized = extract_arguments_for_plan(plan)
+
+        # LLM 参数补填（默认关）
         if settings.AI_AGENT_ENABLE_LLM_ARGUMENT_EXTRACTION and (
             normalized.get("missing_arguments") or normalized.get("argument_errors")
         ):
             llm_args = await extract_arguments_with_llm(
-                str(normalized.get("skill_name") or ""),
+                skill,
                 str((normalized.get("arguments") or {}).get("customer_text") or ""),
                 dict(normalized.get("arguments") or {}),
                 tenant_id=ctx.tenant_id if ctx else state.get("tenant_id"),
@@ -141,21 +158,32 @@ async def normalize_planned_tool_arguments(state: AgentState, config: RunnableCo
                 llm_plan = dict(normalized)
                 llm_plan["arguments"] = {**dict(normalized.get("arguments") or {}), **llm_args}
                 normalized = extract_arguments_for_plan(llm_plan)
-        if ctx is not None and ctx.pending_state is not None:
+
+        # 跨轮参数合并
+        has_pending = ctx is not None and ctx.pending_state is not None
+        if has_pending:
             pending_plan = dict(normalized)
             pending_plan["arguments"] = merge_pending_arguments(
                 dict(normalized.get("arguments") or {}),
                 ctx.pending_state,
-                skill_name=str(normalized.get("skill_name") or ""),
+                skill_name=skill,
             )
             normalized = extract_arguments_for_plan(pending_plan)
+
+        # 业务数据解析（商品名→product_id）
         if ctx is not None:
             normalized = await enrich_plan_with_business_context(
                 normalized,
                 db=ctx.db,
                 tenant_id=ctx.tenant_id,
             )
+
+        missing = normalized.get("missing_arguments")
+        errors = normalized.get("argument_errors")
+        if missing or errors:
+            logger.info("[normalize] %s 缺参=%s 错误=%s", skill, missing or "", errors or "")
         normalized_plans.append(normalized)
+
     state["planned_tool_calls"] = normalized_plans
     return state
 
@@ -179,27 +207,27 @@ async def dispatch_tools(state: AgentState, config: RunnableConfig | None = None
 
     for plan in state.get("planned_tool_calls", []):
         if count >= max_calls:
+            logger.warning("[dispatch] 达到技能调用上限 %s，跳过剩余计划", max_calls)
             break
 
         skill_name = plan["skill_name"]
         skill_func = SKILL_REGISTRY.get(skill_name)
         if skill_func is None:
+            logger.error("[dispatch] 技能未注册: %s", skill_name)
             results.append({"skill_name": skill_name, "ok": False, "result": None, "error": f"Unknown: {skill_name}"})
             continue
 
         # 步骤 1：检查 Pydantic 参数校验错误
         if plan.get("argument_errors"):
-            results.append({
-                "skill_name": skill_name,
-                "ok": False,
-                "result": None,
-                "error": "参数校验失败: " + "; ".join(plan["argument_errors"]),
-            })
+            err_msg = "参数校验失败: " + "; ".join(plan["argument_errors"])
+            logger.info("[dispatch] %s 参数校验未通过: %s", skill_name, err_msg)
+            results.append({"skill_name": skill_name, "ok": False, "result": None, "error": err_msg})
             count += 1
             continue
 
         # 步骤 2：检查缺失的必填参数
         if plan.get("missing_arguments"):
+            logger.info("[dispatch] %s 缺少必填参数: %s", skill_name, plan["missing_arguments"])
             results.append({
                 "skill_name": skill_name,
                 "ok": False,
@@ -223,6 +251,11 @@ async def dispatch_tools(state: AgentState, config: RunnableConfig | None = None
                 "result": result.result,
                 "error": result.error,
             })
+            if result.ok:
+                logger.info("[dispatch] %s 执行成功, %s", skill_name,
+                            str(result.result)[:80] if result.result else "无返回")
+            else:
+                logger.warning("[dispatch] %s 执行失败: %s", skill_name, result.error)
         except Exception as exc:
             logger.error("[dispatch] %s 异常: %s", skill_name, exc)
             results.append({"skill_name": skill_name, "ok": False, "result": None, "error": str(exc)})
@@ -244,13 +277,18 @@ async def generate_reply(state: AgentState) -> AgentState:
     tenant_id = state.get("tenant_id")
 
     if mode == ExecutionMode.CLARIFY.value:
+        logger.info("[generate] 模式=澄清追问, text=%s", customer_text[:40])
         state["final_reply"] = await _generate_clarify_reply(customer_text)
     elif missing_reply := _missing_argument_reply(tool_results):
-        # 技能因缺参未执行 → 直接返回追问话术，不调 LLM
+        logger.info("[generate] 模式=缺参追问, text=%s", customer_text[:40])
         state["final_reply"] = missing_reply
     elif not tool_results:
+        logger.info("[generate] 模式=无技能结果兜底, text=%s", customer_text[:40])
         state["final_reply"] = await _generate_fallback_reply(customer_text)
     else:
+        tool_count = len([r for r in tool_results if r.get("ok")])
+        logger.info("[generate] 模式=基于技能结果合成, text=%s 成功技能=%s/%s",
+                    customer_text[:40], tool_count, len(tool_results))
         state["final_reply"] = await _generate_from_tool_results(
             customer_text, tool_results, tenant_id=tenant_id,
             tenant_custom_prompt=state.get("tenant_custom_prompt"),
@@ -265,15 +303,18 @@ async def post_process(state: AgentState) -> AgentState:
     for prefix in ("客服：", "助手：", "AI：", "回复：", "回答："):
         if reply.startswith(prefix):
             reply = reply[len(prefix):].strip()
+            logger.debug("[post_process] 去除前缀 %s", prefix)
 
     if not reply:
         mode = state.get("execution_mode", "")
-        reply = FALLBACK_MESSAGES.get(
-            {
-                ExecutionMode.AGENT_PLANNER.value: "agent_planner",
-                ExecutionMode.CLARIFY.value: "clarify_product_or_order",
-            }.get(mode, "generic_ack")
-        )
+        fallback_key = {
+            ExecutionMode.AGENT_PLANNER.value: "agent_planner",
+            ExecutionMode.CLARIFY.value: "clarify_product_or_order",
+        }.get(mode, "generic_ack")
+        reply = FALLBACK_MESSAGES.get(fallback_key, "请稍后再试")
+        logger.info("[post_process] 回复为空，使用兜底: mode=%s key=%s", mode, fallback_key)
+    else:
+        logger.info("[post_process] 最终回复长度=%s", len(reply))
 
     state["final_reply"] = reply
     return state

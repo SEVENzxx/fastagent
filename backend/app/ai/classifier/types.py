@@ -86,6 +86,7 @@ class IntentHit:
     skill: str | None = None
     candidates: list[IntentCandidate] = field(default_factory=list)
     ambiguous: bool = False
+    need_clarification: bool = False
     reason: str | None = None
 
 

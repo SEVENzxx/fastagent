@@ -49,6 +49,7 @@ class VectorIntentRetriever:
         2. 无结果 → 查全局默认样本 (tenant_id=0)
         3. Qdrant / embedding 不可用 → 本地文本相似度兜底
         """
+        logger.info("意图召回：segment=%s tenant_id=%s", segment[:40], tenant_id)
         # ── 1: Qdrant 向量检索（租户专属优先，全局默认兜底）──
         candidates = await self._search_qdrant(segment, tenant_id=tenant_id)
         if not candidates and tenant_id != 0:
