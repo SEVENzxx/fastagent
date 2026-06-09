@@ -35,6 +35,9 @@ class KnowledgeDoc(Base):
     chunk_count: Mapped[int] = mapped_column(
         Integer, nullable=False, default=0, server_default="0", comment="分块总数"
     )
+    product_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("products.id", ondelete="SET NULL"), nullable=True, comment="关联商品ID"
+    )
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True, comment="解析失败原因")
     created_by_employee_id: Mapped[int | None] = mapped_column(
         BigInteger, ForeignKey("employees.id"), nullable=True, comment="上传人"

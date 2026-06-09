@@ -3,11 +3,13 @@ import type { ProductResponse } from '@/api/products'
 
 const props = defineProps<{
   product: ProductResponse
+  hasDoc: boolean
 }>()
 
 const emit = defineEmits<{
   edit: [product: ProductResponse]
   delete: [product: ProductResponse]
+  manageKnowledge: [product: ProductResponse]
 }>()
 
 function formatPrice(value: number | null | undefined): string {
@@ -67,6 +69,8 @@ function statusType(active: boolean): 'success' | 'info' {
     <div class="card-actions">
       <el-button size="small" @click="emit('edit', product)">编辑</el-button>
       <el-button size="small" type="danger" plain @click="emit('delete', product)">删除</el-button>
+      <el-button v-if="hasDoc" size="small" type="primary" plain @click="emit('manageKnowledge', product)">查看知识</el-button>
+      <el-button v-else size="small" plain @click="emit('manageKnowledge', product)">上传知识</el-button>
     </div>
   </div>
 </template>

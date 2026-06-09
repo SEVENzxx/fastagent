@@ -56,12 +56,13 @@ class KnowledgeDocResponse(CamelModel):
     storage_path: str
     status: str
     chunk_count: int
+    product_id: int | None = None
     error_message: str | None = None
     created_by_employee_id: int | None = None
     created_at: datetime
     updated_at: datetime
 
-    @field_serializer("id", "created_by_employee_id")
+    @field_serializer("id", "product_id", "created_by_employee_id")
     def serialize_bigint(self, value: int | None) -> str | None:
         if value is None:
             return None

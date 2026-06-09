@@ -21,6 +21,7 @@ export interface KnowledgeDocResponse {
   storagePath: string
   status: string
   chunkCount: number
+  productId: string | null
   errorMessage: string | null
   createdByEmployeeId: string | null
   createdAt: string
@@ -33,17 +34,20 @@ export interface KnowledgeDocListResponse {
   total: number
 }
 
-export function listKnowledgeDocs(skip = 0, limit = 20) {
-  return request.get<KnowledgeDocListResponse>('/knowledge', { params: { skip, limit } }).then((res) => res.data)
+export function listKnowledgeDocs(skip = 0, limit = 20, productId?: string | number) {
+  const params: Record<string, string | number> = { skip, limit }
+  if (productId) params.product_id = productId
+  return request.get<KnowledgeDocListResponse>('/knowledge', { params }).then((res) => res.data)
 }
 
 export function getKnowledgeDoc(docId: string) {
   return request.get<KnowledgeDocResponse>(`/knowledge/${docId}`).then((res) => res.data)
 }
 
-export function uploadKnowledgeDoc(file: File) {
+export function uploadKnowledgeDoc(file: File, productId?: string | number) {
   const formData = new FormData()
   formData.append('file', file)
+  if (productId) formData.append('product_id', String(productId))
   return request.post<KnowledgeDocResponse>('/knowledge/upload', formData, {
     headers: { 'Content-Type': 'multipart/form-data' },
   }).then((res) => res.data)

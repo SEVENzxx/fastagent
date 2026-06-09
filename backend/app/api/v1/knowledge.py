@@ -1,6 +1,6 @@
 """知识文档 API — Phase 11"""
 
-from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File
+from fastapi import APIRouter, Depends, Form, HTTPException, Query, UploadFile, File
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
@@ -28,6 +28,7 @@ def _to_doc_response(doc) -> KnowledgeDocResponse:
         storage_path=doc.storage_path,
         status=doc.status,
         chunk_count=doc.chunk_count,
+        product_id=doc.product_id,
         error_message=doc.error_message,
         created_by_employee_id=doc.created_by_employee_id,
         created_at=doc.created_at,
@@ -51,11 +52,14 @@ def _to_chunk_response(chunk) -> KnowledgeChunkResponse:
 async def list_knowledge_docs(
     skip: int = Query(0, ge=0),
     limit: int = Query(20, ge=1, le=100),
+    product_id: int | None = Query(None, description="按关联商品过滤"),
     current_user: Employee = Depends(require_permission(PermissionCode.VIEW_KB)),
     db: AsyncSession = Depends(get_db),
 ):
     """获取知识文档列表"""
-    items, total = await _knowledge_service.list_docs(db, current_user.tenant_id, skip, limit)
+    items, total = await _knowledge_service.list_docs(
+        db, current_user.tenant_id, skip, limit, product_id=product_id,
+    )
     return KnowledgeDocListResponse(
         items=[_to_doc_response(item) for item in items],
         total=total,
@@ -91,12 +95,13 @@ async def get_knowledge_doc(
 @router.post("/upload", response_model=KnowledgeDocResponse, status_code=201)
 async def upload_knowledge_doc(
     file: UploadFile = File(...),
+    product_id: int | None = Form(None),
     current_user: Employee = Depends(require_permission(PermissionCode.MANAGE_KB)),
     db: AsyncSession = Depends(get_db),
 ):
-    """上传知识文档（自动解析、分块、向量化）"""
+    """上传知识文档（自动解析、分块、向量化）。product_id 可选，用于关联商品。"""
     doc = await _knowledge_service.upload_and_process(
-        db, file, current_user.tenant_id, current_user.id
+        db, file, current_user.tenant_id, current_user.id, product_id=product_id,
     )
     return _to_doc_response(doc)
 

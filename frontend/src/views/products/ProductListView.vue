@@ -3,11 +3,13 @@ import { onMounted, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import * as productsApi from '@/api/products'
 import * as categoriesApi from '@/api/categories'
+import * as knowledgeApi from '@/api/knowledge'
 import type { ProductCreate, ProductResponse, ProductUpdate } from '@/api/products'
 import type { CategoryTreeResponse } from '@/api/categories'
 import ProductCard from '@/components/products/ProductCard.vue'
 import ProductFormDialog from '@/components/products/ProductFormDialog.vue'
 import ProductImportDialog from '@/components/products/ProductImportDialog.vue'
+import ProductKnowledgeDialog from '@/components/products/ProductKnowledgeDialog.vue'
 
 const products = ref<ProductResponse[]>([])
 const loading = ref(true)
@@ -22,6 +24,43 @@ const filterCategoryId = ref<string | null>(null)
 const dialogVisible = ref(false)
 const importDialogVisible = ref(false)
 const editingProduct = ref<ProductResponse | null>(null)
+
+const knowledgeDialogVisible = ref(false)
+const knowledgeProduct = ref<ProductResponse | null>(null)
+const knowledgeProductIds = ref<Set<string>>(new Set())
+
+async function loadDocStates() {
+  // 批量检查当前页商品哪些有关联知识文档
+  const ids = products.value.map((p) => p.id)
+  if (ids.length === 0) return
+  try {
+    // 用全量拉取（limit=200）覆盖当前页面所有商品 id，不完美但够用
+    const result = await knowledgeApi.listKnowledgeDocs(0, 200)
+    const idSet = new Set<string>()
+    for (const doc of result.items) {
+      if (doc.productId && ids.includes(doc.productId)) {
+        idSet.add(doc.productId)
+      }
+    }
+    knowledgeProductIds.value = idSet
+  } catch {
+    /* ignore */
+  }
+}
+
+function hasDoc(productId: string): boolean {
+  return knowledgeProductIds.value.has(productId)
+}
+
+function openKnowledge(product: ProductResponse) {
+  knowledgeProduct.value = product
+  knowledgeDialogVisible.value = true
+}
+
+function onKnowledgeUploaded() {
+  // 上传成功后刷新文档状态
+  loadDocStates()
+}
 
 async function loadCategories() {
   try {
@@ -53,6 +92,7 @@ async function loadData() {
     const result = await productsApi.searchProducts(params)
     products.value = result.items
     total.value = result.total
+    await loadDocStates()
   } finally {
     loading.value = false
   }
@@ -165,8 +205,10 @@ onMounted(() => {
               v-for="product in products"
               :key="product.id"
               :product="product"
+              :has-doc="hasDoc(product.id)"
               @edit="openEdit"
               @delete="handleDelete"
+              @manage-knowledge="openKnowledge"
             />
           </div>
           <el-empty v-else description="暂无商品" />
@@ -195,6 +237,12 @@ onMounted(() => {
     <ProductImportDialog
       v-model:visible="importDialogVisible"
       @imported="loadData"
+    />
+
+    <ProductKnowledgeDialog
+      v-model:visible="knowledgeDialogVisible"
+      :product="knowledgeProduct"
+      @uploaded="onKnowledgeUploaded"
     />
   </div>
 </template>
