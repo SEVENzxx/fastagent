@@ -237,6 +237,20 @@ def _selected_or_last_product(context: ConversationCommerceState, pending_candid
 
     if len(pending_candidates) == 1:
         return pending_candidates[0]
+
+    # 兜底：用 last_product_keyword 在候选列表中按名称模糊匹配
+    keyword = context.last_product_keyword
+    if keyword and pending_candidates:
+        normalized_kw = normalize_product_reference_text(keyword)
+        if normalized_kw:
+            matches = match_products_from_candidates(normalized_kw, pending_candidates)
+            if len(matches) == 1:
+                logger.info("商品引用关键词兜底命中：keyword=%s product=%s", keyword, matches[0].get("name"))
+                return matches[0]
+            if matches:
+                logger.info("商品引用关键词匹配到多个候选，返回首个：keyword=%s count=%s", keyword, len(matches))
+                return matches[0]
+
     return None
 
 

@@ -40,14 +40,22 @@ class Settings(BaseSettings):
     REDIS_URL: str
     REDIS_PASSWORD: str
 
-    # ── 本地 AI 模型（意图精判 + 通用回复兜底） ──
+    # ── AI 模型（意图精判 + 通用回复 + Agent）──
+    # 通过 Ollama OpenAI 兼容接口 /v1/chat/completions
     AI_LLM_PROVIDER: str = "http"
     AI_LLM_API_KEY: str = ""
-    AI_LLM_BASE_URL: str = "http://127.0.0.1:8003"
-    AI_LLM_MODEL: str = "qwen2.5-0.5b-local"
+    AI_LLM_BASE_URL: str = "http://localhost:11434"
+    AI_LLM_MODEL: str = "qwen2.5-1.5b-commerce"
     AI_LLM_TIMEOUT_SECONDS: float = 30.0
     AI_GENERAL_REPLY_TIMEOUT_SECONDS: float = 5.0
-    AI_LLM_MAX_TOKENS: int = 128
+    AI_LLM_MAX_TOKENS: int = 256
+
+    # ── Ollama 原生接口（电商路由 + 槽位提取 /api/generate）──
+    AI_LOCAL_LLM_ENABLED: bool = True
+    AI_LOCAL_LLM_BASE_URL: str = "http://localhost:11434"
+    AI_LOCAL_LLM_MODEL: str = "qwen2.5-1.5b-commerce"
+    AI_LOCAL_LLM_TIMEOUT_SECONDS: float = 8.0
+    AI_LOCAL_LLM_MAX_TOKENS: int = 150
 
     # ── Embedding ──
     AI_EMBEDDING_ENABLED: bool = True

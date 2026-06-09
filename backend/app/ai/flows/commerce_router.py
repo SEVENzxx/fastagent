@@ -1,6 +1,6 @@
 """商务主链路决策分流层。
 
-这里只做编排：规则路由 -> 产品咨询或订单动作 -> 返回统一结果。
+这里只做编排：LLM 路由（优先）→ 规则路由（兜底）→ 产品咨询或订单动作 → 返回统一结果。
 旧的大状态机逻辑已拆到 reference / flows / replies / skills。
 """
 
@@ -21,6 +21,7 @@ from app.ai.reference.product_reference import (
     normalize_product_reference_text,
 )
 from app.ai.flows.commerce_rules import route_commerce_message
+from app.ai.flows.commerce_router_llm import route_commerce_message_llm
 from app.ai.schemas.commerce_types import ActionType, CommerceRoute, CostLevel, ReplyResult
 from app.ai.skills.orders import (
     cancel_order_draft,
@@ -58,7 +59,14 @@ async def handle_commerce_flow(
         return None
 
     previous_stage = state.stage                     # 记录进入前的阶段
-    decision, slots = route_commerce_message(text, state)  # 1) 规则路由：13 条规则确定方向 + 抽取槽位
+
+    # 优先 LLM 语义路由，失败时降级到规则路由
+    llm_result = await route_commerce_message_llm(text, state)
+    if llm_result is not None:
+        decision, slots = llm_result
+    else:
+        decision, slots = route_commerce_message(text, state)  # 1) 规则路由：13 条规则确定方向 + 抽取槽位
+
     logger.info(
         "电商路由完成：tenant=%s conversation=%s route=%s action=%s risk=%s stage=%s",
         ctx.tenant_id, ctx.conversation_id, decision.route.value,

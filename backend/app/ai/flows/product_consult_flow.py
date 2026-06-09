@@ -273,8 +273,6 @@ class ProductConsultFlow:
     # ── 工具：查询与当前商品相关的知识库片段 ──
     async def _search_product_knowledge(self, ctx: AgentContext, text: str, product: dict[str, Any]) -> list[dict[str, Any]]:
         product_id = product.get("id")
-        filters = {"product_id": str(product_id)} if product_id is not None else None
-        min_score = settings.AI_PRODUCT_CONSULT_KNOWLEDGE_MIN_SCORE if product_id is not None else settings.AI_KNOWLEDGE_MIN_SCORE
         query = self._rewrite_product_query(text, product)
         try:
             hits = await self.vector_search.search_text(
@@ -282,8 +280,8 @@ class ProductConsultFlow:
                 tenant_id=ctx.tenant_id,
                 query=query,
                 top_k=settings.AI_PRODUCT_CONSULT_KNOWLEDGE_TOP_K,
-                min_score=min_score,
-                filters=filters,
+                min_score=settings.AI_PRODUCT_CONSULT_KNOWLEDGE_MIN_SCORE,
+                filters=None,
             )
         except Exception as exc:
             logger.warning("商品知识库检索失败：tenant=%s product=%s error=%s", ctx.tenant_id, product_id, exc)
