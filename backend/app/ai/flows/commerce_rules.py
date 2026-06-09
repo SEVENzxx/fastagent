@@ -256,6 +256,7 @@ def extract_slots(text: str) -> SlotResult:
     phone = _extract_phone(text)
     address = _extract_address(text)
     order_id = _extract_order_id(text)
+    min_price, max_price = _extract_price_range(text)
     return SlotResult(
         quantity=quantity,
         quantity_delta=quantity_delta,
@@ -264,6 +265,8 @@ def extract_slots(text: str) -> SlotResult:
         selection_index=parse_selection_index(text),
         order_id=order_id,
         product_keyword=_strip_action_words(text),
+        min_price=min_price,
+        max_price=max_price,
     )
 
 
@@ -315,6 +318,32 @@ def _extract_quantity(text: str) -> int | None:
     if match:
         return CHINESE_QUANTITIES.get(match.group(1))
     return None
+
+
+_PRICE_RANGE_RE = re.compile(r"(\d+)\s*[-—~至到]\s*(\d+)")
+_PRICE_MAX_BEFORE_RE = re.compile(r"(?:不超过|不高于|不超出|低于|不到|少于|最多|最高|不大于|小于)\s*(\d+)")
+_PRICE_MAX_AFTER_RE = re.compile(r"(\d+)\s*(?:以内|以下|之内|往下|内|左右|上下)")
+_PRICE_MIN_BEFORE_RE = re.compile(r"(?:至少|最少|不低于|最低|不小于|高于|大于|不小于)\s*(\d+)")
+_PRICE_MIN_AFTER_RE = re.compile(r"(\d+)\s*(?:以上|及以上|往上)")
+
+
+def _extract_price_range(text: str) -> tuple[float | None, float | None]:
+    m = _PRICE_RANGE_RE.search(text)
+    if m:
+        return float(m.group(1)), float(m.group(2))
+    m = _PRICE_MAX_BEFORE_RE.search(text)
+    if m:
+        return None, float(m.group(1))
+    m = _PRICE_MAX_AFTER_RE.search(text)
+    if m:
+        return None, float(m.group(1))
+    m = _PRICE_MIN_BEFORE_RE.search(text)
+    if m:
+        return float(m.group(1)), None
+    m = _PRICE_MIN_AFTER_RE.search(text)
+    if m:
+        return float(m.group(1)), None
+    return None, None
 
 
 def _strip_action_words(text: str) -> str:

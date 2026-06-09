@@ -127,6 +127,8 @@ class SlotResult(BaseModel):
     confirm_flag: bool = False             # 是否确认指令
     cancel_flag: bool = False              # 是否取消指令
     order_id: str | None = None            # 订单号
+    min_price: float | None = None         # 预算最低价
+    max_price: float | None = None         # 预算最高价
 
 
 ProductReferenceSource = Literal[

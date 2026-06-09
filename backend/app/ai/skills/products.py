@@ -26,12 +26,24 @@ async def search_products(
     db: AsyncSession,
     **kwargs,
 ) -> ToolResult:
-    """通过分类、商品名或 Qdrant 语义检索启用中的商品。"""
+    """通过分类、商品名或 Qdrant 语义检索启用中的商品。
+
+    支持过滤：category（限定品类）、min_price / max_price（预算范围）。
+    """
     _ = contact_id
     query_text = str(kwargs.get("query") or kwargs.get("keyword") or kwargs.get("customer_text") or "").strip()
     category_text = str(kwargs.get("category") or "").strip()
     category_text = _normalize_category_text(category_text)
     product_name = str(kwargs.get("product_name") or "").strip()
+    min_price = _optional_float(kwargs.get("min_price"))
+    max_price = _optional_float(kwargs.get("max_price"))
+
+    # 解析品类 ID（用于精确过滤，弥补向量搜索跨品类召回的不足）
+    category_id: int | None = None
+    if category_text:
+        cat = await _find_category(db, tenant_id, category_text)
+        if cat is not None:
+            category_id = cat.id
 
     if product_name:
         logger.info(
@@ -40,11 +52,12 @@ async def search_products(
             product_name,
         )
         products = await _find_products_by_name(db, tenant_id, product_name)
-        return _tool_result(products)
+        products = _apply_filters(products, category_id, min_price, max_price)
+        return _tool_result(products, category=category_text)
 
     # 分类查询：直接用 Qdrant 语义搜索，商品已索引 category_path，效果优于 DB WHERE 过滤
     if category_text:
-        logger.info("商品搜索技能按分类向量搜索：tenant_id=%s category=%s", tenant_id, category_text)
+        logger.info("商品搜索技能按分类向量搜索：tenant_id=%s category=%s category_id=%s", tenant_id, category_text, category_id)
         hits = await _vector_search.search_text(
             domain=VectorDomain.PRODUCT,
             tenant_id=tenant_id,
@@ -64,6 +77,9 @@ async def search_products(
                         "message": f"暂时没有找到「{category_text}」相关商品，您可以换个品类名再试。"},
             )
         products = await _load_products_by_ids(db, tenant_id, [int(h.payload["product_id"]) for h in hits if h.payload.get("product_id")])
+        products = _apply_filters(products, category_id, min_price, max_price)
+        logger.info("商品搜索品类过滤后：tenant_id=%s category=%s before=%s after=%s",
+                     tenant_id, category_text, len(hits), len(products))
         return _tool_result(products, category=category_text)
 
     if not query_text:
@@ -75,6 +91,7 @@ async def search_products(
             .limit(MAX_RESULTS)
         )
         products = list(result.scalars().all())
+        products = _apply_filters(products, category_id, min_price, max_price)
         return _tool_result(products)
 
     hits = await _vector_search.search_text(
@@ -113,6 +130,7 @@ async def search_products(
     products = list(result.scalars().all())
     order = {product_id: idx for idx, product_id in enumerate(product_ids)}
     products.sort(key=lambda item: order.get(item.id, len(order)))
+    products = _apply_filters(products, category_id, min_price, max_price)
     logger.info("商品搜索技能完成：tenant_id=%s query=%s count=%s", tenant_id, query_text, len(products))
     return _tool_result(products)
 
@@ -253,6 +271,30 @@ async def _find_category(db: AsyncSession, tenant_id: int, category_text: str) -
         .order_by(Category.sort_order.asc(), Category.created_at.asc())
         .limit(1)
     )
+
+
+def _optional_float(value: object) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _apply_filters(
+    products: list[Product],
+    category_id: int | None,
+    min_price: float | None,
+    max_price: float | None,
+) -> list[Product]:
+    if category_id is not None:
+        products = [p for p in products if p.category_id == category_id]
+    if min_price is not None:
+        products = [p for p in products if p.price is not None and p.price >= min_price]
+    if max_price is not None:
+        products = [p for p in products if p.price is not None and p.price <= max_price]
+    return products
 
 
 def _normalize_category_text(value: str) -> str:

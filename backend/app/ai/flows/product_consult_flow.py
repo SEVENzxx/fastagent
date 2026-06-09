@@ -194,6 +194,8 @@ class ProductConsultFlow:
             db=ctx.db,
             category=category or "",
             query=query,
+            min_price=slots.min_price,
+            max_price=slots.max_price,
         )
         products = _products_from_result(result)
         logger.info(
@@ -274,18 +276,37 @@ class ProductConsultFlow:
     async def _search_product_knowledge(self, ctx: AgentContext, text: str, product: dict[str, Any]) -> list[dict[str, Any]]:
         product_id = product.get("id")
         query = self._rewrite_product_query(text, product)
-        try:
-            hits = await self.vector_search.search_text(
-                domain=VectorDomain.KNOWLEDGE_CHUNK,
-                tenant_id=ctx.tenant_id,
-                query=query,
-                top_k=settings.AI_PRODUCT_CONSULT_KNOWLEDGE_TOP_K,
-                min_score=settings.AI_PRODUCT_CONSULT_KNOWLEDGE_MIN_SCORE,
-                filters=None,
-            )
-        except Exception as exc:
-            logger.warning("商品知识库检索失败：tenant=%s product=%s error=%s", ctx.tenant_id, product_id, exc)
-            return []
+        min_score = settings.AI_PRODUCT_CONSULT_KNOWLEDGE_MIN_SCORE
+        top_k = settings.AI_PRODUCT_CONSULT_KNOWLEDGE_TOP_K
+
+        # 先尝试用 product_id 精确过滤；若未命中则回退到无过滤（兼容旧数据）
+        hits = None
+        if product_id is not None:
+            try:
+                hits = await self.vector_search.search_text(
+                    domain=VectorDomain.KNOWLEDGE_CHUNK,
+                    tenant_id=ctx.tenant_id,
+                    query=query,
+                    top_k=top_k,
+                    min_score=min_score,
+                    filters={"product_id": str(product_id)},
+                )
+            except Exception as exc:
+                logger.warning("商品知识库检索(product_id过滤)失败：tenant=%s product=%s error=%s", ctx.tenant_id, product_id, exc)
+
+        if not hits:
+            try:
+                hits = await self.vector_search.search_text(
+                    domain=VectorDomain.KNOWLEDGE_CHUNK,
+                    tenant_id=ctx.tenant_id,
+                    query=query,
+                    top_k=top_k,
+                    min_score=min_score,
+                    filters=None,
+                )
+            except Exception as exc:
+                logger.warning("商品知识库检索失败：tenant=%s product=%s error=%s", ctx.tenant_id, product_id, exc)
+                return []
         logger.info(
             "商品知识库检索完成：tenant=%s conversation=%s product=%s raw_query=%s rewritten_query=%s min_score=%s hits=%s top_score=%s used_for_llm=%s",
             ctx.tenant_id,
