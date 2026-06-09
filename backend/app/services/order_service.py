@@ -230,7 +230,7 @@ async def update_order(
 
     order.payable_amount = round(order.total_amount - order.discount_amount, 2)
     metadata = dict(order.metadata_ or {})
-    metadata["missing_info"] = _detect_missing_info_from_order(order)
+    metadata["missing_info"] = detect_missing_info_from_order(order)
     order.metadata_ = metadata
     order.updated_at = datetime.now(timezone.utc)
     await db.commit()
@@ -431,7 +431,9 @@ def _detect_missing_info(body: OrderCreate) -> list[str]:
     return missing
 
 
-def _detect_missing_info_from_order(order: Order) -> list[str]:
+def detect_missing_info_from_order(order: Order) -> list[str]:
+    """返回订单仍缺失的客户侧必填信息。"""
+
     missing: list[str] = []
     if not order.shipping_address:
         missing.append("address")

@@ -288,13 +288,12 @@ async def confirm_order(
             tenant_id,
             order.status,
         )
+        payload = _order_payload(order)
         return ToolResult(
             ok=True,
             skill_name="confirm_order",
             result={
-                "order_id": str(order.id),
-                "status": order.status,
-                "status_label": _status_label(order.status),
+                **payload,
                 "message": f"订单 #{order.id} 已确认，等待坐席审核发货。",
             },
         )
@@ -377,6 +376,7 @@ async def manage_order(
     """
     action = str(kwargs.get("action") or "query").strip().lower()
     order_id = kwargs.get("order_id")
+    status = kwargs.get("status")
 
     # 如果没有 order_id，尝试从 customer_text 提取或按客户查询
     if order_id is None:
@@ -401,7 +401,12 @@ async def manage_order(
                 error="请提供订单号或确认客户身份。",
             )
         orders, total = await order_service.list_orders(
-            db, tenant_id, contact_id=contact_id, page=1, page_size=5
+            db,
+            tenant_id,
+            contact_id=contact_id,
+            status=str(status) if status else None,
+            page=1,
+            page_size=5,
         )
         if not orders:
             return ToolResult(
@@ -481,7 +486,7 @@ async def update_order_draft(
             return ToolResult(ok=False, skill_name="update_order_draft", error=str(exc))
 
     metadata = dict(order.metadata_ or {})
-    metadata["missing_info"] = _detect_missing_info_from_order(order)
+    metadata["missing_info"] = order_service.detect_missing_info_from_order(order)
     order.metadata_ = metadata
     await db.commit()
     await db.refresh(order)
@@ -548,7 +553,7 @@ async def update_draft_order_quantity(
     order.total_amount = round(sum(float(it.subtotal) for it in order.items), 2)
     order.payable_amount = round(order.total_amount - float(order.discount_amount), 2)
     metadata = dict(order.metadata_ or {})
-    metadata["missing_info"] = _detect_missing_info_from_order(order)
+    metadata["missing_info"] = order_service.detect_missing_info_from_order(order)
     order.metadata_ = metadata
     await db.commit()
     await db.refresh(order)
@@ -734,7 +739,7 @@ def _order_payload(order: Order) -> dict:
         }
         for item in (order.items or [])
     ]
-    missing = _detect_missing_info_from_order(order)
+    missing = order_service.detect_missing_info_from_order(order)
     return {
         "order_id": str(order.id),
         "status": order.status,
@@ -747,15 +752,6 @@ def _order_payload(order: Order) -> dict:
         "receiver_phone": order.receiver_phone,
         "missing_info": missing,
     }
-
-
-def _detect_missing_info_from_order(order: Order) -> list[str]:
-    missing: list[str] = []
-    if not order.shipping_address:
-        missing.append("address")
-    if not order.receiver_phone:
-        missing.append("phone")
-    return missing
 
 
 def _build_quantity_update_message(item: dict, payable: float) -> str:

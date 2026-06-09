@@ -145,10 +145,22 @@ class VectorSearchService:
             )
             return []
 
-        return [
+        results = [
             VectorSearchResult(point_id=hit.point_id, score=hit.score, payload=hit.payload)
             for hit in hits
         ]
+        logger.info(
+            "向量检索完成：domain=%s tenant_id=%s query=%s top_k=%s min_score=%s filters=%s candidates=%s scores=%s",
+            domain.value,
+            tenant_id,
+            clean_query[:120],
+            top_k,
+            min_score,
+            filters or {},
+            len(results),
+            [round(item.score, 4) for item in results[:10]],
+        )
+        return results
 
     # ═══════════════════════════ 删除 / 计数 ═══════════════════════════
 

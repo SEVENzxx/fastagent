@@ -88,7 +88,7 @@ async def route_wecom_message(
     db: AsyncSession,
     platform: Platform,
     message: WeComInboundMessage,
-) -> tuple[Conversation, object]:
+) -> None:
     """把企业微信入站消息路由到联系人、会话和消息。
 
     ── 处理步骤 ──
@@ -147,4 +147,3 @@ async def route_wecom_message(
 
     # ── 5: AI 意图识别 + 自动回复 ──
     await process_customer_message_with_ai(db, conversation, saved_message)
-    return conversation, saved_message

@@ -21,12 +21,12 @@ from app.schemas.conversation import ConversationUpdate, MessageCreate
 from app.services import conversation_service, outbound_message_service
 from app.ai.agent.argument_pending import build_pending_state_from_tool_result
 from app.ai.agent.types import AgentContext
-from app.ai.commerce_flow import handle_commerce_flow, CommerceFlowResult
+from app.ai.flows.commerce_router import CommerceFlowResult, handle_commerce_flow
 from app.ai.memory.conversation_state import ConversationStateStore
 from app.ai.memory.message_buffer import ConversationMessageBuffer
 from app.ai.memory.pending_state import PendingStateStore
 from app.ai.classifier.pipeline import IntentRecognitionPipeline
-from app.ai.router.message_router import MessageRouter
+from app.ai.router.message_router import MessageRouter, RenderResult
 from app.services.usage_service import bind_usage_context
 
 logger = logging.getLogger(__name__)
@@ -53,6 +53,8 @@ class ProcessingContext:
     commerce_result: CommerceFlowResult | None = None
     routed_intent: Any = None
     render_result: RenderResult | None = None
+    handler: Any = None      # HandleSilent 设置的消息 handler，RenderReply 消费
+    router: Any = None       # HandleSilent 设置的消息路由器，RenderReply 消费
     should_stop: bool = False  # 设为 True 则终止后续步骤
     release_lock: bool = True  # 结束时是否释放锁
 
@@ -74,7 +76,7 @@ class PipelineStep(ABC):
 # ──────────────────────────────────────────────
 
 class FilterClosedOrHumanProcessing(PipelineStep):
-    """步骤 1: 已关闭 / human_processing → 跳过"""
+    """步骤 1: 已关闭 / human_processing 的会话 → 跳过"""
 
     async def execute(self, ctx: ProcessingContext) -> bool:
         if ctx.conversation.status in {Conversation.STATUS_CLOSED, Conversation.STATUS_HUMAN_PROCESSING}:
@@ -83,7 +85,7 @@ class FilterClosedOrHumanProcessing(PipelineStep):
 
 
 class FilterPendingHuman(PipelineStep):
-    """步骤 2-4: pending_human 排队状态处理"""
+    """步骤 2: pending_human 排队 / 切回 AI / 兜底提示"""
 
     async def execute(self, ctx: ProcessingContext) -> bool:
         if ctx.conversation.status != Conversation.STATUS_PENDING_HUMAN:
@@ -122,7 +124,7 @@ class FilterPendingHuman(PipelineStep):
 
 
 class FilterHandlingHuman(PipelineStep):
-    """步骤 5: 已由人工接待 → 跳过"""
+    """步骤 3: 已由人工接待的会话 → 跳过"""
 
     async def execute(self, ctx: ProcessingContext) -> bool:
         if ctx.conversation.handling_type == Conversation.HANDLING_HUMAN:
@@ -131,7 +133,7 @@ class FilterHandlingHuman(PipelineStep):
 
 
 class FilterNonCustomerText(PipelineStep):
-    """步骤 6: 非客户文本消息 → 跳过"""
+    """步骤 4: 非客户文本消息（图片、系统消息等）→ 跳过"""
 
     async def execute(self, ctx: ProcessingContext) -> bool:
         msg = ctx.customer_message
@@ -141,7 +143,7 @@ class FilterNonCustomerText(PipelineStep):
 
 
 class BufferAndDeduplicate(PipelineStep):
-    """步骤 7: 同会话快速消息缓冲 + 串行锁"""
+    """步骤 5: 同会话消息缓冲 + 防抖合并 + 分布式串行锁"""
 
     async def execute(self, ctx: ProcessingContext) -> bool:
         text = (ctx.customer_message.content or "").strip()
@@ -184,7 +186,7 @@ class BufferAndDeduplicate(PipelineStep):
 
 
 class ExecuteCommerceFlow(PipelineStep):
-    """步骤 8-10: 商品/订单多轮状态机优先处理"""
+    """步骤 6: 商品咨询 / 订单操作（电商状态机优先，命中则短路）"""
 
     async def execute(self, ctx: ProcessingContext) -> bool:
         bind_usage_context(
@@ -215,26 +217,32 @@ class ExecuteCommerceFlow(PipelineStep):
         result = await handle_commerce_flow(ctx.agent_ctx, ctx.customer_text, commerce_state)
 
         if result is None:
-            return True  # 未命中状态机，继续走通用意图识别
+            return True  # 未命中商务主链路，继续走通用意图识别
 
-        # 状态机命中，直接输出回复
+        # 商务主链路命中后统一保存上下文并直接回复，避免再掉到通用 LLM。
         ctx.commerce_result = result
         await commerce_store.set(ctx.conversation.tenant_id, ctx.conversation.id, result.state)
         metadata = {
-            "ai_route": "COMMERCE_FLOW",
+            "ai_route": _metadata_value(result.reply.route) or "COMMERCE_FLOW",
             "skill": result.state.last_agent_action,
             "intent": result.state.last_intent,
             "confidence": 1.0,
             "is_multi_intent": False,
+            "response_type": result.reply.response_type,
+            "risk_level": _metadata_value(result.reply.risk_level),
+            "cost_level": _metadata_value(result.reply.cost_level),
+            "response_mode": _metadata_value(result.reply.response_mode),
             "conversation_state": result.state.to_dict(),
             "merged_customer_text": ctx.customer_text,
+            **(result.reply.metadata or {}),
         }
         order_cards = _extract_order_cards(result.tool_results)
         if order_cards:
             metadata["order_cards"] = order_cards
         logger.info(
-            "商品订单状态机已处理：conversation_id=%s stage=%s intent=%s action=%s content_len=%s",
+            "商务主链路已处理：conversation_id=%s stage=%s route=%s response=%s risk=%s intent=%s action=%s content_len=%s",
             ctx.conversation.id, result.state.stage.value,
+            result.reply.route, result.reply.response_type, result.reply.risk_level,
             result.state.last_intent, result.state.last_agent_action, len(result.text),
         )
         await _create_deliver_and_broadcast_reply_message(
@@ -246,7 +254,7 @@ class ExecuteCommerceFlow(PipelineStep):
 
 
 class RecognizeIntent(PipelineStep):
-    """步骤 11: 意图识别 + 路由分发"""
+    """步骤 7: 10 层意图识别流水线 → RoutedIntent"""
 
     async def execute(self, ctx: ProcessingContext) -> bool:
         result = await IntentRecognitionPipeline().recognize_and_route(
@@ -259,7 +267,7 @@ class RecognizeIntent(PipelineStep):
 
 
 class HandleSilent(PipelineStep):
-    """步骤 12-13: Silent 路由 → 直接返回"""
+    """步骤 8: 路由分发 → Handler（Silent/转人工/问候/pending state 清理）"""
 
     async def execute(self, ctx: ProcessingContext) -> bool:
         router = MessageRouter()
@@ -291,21 +299,18 @@ class HandleSilent(PipelineStep):
             )
             ctx.conversation.tags = (ctx.conversation.tags or []) + ["ai_greeting_sent"]
 
-        self._handler = handler
-        self._router = router
+        # 通过 ProcessingContext 传递给 RenderReply 步骤（两个步骤是不同实例，不能用 self._ 传参）
+        ctx.handler = handler
+        ctx.router = router
         return True
 
 
 class RenderReply(PipelineStep):
-    """步骤 14-17: 流式渲染 AI 回复"""
-
-    def __init__(self) -> None:
-        self._handler: Any = None
-        self._router: Any = None
+    """步骤 9: 流式渲染 AI 回复 → 落库 → WebSocket 广播 → 渠道路由"""
 
     async def execute(self, ctx: ProcessingContext) -> bool:
-        handler = self._handler
-        router = self._router
+        handler = ctx.handler
+        router = ctx.router
 
         if handler.show_typing:
             await _publish_typing(ctx.conversation, True)
@@ -611,3 +616,8 @@ def _build_pending_state_from_tool_results(tool_results: list[dict], *, intent: 
 
 def _has_successful_agent_tool_result(tool_results: list[dict]) -> bool:
     return any(bool(result.get("ok")) for result in tool_results)
+
+
+def _metadata_value(value: Any) -> Any:
+    """把 Enum 等对象转成可 JSON 序列化的 metadata 值。"""
+    return value.value if hasattr(value, "value") else value

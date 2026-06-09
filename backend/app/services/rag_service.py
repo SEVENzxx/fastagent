@@ -7,6 +7,7 @@ import logging
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
+from app.ai.rag.query_rewriter import normalize_query
 from app.integrations.reranker_client import RerankerClient
 from app.ai.rag.vector_search import VectorDomain, VectorSearchResult, VectorSearchService
 
@@ -32,21 +33,33 @@ class RAGService:
     async def search_chunks(self, query: str, tenant_id: int, db: AsyncSession | None = None) -> list[dict]:
         """从 Qdrant 召回知识分块，并按配置进行 rerank。"""
         _ = db
+        normalized_query = normalize_query(query)
         hits = await self.vector_search.search_text(
             domain=VectorDomain.KNOWLEDGE_CHUNK,
             tenant_id=tenant_id,
-            query=query,
+            query=normalized_query,
             top_k=self.top_k,
             min_score=self.min_score,
         )
         candidates = [self._chunk_hit_to_dict(hit) for hit in hits]
+        logger.info(
+            "RAG chunk 召回：raw_query=%r normalized_query=%r tenant_id=%s top_k=%s min_score=%s candidates=%s scores=%s enter_reranker=%s",
+            query,
+            normalized_query,
+            tenant_id,
+            self.top_k,
+            self.min_score,
+            len(candidates),
+            [round(float(item.get("score", 0)), 4) for item in candidates[:10]],
+            settings.AI_RERANKER_ENABLED and len(candidates) > 1,
+        )
         if not candidates:
             return []
 
         if settings.AI_RERANKER_ENABLED and len(candidates) > 1:
             try:
                 doc_texts = [item["content"] for item in candidates]
-                reranked = await self.reranker_client.rerank(query, doc_texts, self.rerank_top_k)
+                reranked = await self.reranker_client.rerank(normalized_query, doc_texts, self.rerank_top_k)
                 if reranked:
                     results = []
                     for item in reranked:
@@ -55,7 +68,13 @@ class RAGService:
                             candidate = candidates[idx]
                             candidate["score"] = round(float(item.get("score", candidate.get("score", 0))), 4)
                             results.append(candidate)
-                    logger.info("RAG chunk search reranked: tenant_id=%s query=%s hits=%s", tenant_id, query[:80], len(results))
+                    logger.info(
+                        "RAG chunk rerank 完成：tenant_id=%s query=%s hits=%s rerank_scores=%s",
+                        tenant_id,
+                        normalized_query[:80],
+                        len(results),
+                        [item.get("score") for item in reranked[: self.rerank_top_k]],
+                    )
                     return results[: self.rerank_top_k]
             except Exception as exc:
                 logger.warning("RAG reranker failed, using Qdrant scores: %s", exc)
@@ -65,20 +84,25 @@ class RAGService:
     async def search_qa(self, query: str, tenant_id: int, db: AsyncSession | None = None) -> list[dict]:
         """在 Qdrant 中匹配启用中的标准问答对。"""
         _ = db
+        normalized_query = normalize_query(query)
         hits = await self.vector_search.search_text(
             domain=VectorDomain.QA_PAIR,
             tenant_id=tenant_id,
-            query=query,
+            query=normalized_query,
             top_k=self.qa_top_k,
             min_score=self.qa_min_score,
             filters={"is_active": True},
         )
         logger.info(
-            "QA search params: query=%r tenant_id=%s top_k=%s min_score=%s",
+            "QA search params: raw_query=%r normalized_query=%r tenant_id=%s top_k=%s min_score=%s candidates=%s scores=%s direct_answer=%s",
             query,
+            normalized_query,
             tenant_id,
             self.qa_top_k,
             self.qa_min_score,
+            len(hits),
+            [round(hit.score, 4) for hit in hits],
+            bool(hits),
         )
         return [self._qa_hit_to_dict(hit) for hit in hits]
 

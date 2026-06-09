@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from app.ai.agent.types import AgentState
+from app.ai.replies.order_reply import empty_order_message, render_order_list
 
 
 FIXED_POLICY_REPLIES: dict[str, str] = {
@@ -149,7 +150,7 @@ def _order_list_reply(tool_results: list[dict]) -> str | None:
         orders = payload.get("orders")
         if not isinstance(orders, list) or not orders:
             continue
-        replies.append(_render_order_list(orders, int(payload.get("count") or len(orders))))
+        replies.append(render_order_list(orders, int(payload.get("count") or len(orders))))
     return "\n\n".join(dict.fromkeys(replies)) if replies else None
 
 
@@ -185,7 +186,7 @@ def _payload_message(payload: Any) -> str | None:
 def _empty_message_for_skill(skill: str) -> str:
     return {
         "search_products": "暂时没找到匹配的商品。您可以告诉我更具体的品类、品牌或型号，我再帮您查。",
-        "manage_order": "暂时没有查到相关订单。您可以提供订单号或下单手机号，我再帮您确认。",
+        "manage_order": empty_order_message(),
         "list_documents": "暂时没有找到匹配的资料。您可以换个关键词再试。",
     }.get(skill, "暂时没有查到匹配结果。您可以补充更具体的信息，我再帮您确认。")
 
@@ -213,22 +214,3 @@ def _render_product_list(products: list[dict]) -> str:
     lines.append("您想了解哪一款，或者需要我帮您下单哪一款？")
     return "\n".join(lines)
 
-
-def _render_order_list(orders: list[dict], total: int) -> str:
-    lines = [f"您共有 {total} 个订单，最近 {len(orders)} 个是："]
-    for index, order in enumerate(orders[:5], start=1):
-        order_id = str(order.get("order_id") or "").strip()
-        status = str(order.get("status_label") or order.get("status") or "").strip()
-        amount = float(order.get("payable_amount") or 0)
-        lines.append(f"{index}. 订单 #{order_id}：{status}，应付 ¥{amount:.2f}")
-        items = order.get("items")
-        if isinstance(items, list):
-            for item in items[:3]:
-                if not isinstance(item, dict):
-                    continue
-                name = str(item.get("product_name") or "商品").strip()
-                quantity = item.get("quantity") or 1
-                subtotal = float(item.get("subtotal") or 0)
-                lines.append(f"   - {name} ×{quantity}，小计 ¥{subtotal:.2f}")
-    lines.append("如果您想查看某一单的详细收货信息或物流，请把订单号发给我。")
-    return "\n".join(lines)

@@ -15,8 +15,16 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any, Literal, Union
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import Field
 
+from app.ai.schemas.base import SkillArgs
+from app.ai.schemas.order import (
+    ConfirmOrderArgs,
+    CreateOrderArgs,
+    ManageOrderArgs,
+    UpdateDraftOrderQuantityArgs,
+    UpdateOrderDraftArgs,
+)
 
 # 风险等级：读 / 写 / 写前确认 / 需人工审批
 RiskLevel = Literal["read", "write", "write_confirm", "human_approval"]
@@ -31,16 +39,6 @@ CompositeExtractor = Callable[[dict[str, Any], str], dict[str, Any]]
 MergeFunc = Callable[[dict[str, Any], dict[str, Any]], dict[str, Any]]
 # 业务数据解析函数：将自然语言参数解析为具体的业务记录    resolve(plan: dict, db, tenant_id) -> dict
 BusinessResolver = Callable[[dict[str, Any], "AsyncSession", int], Awaitable[dict[str, Any]]]
-
-
-class SkillArgs(BaseModel):
-    """技能参数基类。
-
-    extra="allow" 允许额外字段，确保新老技能迁移可渐进进行，
-    每个技能不必一次性切换到严格合约。
-    """
-
-    model_config = ConfigDict(extra="allow")
 
 
 # ── 各技能参数模型 ──
@@ -63,61 +61,6 @@ class SearchProductsArgs(SkillArgs):
 class RememberInfoArgs(SkillArgs):
     """客户偏好记忆：记录客户备注或偏好信息。"""
     customer_text: str = Field(default="")
-
-
-class OrderItemArg(SkillArgs):
-    """订单商品项：商品名 + 数量。"""
-    product_id: int | None = None
-    product_name: str
-    quantity: int = Field(default=1, ge=1)
-
-
-class CreateOrderArgs(SkillArgs):
-    """创建订单：下单所需参数。"""
-    query: str | None = None
-    customer_text: str | None = None
-    items: list[OrderItemArg] = Field(default_factory=list)
-    shipping_address: str | None = None
-    receiver_name: str | None = None
-    receiver_phone: str | None = None
-    remark: str | None = None
-
-
-class UpdateOrderDraftArgs(SkillArgs):
-    """更新订单草稿：补地址电话、改数量或换商品。"""
-    query: str | None = None
-    customer_text: str | None = None
-    order_id: int
-    shipping_address: str | None = None
-    receiver_phone: str | None = None
-    receiver_name: str | None = None
-    quantity: int | None = Field(default=None, ge=1)
-    product_name: str | None = None
-
-
-class UpdateDraftOrderQuantityArgs(SkillArgs):
-    """修改订单草稿数量：支持设置固定数量或按当前数量增减。"""
-    query: str | None = None
-    customer_text: str | None = None
-    order_id: int | None = None
-    quantity: int | None = Field(default=None, ge=1)
-    quantity_delta: int | None = None
-    product_name: str | None = None
-
-
-class ConfirmOrderArgs(SkillArgs):
-    """确认订单：锁定订单前二次确认。"""
-    query: str | None = None
-    customer_text: str | None = None
-    order_id: int | None = None
-
-
-class ManageOrderArgs(SkillArgs):
-    """订单管理：查单、改地址、加备注等。"""
-    query: str | None = None
-    customer_text: str | None = None
-    action: str = "query"
-    order_id: int | None = None
 
 
 class UpdatePriceStrategyArgs(SkillArgs):

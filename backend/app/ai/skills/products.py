@@ -7,6 +7,7 @@ import logging
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.models.category import Category
 from app.models.product import Product
 from app.ai.agent.types import ToolResult
@@ -14,7 +15,7 @@ from app.ai.rag.vector_search import VectorDomain, VectorSearchService
 
 logger = logging.getLogger(__name__)
 
-MAX_RESULTS = 5
+MAX_RESULTS = 20
 _vector_search = VectorSearchService()
 
 
@@ -29,50 +30,44 @@ async def search_products(
     _ = contact_id
     query_text = str(kwargs.get("query") or kwargs.get("keyword") or kwargs.get("customer_text") or "").strip()
     category_text = str(kwargs.get("category") or "").strip()
+    category_text = _normalize_category_text(category_text)
     product_name = str(kwargs.get("product_name") or "").strip()
 
     if product_name:
         logger.info(
-            "Skill search_products called with product_name: tenant_id=%s product_name=%s",
+            "商品搜索技能按商品名查询：tenant_id=%s product_name=%s",
             tenant_id,
             product_name,
         )
         products = await _find_products_by_name(db, tenant_id, product_name)
         return _tool_result(products)
 
+    # 分类查询：直接用 Qdrant 语义搜索，商品已索引 category_path，效果优于 DB WHERE 过滤
     if category_text:
+        logger.info("商品搜索技能按分类向量搜索：tenant_id=%s category=%s", tenant_id, category_text)
+        hits = await _vector_search.search_text(
+            domain=VectorDomain.PRODUCT,
+            tenant_id=tenant_id,
+            query=category_text,
+            top_k=settings.AI_PRODUCT_VECTOR_TOP_K,
+            min_score=settings.AI_PRODUCT_VECTOR_MIN_SCORE,
+            filters={"is_active": True},
+        )
         logger.info(
-            "Skill search_products called with category: tenant_id=%s category=%s",
-            tenant_id,
-            category_text,
+            "商品搜索向量召回：tenant_id=%s category=%s candidates=%s top_score=%s",
+            tenant_id, category_text, len(hits), hits[0].score if hits else 0,
         )
-        category = await _find_category(db, tenant_id, category_text)
-        if category is None:
+        if not hits:
             return ToolResult(
-                ok=True,
-                skill_name="search_products",
-                result={
-                    "products": [],
-                    "count": 0,
-                    "category": category_text,
-                    "message": f"暂时没有找到「{category_text}」这个商品分类，您可以换个品类名再试。",
-                },
+                ok=True, skill_name="search_products",
+                result={"products": [], "count": 0, "category": category_text,
+                        "message": f"暂时没有找到「{category_text}」相关商品，您可以换个品类名再试。"},
             )
-        result = await db.execute(
-            select(Product)
-            .where(
-                Product.tenant_id == tenant_id,
-                Product.is_active.is_(True),
-                Product.category_id == category.id,
-            )
-            .order_by(Product.updated_at.desc(), Product.created_at.desc())
-            .limit(MAX_RESULTS)
-        )
-        products = list(result.scalars().all())
-        return _tool_result(products, category=category.name)
+        products = await _load_products_by_ids(db, tenant_id, [int(h.payload["product_id"]) for h in hits if h.payload.get("product_id")])
+        return _tool_result(products, category=category_text)
 
     if not query_text:
-        logger.info("Skill search_products called without query; returning active products: tenant_id=%s", tenant_id)
+        logger.info("商品搜索技能未传查询条件，返回上架商品：tenant_id=%s", tenant_id)
         result = await db.execute(
             select(Product)
             .where(Product.tenant_id == tenant_id, Product.is_active.is_(True))
@@ -86,13 +81,22 @@ async def search_products(
         domain=VectorDomain.PRODUCT,
         tenant_id=tenant_id,
         query=query_text,
-        top_k=MAX_RESULTS,
-        min_score=0.55,
+        top_k=settings.AI_PRODUCT_VECTOR_TOP_K,
+        min_score=settings.AI_PRODUCT_VECTOR_MIN_SCORE,
         filters={"is_active": True},
+    )
+    logger.info(
+        "商品搜索向量召回：tenant_id=%s query=%s top_k=%s min_score=%s candidates=%s top_score=%s",
+        tenant_id,
+        query_text[:80],
+        settings.AI_PRODUCT_VECTOR_TOP_K,
+        settings.AI_PRODUCT_VECTOR_MIN_SCORE,
+        len(hits),
+        hits[0].score if hits else None,
     )
     product_ids = [int(hit.payload["product_id"]) for hit in hits if str(hit.payload.get("product_id", "")).isdigit()]
     if not product_ids:
-        logger.info("Skill search_products no Qdrant hits: tenant_id=%s query=%s", tenant_id, query_text)
+        logger.info("商品搜索技能未命中向量结果：tenant_id=%s query=%s", tenant_id, query_text)
         return ToolResult(
             ok=True,
             skill_name="search_products",
@@ -109,7 +113,7 @@ async def search_products(
     products = list(result.scalars().all())
     order = {product_id: idx for idx, product_id in enumerate(product_ids)}
     products.sort(key=lambda item: order.get(item.id, len(order)))
-    logger.info("Skill search_products complete: tenant_id=%s query=%s count=%s", tenant_id, query_text, len(products))
+    logger.info("商品搜索技能完成：tenant_id=%s query=%s count=%s", tenant_id, query_text, len(products))
     return _tool_result(products)
 
 
@@ -122,7 +126,7 @@ async def list_product_categories(
 ) -> ToolResult:
     """列出当前商品分类（以树形结构展示完整层级路径）。"""
     _ = contact_id, kwargs
-    logger.info("Skill list_product_categories called: tenant_id=%s", tenant_id)
+    logger.info("商品分类技能查询分类列表：tenant_id=%s", tenant_id)
     result = await db.execute(
         select(Category)
         .where(Category.tenant_id == tenant_id)
@@ -167,7 +171,7 @@ async def get_product_detail(
     """查询单个商品详情，优先精确名称，失败后做包含匹配。"""
     _ = contact_id
     product_name = str(kwargs.get("product_name") or kwargs.get("query") or kwargs.get("customer_text") or "").strip()
-    logger.info("Skill get_product_detail called: tenant_id=%s product_name=%s", tenant_id, product_name)
+    logger.info("商品详情技能查询商品：tenant_id=%s product_name=%s", tenant_id, product_name)
     products = await _find_products_by_name(db, tenant_id, product_name, limit=2)
     if not products:
         return ToolResult(
@@ -194,6 +198,24 @@ async def get_product_detail(
     )
 
 
+async def _load_products_by_ids(db: AsyncSession, tenant_id: int, product_ids: list[int]) -> list[Product]:
+    """根据 product_id 列表从 DB 批量加载 Product 对象，保持 Qdrant 排序。"""
+    if not product_ids:
+        return []
+    result = await db.execute(
+        select(Product).where(
+            Product.tenant_id == tenant_id,
+            Product.id.in_(product_ids),
+            Product.is_active.is_(True),
+        )
+    )
+    products = list(result.scalars().all())
+    # 按 Qdrant 返回的顺序重新排列
+    order = {pid: idx for idx, pid in enumerate(product_ids)}
+    products.sort(key=lambda p: order.get(p.id, len(order)))
+    return products
+
+
 def _tool_result(products: list[Product], *, category: str | None = None) -> ToolResult:
     items = [
         _product_payload(product)
@@ -209,6 +231,7 @@ def _product_payload(product: Product) -> dict:
     return {
         "id": str(product.id),
         "name": product.name,
+        "sku": product.sku,
         "price": float(product.price) if product.price else None,
         "stock": product.stock,
         "description": product.description or "",
@@ -218,6 +241,7 @@ def _product_payload(product: Product) -> dict:
 
 
 async def _find_category(db: AsyncSession, tenant_id: int, category_text: str) -> Category | None:
+    category_text = _normalize_category_text(category_text)
     exact = await db.scalar(
         select(Category).where(Category.tenant_id == tenant_id, Category.name == category_text).limit(1)
     )
@@ -229,6 +253,17 @@ async def _find_category(db: AsyncSession, tenant_id: int, category_text: str) -
         .order_by(Category.sort_order.asc(), Category.created_at.asc())
         .limit(1)
     )
+
+
+def _normalize_category_text(value: str) -> str:
+    """仅做通用文本清理，不内置任何行业品类别名。
+
+    SaaS 场景下，任何行业品类别名都应来自商家维护的分类、商品名称、SKU、
+    别名或后续向量召回结果，不能写死在平台代码里。
+    """
+
+    text = value.strip()
+    return text
 
 
 async def _find_products_by_name(
