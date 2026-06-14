@@ -81,7 +81,8 @@ def _tenant(item) -> TenantResponse:
     return TenantResponse(
         id=item.id, name=item.name, slug=item.slug, plan_id=item.plan_id,
         plan_name=getattr(item, "_plan_name", None), plan_expires_at=item.plan_expires_at,
-        custom_prompt=item.custom_prompt, selected_llm_config_id=item.selected_llm_config_id,
+        custom_prompt=item.custom_prompt, template_json=item.template_json or [],
+        selected_llm_config_id=item.selected_llm_config_id,
         selected_llm_config_name=getattr(item, "_selected_llm_config_name", None),
         is_active=item.is_active, created_at=item.created_at, updated_at=item.updated_at,
     )

@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.common.trace.middleware import TraceIdMiddleware
 from app.config import settings
 from app.logging_config import setup_logging
 
@@ -30,8 +31,10 @@ from app.api.v1.qa_pairs import router as qa_pairs_router
 from app.api.v1.rag import router as rag_router
 from app.api.v1.sales_intelligence import router as sales_intelligence_router
 from app.api.v1.roles import router as roles_router
+from app.api.v1.tenant_settings import router as tenant_settings_router
 from app.api.v1.webhooks import router as webhooks_router
 from app.api.v1.usage import router as usage_router
+from app.api.v1.intent_samples import router as intent_samples_router
 from app.api.v1.ws import router as ws_router
 from app.database import check_db_connection
 from app.redis_client import check_redis_connection
@@ -44,6 +47,14 @@ async def lifespan(app: FastAPI):
     from app.services.usage_service import start_usage_flush_worker
     await start_usage_flush_worker()
     yield
+    # 应用关闭时清理模块级 Redis 连接
+    from app.ai.context.session_store import close_cached_redis_client
+    await close_cached_redis_client()
+    from app.ai.context.pending_service import close_cached_pending_redis_client
+    await close_cached_pending_redis_client()
+    # 关闭 graph SQLite checkpointer 连接
+    from app.ai.graphs import close_order_graph_checkpointers
+    await close_order_graph_checkpointers()
 
 
 app = FastAPI(
@@ -77,6 +88,10 @@ async def log_requests(request: Request, call_next):
     return response
 
 
+# ── trace_id 中间件（最外层：在 log_requests 之前设置 trace_id）─────────────
+app.add_middleware(TraceIdMiddleware)
+
+
 # ── 路由注册 ─────────────────────────────────────────────────────────────
 app.include_router(auth_router, prefix="/api/v1")
 app.include_router(admin_router, prefix="/api/v1")
@@ -98,7 +113,15 @@ app.include_router(sales_intelligence_router, prefix="/api/v1")
 app.include_router(employees_router, prefix="/api/v1")
 app.include_router(webhooks_router, prefix="/api/v1")
 app.include_router(usage_router, prefix="/api/v1")
+app.include_router(tenant_settings_router, prefix="/api/v1")
+app.include_router(intent_samples_router, prefix="/api/v1")
 app.include_router(ws_router)
+
+# Internal / debug API — 仅在 development/test 环境注册
+if settings.APP_ENV in ("development", "test"):
+    from app.api.v1.internal.harness import router as harness_router
+    app.include_router(harness_router, prefix="/api/v1")
+    logger.info("Internal Harness API 已注册（APP_ENV=%s）", settings.APP_ENV)
 
 # ── 健康检查 ─────────────────────────────────────────────────────────────
 @app.get("/health")

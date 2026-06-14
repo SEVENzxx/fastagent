@@ -40,6 +40,7 @@ from app.schemas.admin import (
     TenantCreate,
     TenantUpdate,
 )
+from app.services.tenant_template import normalize_template_json
 
 # ── 权限码常量 ──────────────────────────────────────────────────────────────
 # 坐席角色默认拥有的基础业务权限
@@ -272,6 +273,8 @@ async def create_tenant(db: AsyncSession, body: TenantCreate) -> dict:
 
     # 1. 创建租户
     tenant_data = body.model_dump(exclude={"admin_email", "admin_password", "admin_display_name"})
+    if "template_json" in tenant_data:
+        tenant_data["template_json"] = normalize_template_json(tenant_data["template_json"], strict=True)
     tenant = Tenant(**tenant_data)
     db.add(tenant)
     await db.flush()
@@ -351,6 +354,8 @@ async def update_tenant(db: AsyncSession, item_id: int, body: TenantUpdate) -> T
     if item is None:
         return None
     data = body.model_dump(exclude_unset=True)
+    if "template_json" in data:
+        data["template_json"] = normalize_template_json(data["template_json"], strict=True)
     await _validate_refs(db, data.get("plan_id"), data.get("selected_llm_config_id"))
     for key, value in data.items():
         setattr(item, key, value)

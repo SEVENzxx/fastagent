@@ -1,0 +1,81 @@
+# 知识库 / RAG 用例
+env:
+  local:
+    base_url: "http://localhost:8000"
+
+tenant_id: 319767484162940928
+conversation_prefix: "harness"
+
+cases:
+  - name: "RAG-售后政策"
+    description: "用户咨询售后政策，验证 AI 能否从知识库检索并回复"
+    risk_level: "p1"
+    business_constraints:
+      - "必须从售后知识库中检索答案，不得编造"
+      - "回复应提及具体的售后政策条款"
+    tags: ["rag", "p1"]
+    messages:
+      - content: "售后政策是什么"
+    expected:
+      status_code: 200
+      reply_not_empty: true
+      max_latency_ms: 12000
+
+  - name: "RAG-退货流程"
+    description: "用户询问退货流程，验证 AI 能否从知识库检索退货步骤"
+    risk_level: "p1"
+    business_constraints:
+      - "必须从退货相关文档中检索"
+      - "应提供具体退货步骤而非笼统回答"
+    tags: ["rag", "p1"]
+    messages:
+      - content: "怎么退货"
+    expected:
+      status_code: 200
+      reply_not_empty: true
+      max_latency_ms: 12000
+
+  - name: "RAG-保修查询"
+    description: "用户询问保修期，验证 AI 能否从知识库检索保修政策"
+    risk_level: "p1"
+    business_constraints:
+      - "必须从保修相关文档中检索"
+      - "应提供具体保修年限和范围"
+    tags: ["rag", "p1"]
+    messages:
+      - content: "保修多久"
+    expected:
+      status_code: 200
+      reply_not_empty: true
+      max_latency_ms: 12000
+
+  - name: "RAG-发票"
+    description: "用户询问开票流程，验证 AI 能否从知识库检索发票信息"
+    risk_level: "p2"
+    business_constraints:
+      - "必须从发票相关文档中检索"
+      - "应提供开票方式或流程说明"
+    tags: ["rag", "p2"]
+    messages:
+      - content: "发票怎么开"
+    expected:
+      status_code: 200
+      reply_not_empty: true
+      max_latency_ms: 12000
+
+  # ── 历史 Bug 回归 ─────────────────────────────────────
+  # 以下 case 沉淀自 docs/archive/bug-log.md
+
+  - name: "RAG-政策不编造"
+    description: "用户咨询售后政策，验证 AI 基于 RAG 回答而非编造具体政策条款"
+    risk_level: "p1"
+    business_constraints:
+      - "应基于知识库中的售后/退款政策回答，不得凭空编造具体金额、天数或条款"
+      - "如果知识库无明确政策内容，应告知用户联系客服获取详细信息"
+    tags: ["rag", "p1", "regression"]
+    messages:
+      - content: "你们的退款政策是什么"
+    expected:
+      status_code: 200
+      reply_not_empty: true
+      max_latency_ms: 12000

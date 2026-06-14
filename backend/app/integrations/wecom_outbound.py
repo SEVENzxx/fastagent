@@ -6,7 +6,9 @@ import logging
 import time
 from typing import Any
 
-import httpx
+from app.common.trace.context import get_trace_id
+from app.config import settings
+from app.integrations.base import BaseClient, BaseClientError
 
 logger = logging.getLogger(__name__)
 
@@ -18,10 +20,14 @@ class WeComOutboundError(RuntimeError):
 _TOKEN_CACHE: dict[tuple[str, str, str], tuple[str, float]] = {}
 
 
-class WeComOutboundClient:
+class WeComOutboundClient(BaseClient):
     def __init__(self, config: dict) -> None:
+        super().__init__(
+            base_url=str(config.get("api_base_url") or "https://qyapi.weixin.qq.com"),
+            timeout_seconds=settings.WECOM_TIMEOUT_SECONDS,
+            trust_env=True,
+        )
         self.config = config
-        self.base_url = str(config.get("api_base_url") or "https://qyapi.weixin.qq.com").rstrip("/")
 
     async def send_text(self, external_userid: str, content: str) -> dict:
         """向打开聊天窗口的企业微信用户发送文本应用消息。
@@ -107,31 +113,15 @@ class WeComOutboundClient:
         return str(data["access_token"])
 
     async def _get_json(self, path: str, params: dict[str, str]) -> dict:
-        url = f"{self.base_url}{path}"
-        started = time.perf_counter()
         try:
-            async with httpx.AsyncClient(timeout=10) as client:
-                response = await client.get(url, params=params)
-                response.raise_for_status()
-                data = response.json()
-                logger.info("企业微信 GET 请求完成：path=%s elapsed_ms=%.0f", path, (time.perf_counter() - started) * 1000)
-                return data
-        except httpx.HTTPError as exc:
-            logger.warning("企业微信 GET 请求失败：path=%s elapsed_ms=%.0f error=%s", path, (time.perf_counter() - started) * 1000, exc)
+            return await self._get(path, params=params)
+        except BaseClientError as exc:
             raise WeComOutboundError(f"wecom http error: {exc}") from exc
 
     async def _post_json(self, path: str, params: dict[str, str], payload: dict) -> dict:
-        url = f"{self.base_url}{path}"
-        started = time.perf_counter()
         try:
-            async with httpx.AsyncClient(timeout=10) as client:
-                response = await client.post(url, params=params, json=payload)
-                response.raise_for_status()
-                data = response.json()
-                logger.info("企业微信 POST 请求完成：path=%s elapsed_ms=%.0f", path, (time.perf_counter() - started) * 1000)
-                return data
-        except httpx.HTTPError as exc:
-            logger.warning("企业微信 POST 请求失败：path=%s elapsed_ms=%.0f error=%s", path, (time.perf_counter() - started) * 1000, exc)
+            return await self._post(path, json_body=payload, params=params)
+        except BaseClientError as exc:
             raise WeComOutboundError(f"wecom http error: {exc}") from exc
 
     @staticmethod

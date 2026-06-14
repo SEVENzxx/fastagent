@@ -60,6 +60,7 @@ _PERMISSION_DESCRIPTIONS = {
     PermissionCode.MANAGE_CHANNELS: "管理渠道配置",
     PermissionCode.MANAGE_LLM_CONFIG: "管理 LLM 配置",
     PermissionCode.MANAGE_SENSITIVE_WORDS: "管理敏感词",
+    PermissionCode.MANAGE_INTENT_SAMPLES: "管理意图样本",
     PermissionCode.MANAGE_TENANTS: "管理租户（平台专有）",
     PermissionCode.MANAGE_PLANS: "管理套餐（平台专有）",
     PermissionCode.VIEW_AUDIT_LOGS: "查看审计日志（平台专有）",
@@ -70,14 +71,12 @@ _PERMISSION_DESCRIPTIONS = {
 
 
 async def _seed_permissions(db) -> int:
-    """写入权限码到 permissions 表，返回写入条数。"""
-    existing = await db.scalar(select(func.count(Permission.id)))
-    if existing and existing > 0:
-        logger.info("权限码已存在 (%s 条)，跳过", existing)
-        return 0
-
+    """写入权限码到 permissions 表（幂等 upsert），返回新增条数。"""
     count = 0
     for code in PermissionCode:
+        existing = await db.scalar(select(Permission).where(Permission.code == code.value))
+        if existing:
+            continue
         desc = _PERMISSION_DESCRIPTIONS.get(code)
         db.add(Permission(
             id=hash(code.value) % (10 ** 15),
@@ -86,8 +85,9 @@ async def _seed_permissions(db) -> int:
             description=desc,
         ))
         count += 1
-    await db.commit()
-    logger.info("权限码已初始化 (%s 条)", count)
+    if count > 0:
+        await db.commit()
+    logger.info("权限码检查完成：新增 %s 条", count)
     return count
 
 
@@ -131,12 +131,15 @@ async def _init_system_settings(db) -> None:
 async def _seed_intent_samples() -> None:
     """将平台默认意图样本写入 Qdrant 向量库（幂等 upsert）。
 
-    意图样本是向量语义召回的基础。没有意图样本，所有用户消息只能降级到
-    本地文本相似度兜底匹配，准确率会明显下降。此函数在 bootstrap 阶段主动索引，
-    避免将首次请求用户的耗时摊到第一个真实客户消息上。
+    增强的安全策略：
+    1. 先检查是否已存在且数量匹配 → 跳过，避免重复。
+    2. 先发一条测试 embedding 确认服务可用，再执行删除。
+    3. 删除 + 重索引走完才返回，确保 bootstrap 结束时数据完整。
+
+    SCHEMA_VERSION 变更时增量升级，不会误删 tenant>0 的租户样本。
     """
     from app.config import settings
-    from app.ai.classifier.intent_examples import DEFAULT_INTENT_EXAMPLES
+    from app.ai.recognition.examples import DEFAULT_INTENT_EXAMPLES, SCHEMA_VERSION
     from app.ai.rag.vector_search import VectorDomain, VectorSearchService
 
     qdrant_ok = settings.QDRANT_ENABLED and settings.QDRANT_URL
@@ -150,6 +153,32 @@ async def _seed_intent_samples() -> None:
         return
 
     vs = VectorSearchService()
+    expected = len(DEFAULT_INTENT_EXAMPLES)
+
+    # ── 1: 检查是否已存在且是最新版本 ──
+    try:
+        existing = await vs.count_points(domain=VectorDomain.INTENT_SAMPLE, tenant_id=0)
+        if existing == expected:
+            logger.info(
+                "意图样本已存在且数量匹配：count=%s schema_version=%s，跳过",
+                existing, SCHEMA_VERSION,
+            )
+            return
+        logger.info("意图样本需要更新：现有=%s 预期=%s", existing, expected)
+    except Exception:
+        logger.info("无法获取现有样本计数，将执行全量索引")
+
+    # ── 2: 发送测试 embedding 确认服务可用 ──
+    try:
+        test_vec = await vs.embedding.embed("测试")
+        if not test_vec or len(test_vec) != settings.AI_EMBEDDING_DIMENSION:
+            logger.error("Embedding 服务返回格式异常，跳过意图样本索引")
+            return
+    except Exception as exc:
+        logger.error("Embedding 服务不可用，跳过意图样本索引：%s", exc)
+        return
+
+    # ── 3: 清理旧数据并重新索引 ──
     await vs.delete_points(domain=VectorDomain.INTENT_SAMPLE, tenant_id=0)
 
     indexed = 0
@@ -162,16 +191,28 @@ async def _seed_intent_samples() -> None:
             payload={
                 "intent": example.intent,
                 "label": example.label,
-                "route": example.route,
                 "skill": example.skill,
+                "risk_level": example.risk_level,
                 "example_text": example.example_text,
+                "schema_version": SCHEMA_VERSION,
                 "is_active": True,
                 "source": "platform_default",
+                "route": example.route,
             },
         )
         if point_id:
             indexed += 1
-    logger.info("意图样本已索引到 Qdrant：total=%s indexed=%s", len(DEFAULT_INTENT_EXAMPLES), indexed)
+
+    if indexed == expected:
+        logger.info(
+            "意图样本全量索引成功：total=%s indexed=%s schema_version=%s",
+            expected, indexed, SCHEMA_VERSION,
+        )
+    else:
+        logger.warning(
+            "意图样本索引部分失败：total=%s indexed=%s schema_version=%s",
+            expected, indexed, SCHEMA_VERSION,
+        )
 
 
 async def bootstrap() -> None:
@@ -191,5 +232,12 @@ async def bootstrap() -> None:
 
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(levelname)s: %(message)s")
-    asyncio.run(bootstrap())
+    from app.common.trace.context import ensure_trace_id, reset_trace_id
+    from app.logging_config import setup_logging
+
+    setup_logging()
+    ensure_trace_id()
+    try:
+        asyncio.run(bootstrap())
+    finally:
+        reset_trace_id()

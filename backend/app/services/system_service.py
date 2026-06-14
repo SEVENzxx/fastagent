@@ -32,6 +32,7 @@ from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.system import BackupRecord, SystemSetting
+from app.config import settings
 from app.schemas.system import BackupRecordResponse, DbHealthResponse, SystemSettingsUpdate
 
 
@@ -294,7 +295,7 @@ async def _run_pg_dump(record_id: int, filename: str, type: str) -> None:
         type: 备份类型（full 或 schema）
 
     说明：
-        从环境变量读取数据库连接信息（DATABASE_URL）。
+        从 settings.DATABASE_URL 读取数据库连接信息。
         备份文件写入 _BACKUP_DIR 目录。
         任务完成后更新 backup_records 表的 status 和 size_bytes。
     """
@@ -302,7 +303,7 @@ async def _run_pg_dump(record_id: int, filename: str, type: str) -> None:
 
     _BACKUP_DIR.mkdir(parents=True, exist_ok=True)
     file_path = str(_BACKUP_DIR / filename)
-    db_url = os.environ.get("DATABASE_URL", "")
+    db_url = settings.DATABASE_URL
 
     # 构建 pg_dump 命令参数
     cmd = ["pg_dump", "--format=custom", f"--file={file_path}"]
@@ -374,7 +375,7 @@ async def _run_pg_restore(backup_id: int, file_path_or_name: str) -> None:
                 await db.commit()
         return
 
-    db_url = os.environ.get("DATABASE_URL", "")
+    db_url = settings.DATABASE_URL
     try:
         url = db_url.replace("postgresql+asyncpg://", "").replace("postgresql://", "")
         user_pass, rest = url.split("@", 1) if "@" in url else ("", url)

@@ -55,6 +55,7 @@ class TenantCreate(CamelModel):
     plan_id: int | None = None
     plan_expires_at: datetime | None = None
     custom_prompt: str | None = None
+    template_json: list[str] | None = None
     selected_llm_config_id: int | None = None
     is_active: bool = True
     # 租户管理员账号信息
@@ -91,6 +92,7 @@ class TenantUpdate(CamelModel):
     plan_id: int | None = None
     plan_expires_at: datetime | None = None
     custom_prompt: str | None = None
+    template_json: list[str] | None = None
     store_showcase: str | None = None
     ai_greeting_message: str | None = None
     selected_llm_config_id: int | None = None
@@ -105,6 +107,7 @@ class TenantResponse(CamelModel):
     plan_name: str | None = None
     plan_expires_at: datetime | None = None
     custom_prompt: str | None = None
+    template_json: list[str] | None = None
     selected_llm_config_id: int | None = None
     selected_llm_config_name: str | None = None
     is_active: bool

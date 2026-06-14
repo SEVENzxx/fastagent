@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
 
+from app.ai.observability import observe_vector_call, set_observation_io
 from app.config import settings
 from app.integrations.embedding_client import EmbeddingClient, EmbeddingClientError
 from app.integrations.qdrant_client import QdrantClientError, QdrantVectorClient
@@ -87,13 +88,29 @@ class VectorSearchService:
 
         # ── 3: embedding + upsert ──
         try:
-            vector = await self.embedding.embed(clean_text)
-            stored_point_id = await self.qdrant.upsert(
-                collection=collection,
-                point_id=resolved_point_id,
-                vector=vector,
-                payload=vector_payload,
-            )
+            async with observe_vector_call(
+                collection,
+                "upsert",
+                domain=domain.value,
+                input_data={
+                    "domain": domain.value,
+                    "tenant_id": tenant_id,
+                    "business_id": str(business_id),
+                    "text": clean_text[:500],
+                    "text_len": len(clean_text),
+                },
+            ) as observation:
+                vector = await self.embedding.embed(clean_text)
+                stored_point_id = await self.qdrant.upsert(
+                    collection=collection,
+                    point_id=resolved_point_id,
+                    vector=vector,
+                    payload=vector_payload,
+                )
+                set_observation_io(
+                    observation,
+                    output_data={"point_id": stored_point_id, "vector_dim": len(vector)},
+                )
             return stored_point_id
         except (EmbeddingClientError, QdrantClientError, OSError) as exc:
             logger.warning(
@@ -130,14 +147,44 @@ class VectorSearchService:
         collection = self.collection_for(domain)
         search_filters = {"tenant_id": tenant_id, "domain": domain.value, **(filters or {})}
         try:
-            vector = await self.embedding.embed(clean_query)
-            hits = await self.qdrant.search(
-                collection=collection,
-                vector=vector,
-                filters=search_filters,
+            async with observe_vector_call(
+                collection,
+                "search",
+                domain=domain.value,
                 top_k=top_k,
                 min_score=min_score,
-            )
+                input_data={
+                    "domain": domain.value,
+                    "tenant_id": tenant_id,
+                    "query": clean_query[:500],
+                    "query_len": len(clean_query),
+                    "top_k": top_k,
+                    "min_score": min_score,
+                    "filters": filters or {},
+                },
+            ) as observation:
+                vector = await self.embedding.embed(clean_query)
+                hits = await self.qdrant.search(
+                    collection=collection,
+                    vector=vector,
+                    filters=search_filters,
+                    top_k=top_k,
+                    min_score=min_score,
+                )
+                set_observation_io(
+                    observation,
+                    output_data={
+                        "hit_count": len(hits),
+                        "top_hits": [
+                            {
+                                "id": hit.point_id,
+                                "score": hit.score,
+                                "payload_keys": sorted(str(key) for key in hit.payload.keys()),
+                            }
+                            for hit in hits[:5]
+                        ],
+                    },
+                )
         except (EmbeddingClientError, QdrantClientError, OSError) as exc:
             logger.warning(
                 "Vector search failed: domain=%s tenant_id=%s query_len=%s error=%s",

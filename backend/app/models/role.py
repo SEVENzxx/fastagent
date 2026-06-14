@@ -117,6 +117,7 @@ class PermissionCode(str, Enum):
     # ── LLM 与 AI ──
     MANAGE_LLM_CONFIG = "manage_llm_config"
     MANAGE_SENSITIVE_WORDS = "manage_sensitive_words"
+    MANAGE_INTENT_SAMPLES = "manage_intent_samples"
 
     # ── Admin/超管 ──
     MANAGE_TENANTS = "manage_tenants"

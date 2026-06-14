@@ -1,4 +1,8 @@
-"""商品管理服务。"""
+"""商品管理服务。
+
+提供商品 CRUD、批量 CSV 导入、向量索引同步和分类关联功能。
+SaaS 多租户要点：所有查询强制 tenant_id 隔离，属性写入按租户模板规范化。
+"""
 
 import csv
 import io
@@ -12,6 +16,7 @@ from app.models.category import Category
 from app.models.product import Product
 from app.schemas.product import ProductCreate, ProductImportError, ProductImportResponse, ProductUpdate
 from app.ai.rag.vector_search import VectorDomain, VectorSearchService
+from app.services.tenant_template import get_tenant_template, normalize_attrs_json
 
 
 PRODUCT_IMPORT_TEMPLATE = (
@@ -62,6 +67,7 @@ async def _ensure_category(
     tenant_id: int,
     category_id: int | None,
 ) -> None:
+    """校验分类 ID 存在且属于当前租户。category_id 为 None 时直接通过。"""
     if category_id is None:
         return
     exists = await db.scalar(
@@ -81,6 +87,10 @@ async def _ensure_unique_sku(
     *,
     exclude_product_id: int | None = None,
 ) -> str | None:
+    """校验 SKU 在租户内唯一。
+
+    exclude_product_id 用于更新场景排除自身。返回清洗后的 SKU，空字符串返回 None。
+    """
     clean_sku = sku.strip() if sku else None
     if not clean_sku:
         return None
@@ -103,6 +113,7 @@ async def _ensure_unique_name(
     *,
     exclude_product_id: int | None = None,
 ) -> None:
+    """校验同一分类下商品名称唯一。category_id 为 None 表示全局范围。"""
     conditions = [
         Product.tenant_id == tenant_id,
         Product.name == name,
@@ -131,6 +142,23 @@ async def list_products(
     page: int = 1,
     page_size: int = 20,
 ) -> tuple[list[Product], int]:
+    """分页查询租户商品列表，支持关键词向量搜索和多维过滤。
+
+    关键词搜索走 Qdrant 语义召回，再回 DB 做组合过滤。搜索结果按向量相似度排列。
+
+    参数：
+        db: 异步数据库会话。
+        tenant_id: 租户 ID。
+        keyword: 语义搜索关键词（空则全量）。
+        category_id: 按分类过滤。
+        is_active: 按上架状态下架过滤。
+        is_sample: 按样品标记过滤。
+        min_price/max_price: 价格区间。
+        page/page_size: 分页。
+
+    返回：
+        (商品列表, 总数)，列表已附带分类名称。
+    """
     conditions = [Product.tenant_id == tenant_id]
     clean_keyword = keyword.strip()
 
@@ -177,6 +205,7 @@ async def list_products(
 
 
 async def attach_category_names(db: AsyncSession, products: list[Product]) -> None:
+    """批量补齐商品列表的分类名称（_category_name 属性）。"""
     category_ids = {item.category_id for item in products if item.category_id is not None}
     if not category_ids:
         for product in products:
@@ -192,15 +221,20 @@ async def attach_category_names(db: AsyncSession, products: list[Product]) -> No
 
 
 def _product_search_text(product: Product, category_path: str | None = None) -> str:
+    """构建商品用于向量索引的拼接文本：分类路径 + 名称 + SKU + 描述 + 规格 + 属性 + 标签。"""
     specs = json.dumps(product.specs, ensure_ascii=False, sort_keys=True) if product.specs else ""
+    attrs = json.dumps(product.attrs_json, ensure_ascii=False, sort_keys=True) if product.attrs_json else ""
+    tags = " ".join((product.feature_tags or []) + (product.scenario_tags or []))
     return "\n".join(
         part
         for part in [
-            category_path,  # 完整分类路径优先（如"电子产品/手机/智能手机"）
+            category_path,
             product.name,
             product.sku or "",
             product.description or "",
             specs,
+            attrs,
+            tags,
         ]
         if part
     )
@@ -233,6 +267,7 @@ async def _resolve_category_path(db: AsyncSession, category_id: int | None, prov
 
 
 async def _index_product(product: Product, category_path: str | None = None) -> None:
+    """将商品元数据索引到 Qdrant，更新 qdrant_point_id 供增量更新/删除。"""
     point_id = await _vector_search.upsert_text(
         domain=VectorDomain.PRODUCT,
         tenant_id=product.tenant_id,
@@ -243,11 +278,14 @@ async def _index_product(product: Product, category_path: str | None = None) -> 
             "name": product.name,
             "sku": product.sku,
             "category_id": str(product.category_id) if product.category_id is not None else None,
-            "category_path": category_path,  # 完整分类路径，用于向量语义匹配
+            "category_path": category_path,
             "is_active": product.is_active,
             "is_sample": product.is_sample,
             "price": float(product.price) if product.price is not None else None,
             "stock": product.stock,
+            "attrs_json": product.attrs_json or {"attr": {}},
+            "feature_tags": product.feature_tags or [],
+            "scenario_tags": product.scenario_tags or [],
         },
         point_id=product.qdrant_point_id,
     )
@@ -258,6 +296,16 @@ async def _index_product(product: Product, category_path: str | None = None) -> 
 async def get_product(
     db: AsyncSession, product_id: int, tenant_id: int
 ) -> Product | None:
+    """按 ID 获取租户下单个商品，附带分类名称。
+
+    参数：
+        db: 异步数据库会话。
+        product_id: 商品 ID。
+        tenant_id: 租户 ID。
+
+    返回：
+        商品对象，不存在返回 None。
+    """
     product = await db.scalar(
         select(Product).where(
             Product.id == product_id,
@@ -272,11 +320,27 @@ async def get_product(
 async def create_product(
     db: AsyncSession, tenant_id: int, body: ProductCreate
 ) -> Product:
+    """在租户下创建商品，含分类校验、SKU 唯一性校验和 Qdrant 索引。
+
+    分类路径会从 DB 逆向构建（如 白酒/酱香型）用于向量索引增强。
+
+    参数：
+        db: 异步数据库会话。
+        tenant_id: 租户 ID。
+        body: 商品创建请求体。
+
+    返回：
+        新创建的 Product ORM 对象。
+
+    异常：
+        ValueError: 名称为空、SKU 重复、分类不存在。
+    """
     name = body.name.strip()
     if not name:
         raise ValueError("商品名称不能为空")
 
     await _ensure_category(db, tenant_id, body.category_id)
+    template_fields = await get_tenant_template(db, tenant_id)
     sku = await _ensure_unique_sku(db, tenant_id, body.sku)
     await _ensure_unique_name(db, tenant_id, name, body.category_id)
 
@@ -292,6 +356,9 @@ async def create_product(
         is_sample=body.is_sample,
         sales_template_id=body.sales_template_id,
         specs=body.specs,
+        attrs_json=normalize_attrs_json(body.attrs_json, template_fields),
+        feature_tags=body.feature_tags,
+        scenario_tags=body.scenario_tags,
         is_active=body.is_active,
     )
     # 解析完整分类路径（前端传入优先，否则从 DB 逆向构建）
@@ -311,11 +378,28 @@ async def update_product(
     tenant_id: int,
     body: ProductUpdate,
 ) -> Product | None:
+    """部分更新商品信息，更新后重新索引到 Qdrant。
+
+    参数：
+        db: 异步数据库会话。
+        product_id: 商品 ID。
+        tenant_id: 租户 ID。
+        body: 商品更新请求体。
+
+    返回：
+        更新后的商品，不存在返回 None。
+
+    异常：
+        ValueError: 名称空、SKU 重复、分类不存在。
+    """
     product = await get_product(db, product_id, tenant_id)
     if product is None:
         return None
 
     data = body.model_dump(exclude_unset=True)
+    template_fields = await get_tenant_template(db, tenant_id)
+    if "attrs_json" in data:
+        data["attrs_json"] = normalize_attrs_json(data["attrs_json"], template_fields)
     if "name" in data and data["name"] is not None:
         data["name"] = data["name"].strip()
         if not data["name"]:
@@ -358,6 +442,16 @@ async def update_product(
 async def delete_product(
     db: AsyncSession, product_id: int, tenant_id: int
 ) -> bool:
+    """删除商品并清理对应的 Qdrant 向量。
+
+    参数：
+        db: 异步数据库会话。
+        product_id: 商品 ID。
+        tenant_id: 租户 ID。
+
+    返回：
+        成功删除返回 True，不存在返回 False。
+    """
     product = await get_product(db, product_id, tenant_id)
     if product is None:
         return False
@@ -375,10 +469,12 @@ async def delete_product(
 
 
 def _normalize_header(header: str | None) -> str:
+    """清理 CSV 表头：去空格、去 BOM 字符。"""
     return (header or "").strip().replace("\ufeff", "")
 
 
 def _normalize_row(row: dict[str, str | None]) -> dict[str, str]:
+    """将 CSV 行的中英文表头映射到标准化字段名，并清理空值。"""
     normalized: dict[str, str] = {}
     for key, value in row.items():
         alias = _COLUMN_ALIASES.get(_normalize_header(key))
@@ -388,6 +484,7 @@ def _normalize_row(row: dict[str, str | None]) -> dict[str, str]:
 
 
 def _parse_bool(value: str, *, default: bool) -> bool:
+    """解析布尔值：支持中文（是/否、上架/下架）和英文（true/false 等）。"""
     if not value:
         return default
     normalized = value.strip().lower()
@@ -399,6 +496,7 @@ def _parse_bool(value: str, *, default: bool) -> bool:
 
 
 def _parse_float(value: str, field_name: str) -> float | None:
+    """解析浮点数，空值返回 None，负数报错。field_name 用于错误提示。"""
     if not value:
         return None
     try:
@@ -411,6 +509,7 @@ def _parse_float(value: str, field_name: str) -> float | None:
 
 
 def _parse_stock(value: str) -> int:
+    """解析库存数量，空值默认 0，负数报错。"""
     if not value:
         return 0
     try:
@@ -423,6 +522,7 @@ def _parse_stock(value: str) -> int:
 
 
 def _parse_specs(value: str) -> dict | None:
+    """解析规格 JSON 字符串，空值或非法 JSON 报错。"""
     if not value:
         return None
     try:
@@ -435,6 +535,7 @@ def _parse_specs(value: str) -> dict | None:
 
 
 async def _load_categories(db: AsyncSession, tenant_id: int) -> tuple[dict[int, Category], dict[str, int]]:
+    """加载租户分类体系：返回 (ID→分类 映射, 分类路径→ID 映射) 用于 CSV 导入解析。"""
     result = await db.execute(
         select(Category).where(Category.tenant_id == tenant_id).order_by(Category.created_at)
     )
@@ -461,6 +562,7 @@ async def _resolve_import_category(
     categories_by_id: dict[int, Category],
     category_paths: dict[str, int],
 ) -> int | None:
+    """解析 CSV 行中的分类：优先用 category_id，其次用 category_path 匹配。"""
     category_id_text = row.get("category_id", "")
     if category_id_text:
         try:
@@ -488,6 +590,19 @@ async def import_products_csv(
     tenant_id: int,
     content: bytes,
 ) -> ProductImportResponse:
+    """批量导入 CSV 商品。
+
+    支持 UTF-8 BOM 和 GBK 编码。逐行校验：名称必填、SKU 不重复、
+    分类存在、价格/库存合法。全部行通过校验后才批量写入 DB 并索引 Qdrant。
+
+    参数：
+        db: 异步数据库会话。
+        tenant_id: 租户 ID。
+        content: CSV 文件的 bytes 内容。
+
+    返回：
+        ProductImportResponse（成功/失败 + 创建数 + 错误列表）。
+    """
     try:
         text = content.decode("utf-8-sig")
     except UnicodeDecodeError:

@@ -3,7 +3,7 @@
 from datetime import datetime
 
 from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Index, Integer, Numeric, String, Text, func, text
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base
@@ -27,6 +27,9 @@ class Product(Base):
     is_sample: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"), comment="是否为样品")
     sales_template_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True, comment="关联销售模板ID")
     specs: Mapped[dict | None] = mapped_column(JSONB, nullable=True, comment="规格信息 JSON")
+    attrs_json: Mapped[dict | None] = mapped_column(JSONB, nullable=True, comment="结构化特征属性 JSON")
+    feature_tags: Mapped[list[str] | None] = mapped_column(ARRAY(String), nullable=True, comment="功能标签")
+    scenario_tags: Mapped[list[str] | None] = mapped_column(ARRAY(String), nullable=True, comment="使用场景标签")
     qdrant_point_id: Mapped[str | None] = mapped_column(String(64), nullable=True, comment="Qdrant 点 ID")
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default=text("true"), comment="是否上架")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), comment="创建时间")
@@ -39,5 +42,7 @@ class Product(Base):
         Index("idx_prod_sku_tenant", "sku", "tenant_id", unique=True),
         Index("idx_prod_active", "is_active", postgresql_where=text("is_active = true")),
         Index("idx_prod_qdrant_point", "qdrant_point_id"),
+        Index("idx_prod_feature_tags", "feature_tags", postgresql_using="gin"),
+        Index("idx_prod_scenario_tags", "scenario_tags", postgresql_using="gin"),
         {"comment": "Products"},
     )

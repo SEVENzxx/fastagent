@@ -1,0 +1,14 @@
+.venv
+.venv-codex
+__pycache__
+**/__pycache__
+.pytest_cache
+.mypy_cache
+.ruff_cache
+*.pyc
+*.pyo
+*.pyd
+*.log
+uploads
+uvicorn.err.log
+uvicorn.out.log

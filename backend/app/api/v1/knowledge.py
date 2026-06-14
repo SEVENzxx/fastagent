@@ -1,9 +1,9 @@
 """知识文档 API — Phase 11"""
 
-from fastapi import APIRouter, Depends, Form, HTTPException, Query, UploadFile, File
+from fastapi import APIRouter, BackgroundTasks, Depends, Form, HTTPException, Query, UploadFile, File
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.database import get_db
+from app.database import AsyncSessionLocal, get_db
 from app.dependencies import require_permission
 from app.models.employee import Employee
 from app.models.role import PermissionCode
@@ -18,6 +18,11 @@ from app.services.knowledge_service import KnowledgeService
 router = APIRouter(prefix="/knowledge", tags=["知识库"])
 
 _knowledge_service = KnowledgeService()
+
+
+async def _process_knowledge_doc_background(doc_id: int, tenant_id: int) -> None:
+    async with AsyncSessionLocal() as db:
+        await KnowledgeService().process_doc(db, doc_id, tenant_id)
 
 
 def _to_doc_response(doc) -> KnowledgeDocResponse:
@@ -94,14 +99,20 @@ async def get_knowledge_doc(
 
 @router.post("/upload", response_model=KnowledgeDocResponse, status_code=201)
 async def upload_knowledge_doc(
+    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     product_id: int | None = Form(None),
     current_user: Employee = Depends(require_permission(PermissionCode.MANAGE_KB)),
     db: AsyncSession = Depends(get_db),
 ):
     """上传知识文档（自动解析、分块、向量化）。product_id 可选，用于关联商品。"""
-    doc = await _knowledge_service.upload_and_process(
+    doc = await _knowledge_service.create_upload_doc(
         db, file, current_user.tenant_id, current_user.id, product_id=product_id,
+    )
+    background_tasks.add_task(
+        _process_knowledge_doc_background,
+        doc.id,
+        current_user.tenant_id,
     )
     return _to_doc_response(doc)
 

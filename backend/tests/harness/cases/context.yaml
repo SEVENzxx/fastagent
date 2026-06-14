@@ -1,0 +1,46 @@
+# 多轮上下文用例
+env:
+  local:
+    base_url: "http://localhost:8000"
+
+tenant_id: 319767484162940928
+conversation_prefix: "harness"
+
+cases:
+  - name: "上下文-商品多轮追问"
+    description: "用户在商品查询后多轮追问详情，验证 AI 的上下文理解能力"
+    risk_level: "p0"
+    business_constraints:
+      - "第二轮'第一个'应指代上轮商品列表的第一个"
+      - "第三轮'它有什么特点'应继续指代同一商品"
+      - "不得在三轮后丢失指代对象"
+    tags: ["context", "p0", "product"]
+    messages:
+      - description: "用户首次查询商品列表"
+        content: "你们有什么产品"
+      - description: "用户选择第一个商品"
+        content: "第一个"
+      - description: "用户追问商品特点"
+        content: "它有什么特点"
+    expected:
+      status_code: 200
+      reply_not_empty: true
+      max_latency_ms: 20000
+
+  - name: "上下文-订单缺槽后补充订单号"
+    description: "用户先请求查单（缺订单号），再补充订单号，验证 AI 能否跨轮拼接信息"
+    risk_level: "p1"
+    business_constraints:
+      - "第一轮应引导用户提供订单号"
+      - "第二轮应识别'订单号是 10001'是对上轮缺失信息的补充"
+      - "不得在第二轮重新问'请输入订单号'"
+    tags: ["context", "p1", "order"]
+    messages:
+      - description: "用户请求查单但未提供订单号"
+        content: "帮我查订单"
+      - description: "用户补充订单号"
+        content: "订单号是 322313831793610752"
+    expected:
+      status_code: 200
+      reply_not_empty: true
+      max_latency_ms: 20000

@@ -39,6 +39,9 @@ def _to_response(product) -> ProductResponse:
         created_at=product.created_at,
         updated_at=product.updated_at,
         category_name=getattr(product, "_category_name", None),
+        attrs_json=product.attrs_json,
+        feature_tags=product.feature_tags or [],
+        scenario_tags=product.scenario_tags or [],
     )
 
 

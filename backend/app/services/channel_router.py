@@ -12,10 +12,14 @@ from app.models.conversation import Conversation
 from app.models.platform import Platform
 from app.schemas.conversation import ConversationCreate, MessageCreate
 from app.services import conversation_service
-from app.ai.router.processor import process_customer_message_with_ai
+from app.ai.entry.processor import process_customer_message_with_ai
 
 
 def _message_payload(message) -> dict:
+    """将消息 ORM 对象转为 WebSocket 广播所需的 JSON 字典。
+
+    使用 camelCase 键名适配前端消费，包含消息正文、发送者类型、内容类型等字段。
+    """
     return {
         "id": str(message.id),
         "conversationId": str(message.conversation_id),
@@ -35,6 +39,10 @@ async def _find_contact_by_wecom_id(
     tenant_id: int,
     external_userid: str,
 ) -> Contact | None:
+    """根据企业微信 external_userid 查找租户下的联系人。
+
+    使用 JSONB 字段索引查询 external_ids，确保多租户隔离。
+    """
     return await db.scalar(
         select(Contact).where(
             Contact.tenant_id == tenant_id,

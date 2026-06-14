@@ -113,7 +113,16 @@ async def deliver_message(db: AsyncSession, conversation: Conversation, message:
 
 
 async def _send_wecom_text(platform: Platform, external_userid: str | None, content: str) -> dict:
-    """调用企业微信出站接口发送文本消息。"""
+    """调用企业微信出站接口发送文本消息。
+
+    参数：
+        platform: 企业微信渠道配置。
+        external_userid: 客户在企业微信的 external_userid。
+        content: 消息文本内容。
+
+    返回：
+        {"platform": "wecom", "ok": bool, "sent_at": str, "started_at": str, "result": dict/None, "error": str/None}
+    """
     started_at = datetime.now(timezone.utc)
     try:
         if not external_userid:
@@ -144,6 +153,14 @@ async def _send_wecom_text(platform: Platform, external_userid: str | None, cont
 
 
 def _get_wecom_external_userid(contact: Contact | None) -> str | None:
+    """从联系人的 external_ids JSONB 字段提取微信 external_userid。
+
+    参数：
+        contact: 联系人对象，可能为 None。
+
+    返回：
+        external_userid 字符串，提取失败返回 None。
+    """
     if contact is None or not isinstance(contact.external_ids, dict):
         return None
     value = contact.external_ids.get("wecom_external_userid")
@@ -151,6 +168,17 @@ def _get_wecom_external_userid(contact: Contact | None) -> str | None:
 
 
 def _with_outbound_metadata(metadata: dict, result: dict) -> dict:
+    """将出站投递结果写入消息元数据。
+
+    保留最近 5 次投递记录（outbound_attempts），当前结果写入 outbound。
+
+    参数：
+        metadata: 消息当前的 metadata 字典。
+        result: 本次投递结果。
+
+    返回：
+        更新后的 metadata 字典。
+    """
     updated = dict(metadata)
     attempts = list(updated.get("outbound_attempts") or [])
     attempts.append(result)

@@ -6,6 +6,15 @@ from pydantic import field_serializer, field_validator
 from app.schemas.base import CamelModel
 
 
+def _fixed_attrs_json(value: dict | None) -> dict:
+    if not isinstance(value, dict):
+        return {"attr": {}}
+    attr = value.get("attr")
+    if isinstance(attr, dict):
+        return {"attr": attr}
+    return {"attr": value}
+
+
 class ProductCreate(CamelModel):
     """创建商品"""
 
@@ -20,6 +29,9 @@ class ProductCreate(CamelModel):
     is_sample: bool = False
     sales_template_id: int | None = None
     specs: dict | None = None
+    attrs_json: dict | None = None
+    feature_tags: list[str] | None = None
+    scenario_tags: list[str] | None = None
     is_active: bool = True
 
     @field_validator("name")
@@ -28,6 +40,11 @@ class ProductCreate(CamelModel):
         if not v.strip():
             raise ValueError("商品名称不能为空")
         return v.strip()
+
+    @field_validator("attrs_json")
+    @classmethod
+    def attrs_json_fixed_shape(cls, value: dict | None) -> dict:
+        return _fixed_attrs_json(value)
 
 
 class ProductUpdate(CamelModel):
@@ -44,7 +61,15 @@ class ProductUpdate(CamelModel):
     is_sample: bool | None = None
     sales_template_id: int | None = None
     specs: dict | None = None
+    attrs_json: dict | None = None
+    feature_tags: list[str] | None = None
+    scenario_tags: list[str] | None = None
     is_active: bool | None = None
+
+    @field_validator("attrs_json")
+    @classmethod
+    def attrs_json_fixed_shape(cls, value: dict | None) -> dict:
+        return _fixed_attrs_json(value)
 
 
 class ProductResponse(CamelModel):
@@ -62,6 +87,9 @@ class ProductResponse(CamelModel):
     is_sample: bool
     sales_template_id: int | None = None
     specs: dict | None = None
+    attrs_json: dict | None = None
+    feature_tags: list[str] | None = None
+    scenario_tags: list[str] | None = None
     is_active: bool
     created_at: datetime
     updated_at: datetime
@@ -76,6 +104,11 @@ class ProductResponse(CamelModel):
     @field_serializer("price", "floor_price")
     def serialize_decimal(self, value: float | None) -> float | None:
         return value
+
+    @field_validator("attrs_json")
+    @classmethod
+    def attrs_json_fixed_shape(cls, value: dict | None) -> dict:
+        return _fixed_attrs_json(value)
 
 
 class ProductSearchParams(CamelModel):

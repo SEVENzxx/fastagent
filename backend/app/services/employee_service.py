@@ -1,4 +1,8 @@
-"""员工管理服务"""
+"""员工管理服务。
+
+提供租户内员工的 CRUD、角色分配、个人信息修改和密码修改功能。
+所有操作均通过 tenant_id 进行多租户隔离，删除操作采用软删除保留审计记录。
+"""
 
 from datetime import datetime, timezone
 
@@ -14,10 +18,23 @@ from app.schemas.employee import EmployeeCreate, EmployeeUpdate, PasswordChange,
 
 
 def _active_employee_query(tenant_id: int):
+    """构建租户下未删除员工的查询基语句。
+
+    统一复用避免各方法重复写 is_(None) 和 tenant_id 条件。
+    """
     return select(Employee).where(Employee.tenant_id == tenant_id, Employee.deleted_at.is_(None))
 
 
 async def list_employees(db: AsyncSession, tenant_id: int) -> list[Employee]:
+    """查询租户下所有在职员工。
+
+    参数：
+        db: 异步数据库会话。
+        tenant_id: 租户 ID。
+
+    返回：
+        按创建时间倒序排列的员工列表。
+    """
     result = await db.execute(
         _active_employee_query(tenant_id).order_by(Employee.created_at.desc())
     )
@@ -25,6 +42,16 @@ async def list_employees(db: AsyncSession, tenant_id: int) -> list[Employee]:
 
 
 async def get_employee(db: AsyncSession, employee_id: int, tenant_id: int) -> Employee | None:
+    """按 ID 获取租户下单个在职员工。
+
+    参数：
+        db: 异步数据库会话。
+        employee_id: 员工 ID。
+        tenant_id: 租户 ID。
+
+    返回：
+        员工对象，不存在或已删除返回 None。
+    """
     result = await db.execute(
         _active_employee_query(tenant_id).where(Employee.id == employee_id)
     )
@@ -32,6 +59,22 @@ async def get_employee(db: AsyncSession, employee_id: int, tenant_id: int) -> Em
 
 
 async def create_employee(db: AsyncSession, tenant_id: int, body: EmployeeCreate) -> Employee:
+    """在租户下创建新员工（坐席账号）。
+
+    校验邮箱唯一性（同一租户内不可重复），密码经 bcrypt 哈希后存储。
+    使用 HTTPException 而非 ValueError 以兼容 API 层 409 错误码。
+
+    参数：
+        db: 异步数据库会话。
+        tenant_id: 租户 ID。
+        body: 员工创建请求体。
+
+    返回：
+        新创建的 Employee ORM 对象。
+
+    异常：
+        HTTPException(409): 邮箱已存在。
+    """
     existing = await db.scalar(
         select(Employee.id).where(
             Employee.tenant_id == tenant_id,
@@ -65,6 +108,19 @@ async def update_employee(
     tenant_id: int,
     body: EmployeeUpdate,
 ) -> Employee | None:
+    """部分更新员工信息。
+
+    只更新请求体中显式传入的字段，未传字段保持不变。
+
+    参数：
+        db: 异步数据库会话。
+        employee_id: 员工 ID。
+        tenant_id: 租户 ID。
+        body: 员工更新请求体（所有字段可选）。
+
+    返回：
+        更新后的员工对象，不存在返回 None。
+    """
     employee = await get_employee(db, employee_id, tenant_id)
     if not employee:
         return None
@@ -79,6 +135,18 @@ async def update_employee(
 
 
 async def delete_employee(db: AsyncSession, employee_id: int, tenant_id: int) -> bool:
+    """软删除员工（标记 deleted_at）。
+
+    同时清除角色关联、设置离线状态。保留历史会话中的员工引用供审计。
+
+    参数：
+        db: 异步数据库会话。
+        employee_id: 员工 ID。
+        tenant_id: 租户 ID。
+
+    返回：
+        成功删除返回 True，不存在返回 False。
+    """
     employee = await get_employee(db, employee_id, tenant_id)
     if not employee:
         return False
@@ -91,6 +159,18 @@ async def delete_employee(db: AsyncSession, employee_id: int, tenant_id: int) ->
 
 
 async def get_employee_roles(db: AsyncSession, employee_id: int, tenant_id: int) -> list[Role] | None:
+    """获取员工的角色列表（含权限预加载）。
+
+    使用 selectinload 避免 N+1 查询，一次性加载角色的关联权限。
+
+    参数：
+        db: 异步数据库会话。
+        employee_id: 员工 ID。
+        tenant_id: 租户 ID。
+
+    返回：
+        角色列表，员工不存在返回 None。
+    """
     employee = await get_employee(db, employee_id, tenant_id)
     if not employee:
         return None
@@ -112,6 +192,22 @@ async def set_employee_roles(
     tenant_id: int,
     role_ids: list[int],
 ) -> list[Role] | None:
+    """全量设置员工的角色（先清后增）。
+
+    提交的角色 ID 若有不存在或不属于当前租户的，统一报 400 错误。
+
+    参数：
+        db: 异步数据库会话。
+        employee_id: 员工 ID。
+        tenant_id: 租户 ID。
+        role_ids: 角色 ID 列表（会去重）。
+
+    返回：
+        设置后的角色列表，员工不存在返回 None。
+
+    异常：
+        HTTPException(400): 存在无效角色。
+    """
     employee = await get_employee(db, employee_id, tenant_id)
     if not employee:
         return None
@@ -137,6 +233,19 @@ async def set_employee_roles(
 
 
 async def update_profile(db: AsyncSession, employee: Employee, body: ProfileUpdate) -> Employee:
+    """更新当前登录员工的个人信息。
+
+    区别于 update_employee（管理员操作），此方法仅允许员工修改自己的 profile。
+    不校验租户归属，调用方需先通过 JWT 获取 employee 对象。
+
+    参数：
+        db: 异步数据库会话。
+        employee: 当前登录的 Employee ORM 对象。
+        body: 个人信息更新请求体。
+
+    返回：
+        更新后的员工对象。
+    """
     data = body.model_dump(exclude_unset=True)
     for key, value in data.items():
         setattr(employee, key, value)
@@ -147,6 +256,18 @@ async def update_profile(db: AsyncSession, employee: Employee, body: ProfileUpda
 
 
 async def change_password(db: AsyncSession, employee: Employee, body: PasswordChange) -> None:
+    """修改当前员工的登录密码。
+
+    需先验证当前密码正确，再哈希存储新密码。
+
+    参数：
+        db: 异步数据库会话。
+        employee: 当前登录的 Employee ORM 对象。
+        body: 密码修改请求体（含 current_password 和 new_password）。
+
+    异常：
+        HTTPException(400): 当前密码不正确。
+    """
     if not verify_password(body.current_password, employee.hashed_password):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="当前密码不正确")
 

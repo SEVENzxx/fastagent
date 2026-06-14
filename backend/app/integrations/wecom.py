@@ -1,11 +1,14 @@
 """企业微信入站消息工具。"""
 
 import base64
+import logging
 import struct
 from dataclasses import dataclass
 from hashlib import sha1
 
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -90,7 +93,7 @@ def extract_encrypt_for_signature(body_str: str) -> str:
         if encrypt_el is not None and encrypt_el.text:
             return encrypt_el.text.strip()
     except ET.ParseError:
-        pass
+        logger.warning("企业微信消息 XML 解析失败：body_prefix=%s", body_str[:200])
     return body_str
 
 

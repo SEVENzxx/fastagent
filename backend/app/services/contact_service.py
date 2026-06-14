@@ -1,4 +1,8 @@
-"""联系人管理服务"""
+"""联系人管理服务。
+
+提供联系人 CRUD、批量 CSV 导入、标签聚合、分配坐席等功能。
+CSV 导入支持中英文表头别名和多级校验（租户内唯一性、员工存在性等）。
+"""
 
 import csv
 import io
@@ -56,6 +60,10 @@ async def _ensure_employee(
     tenant_id: int,
     employee_id: int | None,
 ) -> None:
+    """校验员工存在且属于当前租户（未软删除）。
+
+    角色分配、联系人分配等操作的前置校验，确保 SaaS 数据引用有效性。
+    """
     if employee_id is None:
         return
     exists = await db.scalar(
@@ -73,6 +81,10 @@ async def attach_assigned_employee_names(
     db: AsyncSession,
     contacts: list[Contact],
 ) -> None:
+    """批量补齐联系人列表的分配坐席名称（_assigned_employee_name 属性）。
+
+    避免列表页每个联系人单独查询员工表，批量一次 SQL 解决。
+    """
     employee_ids = {
         contact.assigned_employee_id
         for contact in contacts
@@ -106,6 +118,20 @@ async def list_contacts(
     page: int = 1,
     page_size: int = 20,
 ) -> tuple[list[Contact], int]:
+    """分页查询租户联系人列表，支持关键词/标签/坐席多维过滤。
+
+    参数：
+        db: 异步数据库会话。
+        tenant_id: 租户 ID。
+        keyword: 按名称/电话/地址模糊搜索。
+        tag: 按标签过滤。
+        assigned_employee_id: 按分配坐席过滤。
+        page: 页码。
+        page_size: 每页条数。
+
+    返回：
+        (联系人列表, 总数)，列表已附带坐席名称。
+    """
     conditions = [Contact.tenant_id == tenant_id]
     clean_keyword = keyword.strip()
 
@@ -164,6 +190,16 @@ async def get_contact(
     contact_id: int,
     tenant_id: int,
 ) -> Contact | None:
+    """按 ID 获取租户下单个联系人，附带坐席名称。
+
+    参数：
+        db: 异步数据库会话。
+        contact_id: 联系人 ID。
+        tenant_id: 租户 ID。
+
+    返回：
+        联系人对象，不存在返回 None。
+    """
     contact = await db.scalar(
         select(Contact).where(Contact.id == contact_id, Contact.tenant_id == tenant_id)
     )
@@ -177,6 +213,21 @@ async def create_contact(
     tenant_id: int,
     body: ContactCreate,
 ) -> Contact:
+    """在租户下创建联系人。
+
+    校验坐席存在性，名称首尾空格自动清理。
+
+    参数：
+        db: 异步数据库会话。
+        tenant_id: 租户 ID。
+        body: 联系人创建请求体。
+
+    返回：
+        新创建的联系人对象。
+
+    异常：
+        ValueError: 分配的坐席不存在。
+    """
     await _ensure_employee(db, tenant_id, body.assigned_employee_id)
     contact = Contact(
         tenant_id=tenant_id,
@@ -201,6 +252,20 @@ async def update_contact(
     tenant_id: int,
     body: ContactUpdate,
 ) -> Contact | None:
+    """部分更新联系人信息。
+
+    参数：
+        db: 异步数据库会话。
+        contact_id: 联系人 ID。
+        tenant_id: 租户 ID。
+        body: 联系人更新请求体。
+
+    返回：
+        更新后的联系人，不存在返回 None。
+
+    异常：
+        ValueError: 新分配的坐席不存在。
+    """
     contact = await get_contact(db, contact_id, tenant_id)
     if contact is None:
         return None
@@ -231,6 +296,20 @@ async def assign_contact(
     tenant_id: int,
     body: ContactAssign,
 ) -> Contact | None:
+    """将联系人分配（或转移）给指定坐席。
+
+    参数：
+        db: 异步数据库会话。
+        contact_id: 联系人 ID。
+        tenant_id: 租户 ID。
+        body: 分配请求体（含 assigned_employee_id）。
+
+    返回：
+        更新后的联系人，不存在返回 None。
+
+    异常：
+        ValueError: 分配的坐席不存在。
+    """
     contact = await get_contact(db, contact_id, tenant_id)
     if contact is None:
         return None
@@ -245,6 +324,16 @@ async def assign_contact(
 
 
 async def delete_contact(db: AsyncSession, contact_id: int, tenant_id: int) -> bool:
+    """物理删除联系人。
+
+    参数：
+        db: 异步数据库会话。
+        contact_id: 联系人 ID。
+        tenant_id: 租户 ID。
+
+    返回：
+        成功删除返回 True，不存在返回 False。
+    """
     contact = await get_contact(db, contact_id, tenant_id)
     if contact is None:
         return False
@@ -254,6 +343,10 @@ async def delete_contact(db: AsyncSession, contact_id: int, tenant_id: int) -> b
 
 
 async def aggregate_tags(db: AsyncSession, tenant_id: int) -> list[tuple[str, int]]:
+    """聚合租户下所有联系人标签的频次统计。
+
+    返回按频次降序、名称升序排列的 (标签名, 频次) 列表。
+    """
     result = await db.execute(
         select(Contact.tags).where(Contact.tenant_id == tenant_id)
     )
@@ -269,10 +362,12 @@ async def aggregate_tags(db: AsyncSession, tenant_id: int) -> list[tuple[str, in
 
 
 def _normalize_header(header: str | None) -> str:
+    """清理 CSV 表头：去空格、去 BOM 字符。"""
     return (header or "").strip().replace("\ufeff", "")
 
 
 def _normalize_row(row: dict[str, str | None]) -> dict[str, str]:
+    """将 CSV 行的中英文表头映射到标准化字段名，并清理空值。"""
     normalized: dict[str, str] = {}
     for key, value in row.items():
         alias = _COLUMN_ALIASES.get(_normalize_header(key))
@@ -282,6 +377,7 @@ def _normalize_row(row: dict[str, str | None]) -> dict[str, str]:
 
 
 def _parse_tags(value: str) -> list[str]:
+    """解析标签字符串（支持中文/英文逗号、分号分隔），去重去空格。"""
     if not value:
         return []
     result: list[str] = []
@@ -295,6 +391,7 @@ def _parse_tags(value: str) -> list[str]:
 
 
 def _parse_external_ids(row: dict[str, str]) -> dict:
+    """解析外部 ID：支持 JSON 字符串 + 企微单独列两种输入方式。"""
     external_ids: dict = {}
     raw_json = row.get("external_ids", "")
     if raw_json:
@@ -313,6 +410,7 @@ def _parse_external_ids(row: dict[str, str]) -> dict:
 
 
 def _parse_assigned_employee_id(value: str) -> int | None:
+    """解析分配员工 ID，空值返回 None，非数字抛异常。"""
     if not value:
         return None
     try:
@@ -322,6 +420,7 @@ def _parse_assigned_employee_id(value: str) -> int | None:
 
 
 async def _load_employee_ids(db: AsyncSession, tenant_id: int) -> set[int]:
+    """加载租户下所有在职员工 ID 集合，用于 CSV 导入校验。"""
     result = await db.execute(
         select(Employee.id).where(
             Employee.tenant_id == tenant_id,
@@ -335,6 +434,7 @@ async def _load_existing_identity_sets(
     db: AsyncSession,
     tenant_id: int,
 ) -> tuple[set[str], set[str], set[str]]:
+    """加载租户现有联系人的名称/电话/企微 ID 集合，用于 CSV 导入去重校验。"""
     result = await db.execute(
         select(Contact.name, Contact.phone, Contact.external_ids).where(
             Contact.tenant_id == tenant_id
@@ -360,6 +460,19 @@ async def import_contacts_csv(
     tenant_id: int,
     content: bytes,
 ) -> ContactImportResponse:
+    """批量导入 CSV 联系人。
+
+    支持 UTF-8 BOM 和 GBK 编码自动检测。逐行校验：名称必填且不重复、
+    电话不重复、企微 ID 不重复、分配员工存在。全部行通过校验后才写入数据库。
+
+    参数：
+        db: 异步数据库会话。
+        tenant_id: 租户 ID。
+        content: CSV 文件的 bytes 内容。
+
+    返回：
+        ContactImportResponse（成功/失败 + 行数 + 错误列表）。
+    """
     try:
         text = content.decode("utf-8-sig")
     except UnicodeDecodeError:

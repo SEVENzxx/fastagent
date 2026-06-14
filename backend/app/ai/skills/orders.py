@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import re
+from datetime import datetime, timezone, timedelta
 from decimal import Decimal
 
 from sqlalchemy import select
@@ -19,7 +20,7 @@ from app.models.product import Product
 from app.schemas.order import OrderCreate as OrderCreateSchema
 from app.schemas.order import OrderItemCreate, OrderUpdate
 from app.services import order_service
-from app.ai.agent.types import ToolResult
+from app.ai.handlers.base import ToolResult
 from app.ai.tenant_config import (
     DEFAULT_ORDER_STATUS_LABELS as STATUS_LABELS,
     DEFAULT_FIELD_LABELS as FIELD_LABELS,
@@ -52,7 +53,7 @@ async def create_order(
             logger.warning("Skill create_order items 解析失败: %s", items_raw)
             items_raw = []
 
-    # 如果 agent 只传了 query/customer_text，按"一个商品"处理
+    # 如果 workflow 只传了 query/customer_text，按"一个商品"处理
     if not items_raw:
         customer_text = str(kwargs.get("customer_text") or kwargs.get("query") or "").strip()
         if customer_text:
@@ -312,8 +313,10 @@ async def cancel_order_draft(
     db: AsyncSession,
     **kwargs,
 ) -> ToolResult:
-    """取消当前订单草稿或待客户确认订单。"""
-    _ = contact_id
+    """取消当前订单草稿或待客户确认订单。
+
+    contact_id 校验：contact_id 不为 None 时必须匹配订单所属客户。
+    """
     order_id = kwargs.get("order_id")
     if order_id is None:
         return ToolResult(ok=False, skill_name="cancel_order_draft", error="缺少订单号。")
@@ -325,6 +328,23 @@ async def cancel_order_draft(
     order = await order_service.get_order(db, order_id, tenant_id)
     if order is None:
         return ToolResult(ok=False, skill_name="cancel_order_draft", error=f"未找到订单 #{order_id}。")
+
+    # 取消属于写操作：contact_id 为 None 时拒绝
+    if contact_id is None:
+        return ToolResult(
+            ok=False,
+            skill_name="cancel_order_draft",
+            error="请先确认客户身份后再取消订单。",
+        )
+
+    # 所有权校验：订单必须属于当前客户
+    if order.contact_id != contact_id:
+        logger.warning(
+            "cancel_order_draft 归属校验失败: order=%s tenant=%s order_contact=%s req_contact=%s",
+            order_id, tenant_id, order.contact_id, contact_id,
+        )
+        return ToolResult(ok=False, skill_name="cancel_order_draft", error=f"未找到订单 #{order_id}。")
+
     if order.status == "cancelled":
         return ToolResult(
             ok=True,
@@ -373,10 +393,21 @@ async def manage_order(
       - action: str — "query"（默认）/ "update_address" / "add_note"
       - order_id: int
       - customer_text: str
+      - status: str — 单一状态过滤
+      - filter_statuses: list[str] — 状态组过滤（转为 SQL status__in）
+      - filter_time_ref: str — 时间范围: today / yesterday / this_month / recent（转为 SQL created_from/created_to）
+      - page_size: int — 查询条数（默认 5，有过滤条件时自动扩大到 100）
     """
     action = str(kwargs.get("action") or "query").strip().lower()
     order_id = kwargs.get("order_id")
     status = kwargs.get("status")
+    filter_statuses = kwargs.get("filter_statuses")
+    filter_time_ref = kwargs.get("filter_time_ref")
+    page_size = int(kwargs.get("page_size", 5))
+
+    # 有过滤条件时拉取足够数据避免截断
+    if filter_statuses or filter_time_ref:
+        page_size = max(page_size, 100)
 
     # 如果没有 order_id，尝试从 customer_text 提取或按客户查询
     if order_id is None:
@@ -388,25 +419,40 @@ async def manage_order(
             order_id = int(order_id)
         except (TypeError, ValueError):
             return ToolResult(ok=False, skill_name="manage_order", error=f"无效订单号: {order_id}")
+        # 强制 contact_id：未确认客户身份时不允许按订单号查询
+        if contact_id is None:
+            return ToolResult(
+                ok=False,
+                skill_name="manage_order",
+                error="请先确认客户身份后查询订单。",
+            )
         order = await order_service.get_order(db, order_id, tenant_id)
         if order is None:
             return ToolResult(ok=False, skill_name="manage_order", error=f"未找到订单 #{order_id}。")
+        # contact_id 校验：确认订单属于该客户
+        if _get_order_contact(order) != contact_id:
+            return ToolResult(ok=False, skill_name="manage_order", error=f"未找到订单 #{order_id}。")
         return _build_query_result(order)
     else:
-        # 按客户查询最近订单
+        # 按客户查询最近订单，过滤条件下推到 SQL
         if contact_id is None:
             return ToolResult(
                 ok=False,
                 skill_name="manage_order",
                 error="请提供订单号或确认客户身份。",
             )
+        # 将 filter_statuses / filter_time_ref 转为 SQL 条件
+        created_from, created_to = _time_ref_to_range(filter_time_ref)
         orders, total = await order_service.list_orders(
             db,
             tenant_id,
             contact_id=contact_id,
-            status=str(status) if status else None,
+            status=str(status) if status and not filter_statuses else None,
+            status__in=filter_statuses,
+            created_from=created_from,
+            created_to=created_to,
             page=1,
-            page_size=5,
+            page_size=page_size,
         )
         if not orders:
             return ToolResult(
@@ -415,7 +461,7 @@ async def manage_order(
                 result={
                     "orders": [],
                     "count": 0,
-                    "message": f"该客户暂无订单记录。",
+                    "message": "暂无符合条件的订单。",
                 },
             )
         order_summaries = [_order_summary(o) for o in orders]
@@ -424,8 +470,8 @@ async def manage_order(
             skill_name="manage_order",
             result={
                 "orders": order_summaries,
-                "count": total,
-                "message": _format_order_list_message(order_summaries, total),
+                "count": len(order_summaries),
+                "message": _format_order_list_message(order_summaries, len(order_summaries)),
             },
         )
 
@@ -580,7 +626,7 @@ async def update_draft_order_quantity(
 
 
 # ---------------------------------------------------------------------------
-# Internal helpers
+# 内部工具方法
 # ---------------------------------------------------------------------------
 
 # STATUS_LABELS 和 FIELD_LABELS 已从 tenant_ai_config 导入，支持未来租户级覆盖。
@@ -778,3 +824,41 @@ def _format_order_message(order: Order, items: list[dict]) -> str:
     if order.receiver_phone:
         lines.append(f"联系电话：{order.receiver_phone}")
     return "\n".join(lines)
+
+
+# ── manage_order 过滤辅助函数 ──
+
+
+def _get_order_contact(order: Order) -> int:
+    """从 Order ORM 对象获取 contact_id。"""
+    return order.contact_id if order.contact_id is not None else 0
+
+
+def _time_ref_to_range(
+    time_ref: str | None,
+) -> tuple[datetime | None, datetime | None]:
+    """将 time_ref 转换为 SQL created_from / created_to 条件。
+
+    Returns:
+        (created_from, created_to) 元组，两端均为 None 表示无限制。
+        created_from 是包含起始，created_to 是不包含截止。
+    """
+    if time_ref is None:
+        return None, None
+
+    now = datetime.now(timezone.utc)
+    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+
+    if time_ref == "today":
+        return today_start, None
+    if time_ref == "yesterday":
+        yesterday_start = today_start - timedelta(days=1)
+        return yesterday_start, today_start
+    if time_ref == "this_month":
+        month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        return month_start, None
+    if time_ref == "recent":
+        week_ago = today_start - timedelta(days=7)
+        return week_ago, None
+
+    return None, None

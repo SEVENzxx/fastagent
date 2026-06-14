@@ -1,14 +1,36 @@
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
-from sqlalchemy import text
+from sqlalchemy import event, text
 
 from app.config import settings
+from app.ai.observability import begin_sql_observation, end_sql_observation
 
 engine = create_async_engine(
     settings.DATABASE_URL,
-    echo=settings.SQL_ECHO,
     pool_size=20,
     max_overflow=10,
 )
+
+
+@event.listens_for(engine.sync_engine, "before_cursor_execute")
+def _before_cursor_execute(conn, cursor, statement, parameters, context, executemany) -> None:
+    context._fastagent_observation = begin_sql_observation(statement)
+
+
+@event.listens_for(engine.sync_engine, "after_cursor_execute")
+def _after_cursor_execute(conn, cursor, statement, parameters, context, executemany) -> None:
+    end_sql_observation(
+        getattr(context, "_fastagent_observation", None),
+        rowcount=getattr(cursor, "rowcount", None),
+    )
+
+
+@event.listens_for(engine.sync_engine, "handle_error")
+def _handle_cursor_error(exception_context) -> None:
+    execution_context = getattr(exception_context, "execution_context", None)
+    end_sql_observation(
+        getattr(execution_context, "_fastagent_observation", None),
+        error=exception_context.original_exception,
+    )
 
 AsyncSessionLocal = async_sessionmaker(
     engine,

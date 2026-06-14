@@ -47,11 +47,9 @@ def require_permission(code: str):
         current_user: Employee = Depends(get_current_user),
         db: AsyncSession = Depends(get_db),
     ) -> Employee:
+        # 超管拥有所有权限，自动放行
         if current_user.is_superuser:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="平台管理员不能访问租户业务接口",
-            )
+            return current_user
 
         codes = await get_employee_permission_codes(db, current_user)
         if code not in codes:

@@ -52,15 +52,15 @@ async def _run_diagnostics():
 
 async def _run_search_all():
     vs = VectorSearchService()
-    tenant_id = 319767484162940928  # 改成你实际用的 tenant_id
+    tenant_id = 0  # 改成你实际用的 tenant_id
 
     queries = {
-        VectorDomain.INTENT_SAMPLE: "咨询一下商品资料",
-        VectorDomain.KNOWLEDGE_CHUNK: "咨询一下商品资料",
-        VectorDomain.QA_PAIR: "能开发票吗",
-        VectorDomain.PRODUCT: "咨询一下商品",
-        VectorDomain.MARKETING_DOCUMENT: "促销活动",
-        VectorDomain.IMAGE: "产品图片",
+        # VectorDomain.INTENT_SAMPLE: "有没有耳机 我想看看蓝牙耳机",
+        VectorDomain.KNOWLEDGE_CHUNK: "售后政策是什么",
+        VectorDomain.QA_PAIR: "售后政策是什么",
+        # VectorDomain.PRODUCT: "咨询一下商品",
+        # VectorDomain.MARKETING_DOCUMENT: "促销活动",
+        # VectorDomain.IMAGE: "产品图片",
     }
 
     for domain, query in queries.items():

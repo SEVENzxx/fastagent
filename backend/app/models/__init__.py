@@ -22,6 +22,7 @@ from app.models.usage import LLMUsageLog
 from app.models.system import BackupRecord, SystemSetting
 from app.models.employee import Employee
 from app.models.role import Role, Permission, RolePermission, EmployeeRole, PermissionCode
+from app.models.intent_sample import IntentSample
 
 __all__ = [
     "Base",
@@ -60,4 +61,5 @@ __all__ = [
     "PermissionCode",
     "RolePermission",
     "EmployeeRole",
+    "IntentSample",
 ]

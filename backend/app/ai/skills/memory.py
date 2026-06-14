@@ -8,9 +8,9 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.sales_memory import SalesMemory
-from app.ai.agent.types import ToolResult
+from app.ai.handlers.base import ToolResult
 from app.ai.llm.gateway import LLMClientError, LLMUseCase, complete
-from app.ai.llm.prompts.memory import build_memory_extract_messages
+from app.ai.prompts.memory import build_memory_extract_messages
 
 async def remember_info(
     *, tenant_id: int, contact_id: int | None = None, db: AsyncSession, **kwargs,

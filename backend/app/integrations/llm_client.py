@@ -14,9 +14,10 @@ from collections.abc import AsyncIterator
 from enum import Enum
 from typing import Any
 
-import httpx
-
+from app.ai.observability import observe_llm_call, set_observation_io
+from app.common.trace.context import get_trace_id
 from app.config import settings
+from app.integrations.base import BaseClient, BaseClientError
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +25,20 @@ LITELLM_DASHSCOPE_PROVIDER = "dashscope"
 QWEN_PROVIDER_ALIASES = {"qwen", "dashscope", "aliyun", "alibaba"}
 LITELLM_GENERIC_PROVIDERS = {"litellm"}
 PROVIDERS_WITH_NATIVE_MODEL_NAMES = {"http", "openai", "ollama", "deepseek", "zhipu"}
+
+
+def _summarize_messages(messages: list[dict[str, str]]) -> list[dict[str, Any]]:
+    summary: list[dict[str, Any]] = []
+    for message in messages[:10]:
+        content = str(message.get("content", ""))
+        summary.append({
+            "role": message.get("role", ""),
+            "content": content[:1200],
+            "content_len": len(content),
+        })
+    if len(messages) > 10:
+        summary.append({"role": "...", "content": f"{len(messages) - 10} more messages"})
+    return summary
 
 
 class LLMClientError(RuntimeError):
@@ -34,16 +49,21 @@ class LLMUseCase(str, Enum):
     """模型选择策略。业务层只声明用途，不自行选择模型来源。"""
 
     INTENT_JUDGE = "intent_judge"
+    INTENT_RECALL = "intent_recall"
     GENERAL_REPLY = "general_reply"
     RAG_REPLY = "rag_reply"
     AGENT = "agent"
+    PRODUCT_ATTR_EXTRACT = "product_attr_extract"
+    PRODUCT_SEMANTIC_SEARCH = "product_semantic_search"
 
     @property
     def uses_tenant_config(self) -> bool:
-        return self in {self.RAG_REPLY, self.AGENT}
+        # TODO: 暂时跳过租户 LLM 配置，全部走本地模型。
+        # 恢复时改回: return self in {self.RAG_REPLY, self.AGENT}
+        return False
 
 
-class LLMClient:
+class LLMClient(BaseClient):
     """统一 LLM 调用入口 — 仅暴露 complete() 和 stream()。"""
 
     def __init__(
@@ -55,12 +75,15 @@ class LLMClient:
         provider: str | None = None,
         timeout_seconds: float | None = None,
     ) -> None:
+        super().__init__(
+            base_url=base_url if base_url is not None else settings.AI_LLM_BASE_URL,
+            timeout_seconds=timeout_seconds or settings.AI_LLM_TIMEOUT_SECONDS,
+            trust_env=False,
+        )
         self.provider = (provider or settings.AI_LLM_PROVIDER).strip().lower()
         self.api_key = api_key if api_key is not None else settings.AI_LLM_API_KEY
-        self.base_url = base_url if base_url is not None else settings.AI_LLM_BASE_URL
         raw_model = model or settings.AI_LLM_MODEL
         self.model = normalize_litellm_model(raw_model, self.provider)
-        self.timeout_seconds = timeout_seconds or settings.AI_LLM_TIMEOUT_SECONDS
         logger.info("LLM client configured: provider=%s model=%s raw_model=%s", self.provider, self.model, raw_model)
 
     # ═══════════════════════════ 租户配置 ═══════════════════════════
@@ -105,6 +128,7 @@ class LLMClient:
                     try:
                         api_key = decrypt_secret(api_key) or ""
                     except Exception:
+                        logger.warning("租户 LLM API Key 解密失败（Redis 缓存）：tenant_id=%s", tenant_id)
                         return None
                 return cls(
                     provider=data["provider"],
@@ -113,7 +137,7 @@ class LLMClient:
                     model=data["model"],
                 )
         except Exception:
-            pass
+            logger.warning("读取租户 LLM 配置缓存失败：tenant_id=%s，降级查 DB", tenant_id)
 
         # 回退查 DB
         try:
@@ -152,7 +176,7 @@ class LLMClient:
                     await redis.setex(cache_key, 86400, cache_data)
                     await redis.aclose()
                 except Exception:
-                    pass
+                    logger.warning("写入租户 LLM 配置缓存失败：tenant_id=%s", tenant_id)
 
                 return cls(
                     provider=config.provider,
@@ -177,13 +201,24 @@ class LLMClient:
         start = time.perf_counter()
         max_tokens = max_tokens or settings.AI_LLM_MAX_TOKENS
 
-        if self.provider == "http":
-            payload = {"model": self.model, "messages": messages, "max_tokens": max_tokens, "temperature": temperature}
-            data = await self._http_post("/v1/chat/completions", payload)
-            text = self._extract_content(data)
-        else:
-            response = await self._litellm_call(messages, max_tokens=max_tokens, temperature=temperature, stream=False)
-            text = self._extract_content(response)
+        async with observe_llm_call(
+            self.model,
+            self.provider,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            input_data={"messages": _summarize_messages(messages)},
+        ) as observation:
+            if self.provider == "http":
+                payload = {"model": self.model, "messages": messages, "max_tokens": max_tokens, "temperature": temperature}
+                data = await self._http_post("/v1/chat/completions", payload)
+                text = self._extract_content(data)
+            else:
+                response = await self._litellm_call(messages, max_tokens=max_tokens, temperature=temperature, stream=False)
+                text = self._extract_content(response)
+            set_observation_io(
+                observation,
+                output_data={"text": text, "text_len": len(text)},
+            )
 
         await self._record_usage(messages, text, self.model, "complete", start)
         return text
@@ -207,13 +242,26 @@ class LLMClient:
             yield text
             return
 
-        response = await self._litellm_call(messages, max_tokens=max_tokens, temperature=temperature, stream=True)
-        collected: list[str] = []
-        async for chunk in response:
-            delta = self._extract_delta(chunk)
-            if delta:
-                collected.append(delta)
-                yield delta
+        async with observe_llm_call(
+            self.model,
+            self.provider,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            stream=True,
+            input_data={"messages": _summarize_messages(messages)},
+        ) as observation:
+            response = await self._litellm_call(messages, max_tokens=max_tokens, temperature=temperature, stream=True)
+            collected: list[str] = []
+            async for chunk in response:
+                delta = self._extract_delta(chunk)
+                if delta:
+                    collected.append(delta)
+                    yield delta
+            text = "".join(collected)
+            set_observation_io(
+                observation,
+                output_data={"text": text, "text_len": len(text)},
+            )
         await self._record_usage(messages, "".join(collected), self.model, "stream", start)
 
     # ═══════════════════════════ 内部实现 ═══════════════════════════
@@ -284,28 +332,16 @@ class LLMClient:
 
         url = f"{self.base_url.rstrip('/')}{path}"
         t0 = time.perf_counter()
+        logger.debug(
+            "HTTP LLM request started: model=%s url=%s timeout=%ss trace_id=%s",
+            self.model,
+            url,
+            self.timeout_seconds,
+            get_trace_id(),
+        )
         try:
-            logger.debug(
-                "HTTP LLM request started: model=%s url=%s timeout=%ss",
-                self.model,
-                url,
-                self.timeout_seconds,
-            )
-            async with httpx.AsyncClient(timeout=self.timeout_seconds, trust_env=False) as client:
-                resp = await client.post(url, json=payload)
-                resp.raise_for_status()
-                data = resp.json()
-        except httpx.TimeoutException as exc:
-            elapsed = (time.perf_counter() - t0) * 1000
-            logger.warning(
-                "HTTP LLM timeout: model=%s url=%s elapsed=%.0fms timeout=%ss",
-                self.model,
-                url,
-                elapsed,
-                self.timeout_seconds,
-            )
-            raise LLMClientError(f"http llm timeout: model={self.model}") from exc
-        except httpx.HTTPError as exc:
+            data = await self._post(path, json_body=payload)
+        except BaseClientError as exc:
             elapsed = (time.perf_counter() - t0) * 1000
             logger.warning(
                 "HTTP LLM failed: model=%s url=%s elapsed=%.0fms error=%s",
@@ -315,8 +351,6 @@ class LLMClient:
                 exc,
             )
             raise LLMClientError(f"http llm: {exc}") from exc
-        except ValueError as exc:
-            raise LLMClientError("http llm response is not valid json") from exc
 
         if not isinstance(data, dict):
             raise LLMClientError("http llm response must be a json object")
@@ -376,7 +410,7 @@ class LLMClient:
                 latency_ms=int((time.perf_counter() - started) * 1000),
             )
         except Exception:
-            pass
+            logger.warning("记录 LLM 用量失败：model=%s source=%s", model, source)
 
 
 def normalize_litellm_model(model: str | None, provider: str | None) -> str:

@@ -139,6 +139,11 @@ const router = createRouter({
           component: () => import('../views/knowledge/HitTesting.vue'),
         },
         {
+          path: 'ai/intent-samples',
+          name: 'ai-intent-samples',
+          component: () => import('../views/ai/IntentSampleList.vue'),
+        },
+        {
           path: 'settings/wechat',
           name: 'settings-wechat',
           component: () => import('../views/settings/WeChatSettings.vue'),
@@ -147,6 +152,11 @@ const router = createRouter({
           path: 'settings/sensitive-words',
           name: 'settings-sensitive-words',
           component: () => import('../views/settings/SensitiveWordSettings.vue'),
+        },
+        {
+          path: 'settings/product-attributes',
+          name: 'settings-product-attributes',
+          component: () => import('../views/settings/ProductAttributeTemplate.vue'),
         },
         {
           path: 'notifications',

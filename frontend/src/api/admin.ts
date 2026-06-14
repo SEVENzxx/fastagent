@@ -40,6 +40,7 @@ export interface Tenant {
   planName: string | null
   planExpiresAt: string | null
   customPrompt: string | null
+  templateJson: string[]
   selectedLlmConfigId: string | null
   selectedLlmConfigName: string | null
   isActive: boolean

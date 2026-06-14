@@ -227,6 +227,12 @@ frontend/dist/
 pgdata/
 redisdata/
 
+# Runtime / local artifacts
+backend/data/checkpoints/
+backend/reports/harness/
+frontend/$USER_HOME/
+frontend/vite-*.log
+
 # IDE
 .idea/
 .vscode/

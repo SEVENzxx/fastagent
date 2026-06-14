@@ -88,6 +88,7 @@ onMounted(async () => {
             <el-menu-item index="/marketing">营销资料</el-menu-item>
             <el-menu-item index="/images">图片库</el-menu-item>
             <el-menu-item index="/hit-testing">命中测试</el-menu-item>
+            <el-menu-item index="/ai/intent-samples">意图样本</el-menu-item>
           </el-sub-menu>
 
           <el-sub-menu index="analytics">
@@ -106,6 +107,7 @@ onMounted(async () => {
             </template>
             <el-menu-item v-if="permStore.hasPermission('manage_roles')" index="/admin/roles">角色管理</el-menu-item>
             <el-menu-item v-if="permStore.hasPermission('manage_employees')" index="/admin/employees">员工管理</el-menu-item>
+            <el-menu-item v-if="permStore.hasPermission('manage_products')" index="/settings/product-attributes">商品属性模板</el-menu-item>
             <el-menu-item index="/settings/wechat">企微设置</el-menu-item>
             <el-menu-item v-if="permStore.hasPermission('manage_sensitive_words')" index="/settings/sensitive-words">敏感词管理</el-menu-item>
           </el-sub-menu>

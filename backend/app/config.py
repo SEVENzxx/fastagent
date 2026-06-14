@@ -108,6 +108,19 @@ class Settings(BaseSettings):
     AI_PRODUCT_CONSULT_KNOWLEDGE_MIN_SCORE: float = 0.45
     AI_PRODUCT_CONSULT_USE_LLM_WHEN_HAS_CONTEXT: bool = True
 
+    # ── LangFuse 可观测性（LLM 链路追踪）──
+    LANGFUSE_ENABLED: bool = False
+    LANGFUSE_PUBLIC_KEY: str = ""
+    LANGFUSE_SECRET_KEY: str = ""
+    LANGFUSE_BASE_URL: str = "https://cloud.langfuse.com"
+
+    # ── 测试与开发模式 ──
+    FASTAGENT_TEST_MODE: bool = False  # 测试模式（Pydantic Settings 布尔解析：true/1/yes → True，false/0/no → False）。为 True 时使用内存 Checkpointer 而非 SQLite
+    HARNESS_API_TOKEN: str = ""         # Harness 内部测试 API 的 Token 认证
+
+    # ── 企业微信（WeCom 出站 API）──
+    WECOM_TIMEOUT_SECONDS: float = 10.0
+
     # Security
     SECRET_KEY: str
     JWT_ALGORITHM: str

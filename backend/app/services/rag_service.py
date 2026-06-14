@@ -119,6 +119,7 @@ class RAGService:
         return {"chunks": chunks, "qa_matches": qa_matches}
 
     def _chunk_hit_to_dict(self, hit: VectorSearchResult) -> dict:
+        """将 Qdrant 召回的知识分块 hit 转为前端可用的字典。"""
         payload = hit.payload
         return {
             "id": str(payload.get("chunk_id") or payload.get("business_id") or hit.point_id),
@@ -132,6 +133,7 @@ class RAGService:
         }
 
     def _qa_hit_to_dict(self, hit: VectorSearchResult) -> dict:
+        """将 Qdrant 召回的 QA 对 hit 转为前端可用的字典。"""
         payload = hit.payload
         return {
             "id": str(payload.get("qa_id") or payload.get("business_id") or hit.point_id),

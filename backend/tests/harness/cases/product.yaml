@@ -1,0 +1,158 @@
+# 商品咨询用例
+env:
+  local:
+    base_url: "http://localhost:8000"
+
+tenant_id: 319767484162940928
+conversation_prefix: "harness"
+
+cases:
+  - name: "商品-全品类查询"
+    description: "用户查询全部商品，验证 AI 能否返回完整商品列表"
+    risk_level: "p0"
+    business_constraints:
+      - "不得回答空列表或拒绝"
+      - "回复应包含至少 3 个商品名称或分类"
+    tags: ["product", "p0", "smoke"]
+    messages:
+      - content: "你们有什么产品"
+    expected:
+      status_code: 200
+      reply_not_empty: true
+      max_latency_ms: 10000
+
+  - name: "商品-按品类筛选"
+    description: "用户按品类筛选商品，验证 AI 能否正确识别品类并筛选"
+    risk_level: "p1"
+    business_constraints:
+      - "应识别'耳机'是音频类产品"
+      - "不得返回非音频类商品"
+    tags: ["product", "p1"]
+    messages:
+      - content: "看看耳机"
+    expected:
+      status_code: 200
+      reply_not_empty: true
+      max_latency_ms: 10000
+
+  - name: "商品-查价格"
+    description: "用户询问价格，验证 AI 能否提供具体价格信息"
+    risk_level: "p1"
+    business_constraints:
+      - "不得回答'去问客服'或类似推诿"
+      - "应提供具体价格或价格区间"
+    tags: ["product", "p1"]
+    messages:
+      - content: "看看耳机"
+      - content: "第一款多少钱"
+    expected:
+      status_code: 200
+      reply_not_empty: true
+      max_latency_ms: 10000
+
+  - name: "商品-查看详情"
+    description: "用户询问商品详情，验证 AI 能否提供具体商品特性"
+    risk_level: "p1"
+    business_constraints:
+      - "应引用具体商品信息（参数/功能）"
+      - "不得返回通用模糊描述"
+    tags: ["product", "p1"]
+    messages:
+      - content: "你们有什么产品"
+      - content: "第一个有什么特点"
+    expected:
+      status_code: 200
+      reply_not_empty: true
+      max_latency_ms: 10000
+
+  - name: "商品-对比"
+    description: "用户要求对比商品，验证 AI 能否基于上下文做多商品对比"
+    risk_level: "p2"
+    business_constraints:
+      - "应理解'第二个'指代上轮提到的第二个商品"
+      - "对比应涵盖至少一项具体差异"
+    tags: ["product", "p2"]
+    messages:
+      - content: "你们有什么产品"
+      - content: "第一个和第二个比有什么区别？"
+    expected:
+      status_code: 200
+      reply_not_empty: true
+      max_latency_ms: 12000
+
+  # ── 历史 Bug 回归 ─────────────────────────────────────
+  # 以下 case 沉淀自 docs/archive/bug-log.md
+
+  - name: "商品-预算过滤"
+    description: "用户指定预算筛选商品，验证 AI 能否根据价格约束返回符合预算的商品"
+    risk_level: "p1"
+    business_constraints:
+      - "应识别'500以下'为价格上限约束"
+      - "回复中应体现价格过滤结果，不得忽略预算条件"
+    tags: ["product", "p1", "regression"]
+    messages:
+      - content: "看看500以下的耳机"
+    expected:
+      status_code: 200
+      reply_not_empty: true
+      reply_contains_any: ["500", "价格", "预算", "元以下", "以内"]
+      max_latency_ms: 10000
+
+  - name: "商品-特征词防水便宜"
+    description: "用户同时用多个特征词筛选商品，验证 AI 能保留所有特征词不丢失"
+    risk_level: "p1"
+    business_constraints:
+      - "AI 回复必须同时体现'便宜'和'防水'两个维度"
+      - "不得只响应其中一个特征而忽略另一个"
+    tags: ["product", "p1", "regression"]
+    messages:
+      - content: "有什么便宜又防水的可以推荐？"
+    expected:
+      status_code: 200
+      reply_not_empty: true
+      reply_contains_any: ["便宜", "价格", "实惠", "性价比", "预算"]
+      max_latency_ms: 10000
+
+  - name: "商品-不存在不能编造"
+    description: "用户询问不存在的商品，验证 AI 不会编造商品信息"
+    risk_level: "p1"
+    business_constraints:
+      - "如果租户无对应商品，AI 应告知暂无该商品，不得编造商品名、价格或功能"
+      - "如果租户有对应商品，应提供真实商品信息"
+    tags: ["product", "p1", "regression"]
+    messages:
+      - content: "有100块钱以下的智能手表吗"
+    expected:
+      status_code: 200
+      reply_not_empty: true
+      max_latency_ms: 10000
+
+  - name: "商品-不误判订单"
+    description: "用户表达购买意向，验证 AI 识别为商品咨询而非订单动作"
+    risk_level: "p1"
+    business_constraints:
+      - "此消息意图是商品咨询，不是下单"
+      - "AI 应介绍商品，不应索要订单号、地址、电话等订单信息"
+    tags: ["product", "p1", "regression", "intent"]
+    messages:
+      - content: "我想买一个耳机"
+    expected:
+      status_code: 200
+      reply_not_empty: true
+      reply_not_contains: ["订单号", "收货地址", "联系电话", "下单"]
+      max_latency_ms: 10000
+
+  - name: "商品-attrs_json三态处理"
+    description: "验证 attrs_json 在不同 null 形态下搜索和回复不崩溃"
+    risk_level: "p2"
+    business_constraints:
+      - "需商品中存在 attrs_json 为 null、'null' 字符串、'{}' 三种情况"
+      - "搜索和回复不应因 attrs_json 取值异常而崩溃或返回空结果"
+      - "当前为黑盒基础验证，完整覆盖需数据准备"
+    tags: ["product", "p2", "regression"]
+    messages:
+      - content: "有什么产品"
+    expected:
+      status_code: 200
+      reply_not_empty: true
+      max_latency_ms: 10000

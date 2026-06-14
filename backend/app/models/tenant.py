@@ -3,6 +3,7 @@
 from datetime import datetime
 
 from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Index, String, Text
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import func, text
 
@@ -63,6 +64,10 @@ class Tenant(Base):
     )
 
     # ── 知识库配置 ────────────────────────────────────────────────────────
+    template_json: Mapped[list[str] | None] = mapped_column(
+        JSONB, nullable=True, comment="租户自定义属性模板"
+    )
+
     maxkb_base_url: Mapped[str | None] = mapped_column(
         String(500), comment="MaxKB 知识库地址"
     )

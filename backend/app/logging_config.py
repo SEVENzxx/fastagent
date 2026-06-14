@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 import sys
 
+from app.common.logging.filter import TraceIdFilter
 from app.config import settings
 
 
@@ -26,10 +27,12 @@ def setup_logging() -> None:
     level = _resolve_log_level()
     logging.basicConfig(
         level=level,
-        format="%(asctime)s %(levelname)-8s %(name)s | %(message)s",
+        format="%(asctime)s %(levelname)-8s [%(trace_id)s] %(name)s | %(message)s",
         stream=sys.stdout,
         force=True,
     )
+    for handler in logging.getLogger().handlers:
+        handler.addFilter(TraceIdFilter())
     logging.captureWarnings(True)
 
     logging.getLogger("app").setLevel(level)
@@ -37,6 +40,14 @@ def setup_logging() -> None:
     logging.getLogger("uvicorn.error").setLevel(logging.INFO)
     logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
     logging.getLogger("watchfiles.main").setLevel(logging.WARNING)
+
+    # 关闭 httpx/httpcore 底层连接 DEBUG 日志
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+
+    # SQL 日志：通过 settings.SQL_ECHO 控制，避免 echo=True 导致双份输出
+    if settings.SQL_ECHO:
+        logging.getLogger("sqlalchemy.engine").setLevel(logging.INFO)
 
 
 def _resolve_log_level() -> int:

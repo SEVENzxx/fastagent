@@ -1,0 +1,725 @@
+"""OrderHandler — 订单场景 Handler。
+
+支持以下 scenario：
+  - order.list / order.filter / order.detail / order.shipping_status
+  - order.create（使用 OrderCreationGraph 子图）
+  - order.cancel（使用 OrderCancelGraph 子图）
+  - order.confirm（骨架占位）
+
+写操作（order.create / order.cancel）保留 LangGraph 子图，
+Redis PendingState 只保存 graph_thread_id / interrupt_id。
+"""
+
+from __future__ import annotations
+
+import logging
+import uuid
+from datetime import datetime, timezone, timedelta
+from typing import Any
+
+from app.ai.components.order_reference import (
+    OrderReferenceResolver,
+    OrderReferenceResult,
+)
+from app.ai.context.pending_state import PendingDirective, PendingState
+from app.ai.handlers.base import BaseHandler, HandlerResult
+from app.ai.recognition.types import ScenarioDecision
+from app.ai.reply_builders.order import OrderReplyBuilder
+from app.ai.context.session_context import SessionContext
+from app.ai.handlers.base import ToolResult
+
+logger = logging.getLogger(__name__)
+
+
+class OrderHandler(BaseHandler):
+    """订单查询/操作 Handler。
+
+    只读场景（list / filter / detail / shipping_status）走 OrderReferenceResolver + OrderSkill。
+    写操作（create / cancel）走 LangGraph 子图 + graph PendingState。
+    """
+
+    def __init__(
+        self,
+        resolver: OrderReferenceResolver | None = None,
+        skill: object = None,
+    ) -> None:
+        self._resolver = resolver
+        self._skill = skill  # None = lazy import real module on first _call_skill
+
+    async def execute(
+        self,
+        decision: ScenarioDecision,
+        context: object,
+    ) -> HandlerResult:
+        """处理订单场景。"""
+        ctx: SessionContext = context  # type: ignore[assignment]
+        scenario = decision.scenario_id
+        text = decision.entities.get("raw_text", "")
+        if not text:
+            text = getattr(ctx, "last_user_message", "") or ""
+
+        if scenario == "order.list":
+            return await self._handle_list(text, ctx)
+        if scenario == "order.filter":
+            return await self._handle_filter(text, ctx)
+        if scenario == "order.detail":
+            return await self._handle_detail(text, ctx)
+        if scenario == "order.shipping_status":
+            return await self._handle_shipping_status(text, ctx)
+        if scenario == "order.create":
+            return await self._handle_create(text, ctx)
+        if scenario == "order.cancel":
+            return await self._handle_cancel(text, ctx)
+
+        # 未实现的写操作
+        logger.info("订单操作未实现: scenario=%s", scenario)
+        return HandlerResult(
+            scenario_id=scenario,
+            reply="该订单操作功能正在开发中，请稍后再试。",
+            pending_directive=PendingDirective.CLEAR,
+        )
+
+    async def resume(
+        self,
+        pending: object,
+        message: str,
+        context: object,
+    ) -> HandlerResult:
+        """恢复 Pending 流程。
+
+        graph pending → 恢复对应 LangGraph 子图。
+        """
+        ps: PendingState = pending  # type: ignore[assignment]
+        ctx: SessionContext = context  # type: ignore[assignment]
+
+        if ps.mode != "graph":
+            return HandlerResult(
+                scenario_id=ps.scenario_id,
+                reply="订单功能开发中，请稍后再试。",
+                pending_directive=PendingDirective.CLEAR,
+            )
+
+        if ps.scenario_id == "order.create":
+            return await self._resume_create_graph(ps, message, ctx)
+        if ps.scenario_id == "order.cancel":
+            return await self._resume_cancel_graph(ps, message, ctx)
+
+        return HandlerResult(
+            scenario_id=ps.scenario_id,
+            reply="订单功能开发中，请稍后再试。",
+            pending_directive=PendingDirective.CLEAR,
+        )
+
+    # ── 下单图 ──
+
+    async def _handle_create(
+        self,
+        text: str,
+        ctx: SessionContext,
+    ) -> HandlerResult:
+        """下单入口：创建图线程并首次调用。"""
+        if not text.strip():
+            return HandlerResult(
+                scenario_id="order.create",
+                reply="请描述您要购买的商品。",
+                pending_directive=PendingDirective.CLEAR,
+            )
+
+        from app.ai.graphs.order_creation import get_creation_graph, _build_idempotency_key
+
+        graph = await get_creation_graph()
+        graph_thread_id = str(uuid.uuid4())
+        idempotency_key = _build_idempotency_key(
+            tenant_id=ctx.tenant_id,
+            conversation_id=ctx.conversation_id,
+            contact_id=ctx.contact_id,
+            graph_thread_id=graph_thread_id,
+            input_text=text,
+            product_name=text,
+            quantity=1,
+        )
+
+        initial_state: dict[str, Any] = {
+            "tenant_id": ctx.tenant_id,
+            "conversation_id": ctx.conversation_id,
+            "contact_id": ctx.contact_id,
+            "input_text": text,
+            "quantity": 1,
+            "idempotency_key": idempotency_key,
+        }
+
+        config = {"configurable": {"thread_id": graph_thread_id}}
+
+        return await self._run_graph(
+            scenario_id="order.create",
+            graph=graph,
+            initial_state=initial_state,
+            config=config,
+            graph_thread_id=graph_thread_id,
+        )
+
+    async def _resume_create_graph(
+        self,
+        pending: PendingState,
+        message: str,
+        ctx: SessionContext,
+    ) -> HandlerResult:
+        """恢复下单图。"""
+        from app.ai.graphs.order_creation import get_creation_graph
+
+        graph = await get_creation_graph()
+        graph_thread_id = pending.graph_thread_id or ""
+        config = {"configurable": {"thread_id": graph_thread_id}}
+
+        return await self._run_graph(
+            scenario_id="order.create",
+            graph=graph,
+            initial_state=None,
+            config=config,
+            graph_thread_id=graph_thread_id,
+            resume_message=message,
+        )
+
+    # ── 取消订单图 ──
+
+    async def _handle_cancel(
+        self,
+        text: str,
+        ctx: SessionContext,
+    ) -> HandlerResult:
+        """取消订单入口：创建图线程并首次调用。"""
+        if not text.strip():
+            return HandlerResult(
+                scenario_id="order.cancel",
+                reply="请提供要取消的订单号。",
+                pending_directive=PendingDirective.CLEAR,
+            )
+
+        from app.ai.graphs.order_cancel import get_cancel_graph
+
+        graph = await get_cancel_graph()
+        graph_thread_id = str(uuid.uuid4())
+
+        initial_state: dict[str, Any] = {
+            "tenant_id": ctx.tenant_id,
+            "conversation_id": ctx.conversation_id,
+            "contact_id": ctx.contact_id,
+            "input_text": text,
+        }
+
+        config = {"configurable": {"thread_id": graph_thread_id}}
+
+        return await self._run_graph(
+            scenario_id="order.cancel",
+            graph=graph,
+            initial_state=initial_state,
+            config=config,
+            graph_thread_id=graph_thread_id,
+        )
+
+    async def _resume_cancel_graph(
+        self,
+        pending: PendingState,
+        message: str,
+        ctx: SessionContext,
+    ) -> HandlerResult:
+        """恢复取消订单图。"""
+        from app.ai.graphs.order_cancel import get_cancel_graph
+
+        graph = await get_cancel_graph()
+        graph_thread_id = pending.graph_thread_id or ""
+        config = {"configurable": {"thread_id": graph_thread_id}}
+
+        return await self._run_graph(
+            scenario_id="order.cancel",
+            graph=graph,
+            initial_state=None,
+            config=config,
+            graph_thread_id=graph_thread_id,
+            resume_message=message,
+        )
+
+    # ── 通用图运行器 ──
+
+    async def _run_graph(
+        self,
+        *,
+        scenario_id: str,
+        graph: Any,
+        initial_state: dict[str, Any] | None,
+        config: dict[str, Any],
+        graph_thread_id: str,
+        resume_message: str | None = None,
+    ) -> HandlerResult:
+        """运行 LangGraph 子图并处理中断/完成。
+
+        如果图中断（需要用户输入）→ 返回 SET graph PendingState。
+        如果图完成 → 返回 CLEAR 并附带回复。
+        """
+        # 尝试注入 DB session
+        db = None
+        try:
+            from app.database import AsyncSessionLocal
+
+            db = AsyncSessionLocal()
+        except Exception:
+            pass
+
+        try:
+            # 恢复调用时检查图是否已完成（防御：重复 resume）
+            if resume_message is not None:
+                state_result = await graph.aget_state(config)
+                if not state_result.next:
+                    reply = {
+                        "order.create": "订单已提交，请勿重复操作。",
+                        "order.cancel": "该订单已处理，请勿重复操作。",
+                    }.get(scenario_id, "操作已完成，请勿重复操作。")
+                    return HandlerResult(
+                        scenario_id=scenario_id,
+                        reply=reply,
+                        pending_directive=PendingDirective.CLEAR,
+                    )
+
+            # 注入 skill 供图节点使用（测试时可注入 FakeOrderSkill）
+            if self._skill is not None:
+                config["configurable"]["order_skill"] = self._skill
+
+            if db is not None:
+                async with db as session:
+                    config["configurable"]["db"] = session
+                    result = await self._invoke_graph(
+                        graph, initial_state, config, resume_message,
+                    )
+            else:
+                config["configurable"]["db"] = None
+                result = await self._invoke_graph(
+                    graph, initial_state, config, resume_message,
+                )
+        except Exception as exc:
+            logger.warning("图执行异常: scenario=%s error=%s", scenario_id, exc)
+            return HandlerResult(
+                scenario_id=scenario_id,
+                reply="操作执行异常，请稍后再试。",
+                pending_directive=PendingDirective.CLEAR,
+            )
+
+        # 检查是否中断
+        current = await graph.aget_state(config)
+        if current.next:
+            # 图中断 → 设置 PendingState（graph mode）
+            interrupt_value = ""
+            if current.interrupts:
+                interrupt_value = current.interrupts[0].value or ""
+
+            pending_state = PendingState(
+                scenario_id=scenario_id,
+                step=",".join(current.next),
+                expected_response_type="text",
+                mode="graph",
+                graph_thread_id=graph_thread_id,
+                interrupt_id=str(current.interrupts[0].id) if current.interrupts else "",
+                created_at=datetime.now(timezone.utc),
+                expires_at=datetime.now(timezone.utc) + timedelta(hours=2),
+            )
+
+            return HandlerResult(
+                scenario_id=scenario_id,
+                reply=interrupt_value or "请继续操作。",
+                pending_directive=PendingDirective.SET,
+                pending_state=pending_state,
+            )
+
+        # 图完成
+        reply = result.get("reply", "") if isinstance(result, dict) else ""
+        if not reply:
+            reply = "操作已完成。"
+
+        return HandlerResult(
+            scenario_id=scenario_id,
+            reply=reply,
+            pending_directive=PendingDirective.CLEAR,
+        )
+
+    @staticmethod
+    async def _invoke_graph(
+        graph: Any,
+        initial_state: dict[str, Any] | None,
+        config: dict[str, Any],
+        resume_message: str | None,
+    ) -> dict[str, Any]:
+        """首次调用或恢复调用图。"""
+        if resume_message is not None:
+            from langgraph.types import Command
+
+            return await graph.ainvoke(Command(resume=resume_message), config=config)  # type: ignore[arg-type]
+        return await graph.ainvoke(initial_state, config=config)  # type: ignore[arg-type]
+
+    # ── 只读场景 ──
+
+    async def _handle_list(
+        self,
+        text: str,
+        ctx: SessionContext,
+    ) -> HandlerResult:
+        """订单列表。"""
+        result = await self._resolve(text, ctx)
+        _ = result
+
+        if ctx.contact_id is None:
+            return HandlerResult(
+                scenario_id="order.list",
+                reply="请先确认客户身份后查询订单。",
+                pending_directive=PendingDirective.CLEAR,
+            )
+
+        orders_data = await self._call_skill(
+            "manage_order",
+            tenant_id=ctx.tenant_id,
+            contact_id=ctx.contact_id,
+        )
+        if not orders_data.ok:
+            return HandlerResult(
+                scenario_id="order.list",
+                reply="暂时无法查询订单信息，请稍后再试。",
+                pending_directive=PendingDirective.CLEAR,
+            )
+
+        payload = orders_data.result
+        orders: list[dict[str, Any]] = payload.get("orders", [])
+        count = int(payload.get("count", 0))
+        reply = OrderReplyBuilder.order_list(orders, count)
+
+        return HandlerResult(
+            scenario_id="order.list",
+            reply=reply,
+            pending_directive=PendingDirective.CLEAR,
+            context_update={
+                "recent_orders": _summarize_orders(orders),
+                "last_intent": "order.list",
+            },
+        )
+
+    async def _handle_filter(
+        self,
+        text: str,
+        ctx: SessionContext,
+    ) -> HandlerResult:
+        """订单筛选。"""
+        result = await self._resolve(text, ctx)
+
+        if ctx.contact_id is None:
+            return HandlerResult(
+                scenario_id="order.filter",
+                reply="请先确认客户身份后查询订单。",
+                pending_directive=PendingDirective.CLEAR,
+            )
+
+        skill_kwargs: dict[str, Any] = {
+            "tenant_id": ctx.tenant_id,
+            "contact_id": ctx.contact_id,
+            "filter_time_ref": result.time_ref,
+        }
+        if result.statuses:
+            skill_kwargs["filter_statuses"] = result.statuses
+        if result.status:
+            skill_kwargs["status"] = result.status
+
+        orders_data = await self._call_skill("manage_order", **skill_kwargs)
+        if not orders_data.ok:
+            return HandlerResult(
+                scenario_id="order.filter",
+                reply="暂时无法查询订单信息，请稍后再试。",
+                pending_directive=PendingDirective.CLEAR,
+            )
+
+        payload = orders_data.result
+        filtered: list[dict[str, Any]] = payload.get("orders", [])
+        count = int(payload.get("count", 0))
+
+        if not filtered:
+            return HandlerResult(
+                scenario_id="order.filter",
+                reply="暂无符合条件的订单。",
+                pending_directive=PendingDirective.CLEAR,
+                context_update={"last_intent": "order.filter"},
+            )
+
+        reply = OrderReplyBuilder.order_list(filtered, count)
+        return HandlerResult(
+            scenario_id="order.filter",
+            reply=reply,
+            pending_directive=PendingDirective.CLEAR,
+            context_update={
+                "recent_orders": _summarize_orders(filtered),
+                "last_intent": "order.filter",
+            },
+        )
+
+    async def _handle_detail(
+        self,
+        text: str,
+        ctx: SessionContext,
+    ) -> HandlerResult:
+        """订单详情。"""
+        if ctx.contact_id is None:
+            return HandlerResult(
+                scenario_id="order.detail",
+                reply="请先确认客户身份后查询订单。",
+                pending_directive=PendingDirective.CLEAR,
+            )
+
+        result = await self._resolve(text, ctx)
+        order_id = _get_order_id(result, ctx)
+
+        if order_id is None:
+            return await self._fallback_to_list(ctx, "order.detail")
+
+        orders_data = await self._call_skill(
+            "manage_order",
+            tenant_id=ctx.tenant_id,
+            contact_id=ctx.contact_id,
+            order_id=order_id,
+        )
+        if not orders_data.ok or not orders_data.result:
+            return HandlerResult(
+                scenario_id="order.detail",
+                reply=f"未找到订单 #{order_id}。",
+                pending_directive=PendingDirective.CLEAR,
+            )
+
+        order = orders_data.result
+        reply = OrderReplyBuilder.order_detail(order)
+        return HandlerResult(
+            scenario_id="order.detail",
+            reply=reply,
+            pending_directive=PendingDirective.CLEAR,
+            context_update={
+                "active_order_id": str(order_id),
+                "last_intent": "order.detail",
+            },
+        )
+
+    async def _handle_shipping_status(
+        self,
+        text: str,
+        ctx: SessionContext,
+    ) -> HandlerResult:
+        """物流/发货状态查询。"""
+        if ctx.contact_id is None:
+            return HandlerResult(
+                scenario_id="order.shipping_status",
+                reply="请先确认客户身份后查询订单。",
+                pending_directive=PendingDirective.CLEAR,
+            )
+
+        result = await self._resolve(text, ctx)
+        order_id = _get_order_id(result, ctx)
+
+        if order_id is None:
+            return await self._fallback_to_list(ctx, "order.shipping_status")
+
+        orders_data = await self._call_skill(
+            "manage_order",
+            tenant_id=ctx.tenant_id,
+            contact_id=ctx.contact_id,
+            order_id=order_id,
+        )
+        if not orders_data.ok or not orders_data.result:
+            return HandlerResult(
+                scenario_id="order.shipping_status",
+                reply=f"未找到订单 #{order_id}。",
+                pending_directive=PendingDirective.CLEAR,
+            )
+
+        order = orders_data.result
+        reply = OrderReplyBuilder.shipping_status(order)
+        return HandlerResult(
+            scenario_id="order.shipping_status",
+            reply=reply,
+            pending_directive=PendingDirective.CLEAR,
+            context_update={
+                "active_order_id": str(order_id),
+                "last_intent": "order.shipping_status",
+            },
+        )
+
+    # ── 内部方法 ──
+
+    async def _resolve(self, text: str, ctx: SessionContext) -> OrderReferenceResult:
+        resolver = self._get_resolver()
+        return await resolver.resolve(
+            text=text,
+            contact_id=ctx.contact_id or 0,
+            context=ctx,
+        )
+
+    def _get_resolver(self) -> OrderReferenceResolver:
+        if self._resolver is not None:
+            return self._resolver
+        return OrderReferenceResolver()
+
+    async def _fallback_to_list(
+        self,
+        ctx: SessionContext,
+        scenario_id: str,
+    ) -> HandlerResult:
+        """未解析到具体订单时回落为列表。"""
+        if ctx.contact_id is None:
+            return HandlerResult(
+                scenario_id=scenario_id,
+                reply="请提供订单号或确认客户身份后查询。",
+                pending_directive=PendingDirective.CLEAR,
+            )
+
+        orders_data = await self._call_skill(
+            "manage_order",
+            tenant_id=ctx.tenant_id,
+            contact_id=ctx.contact_id,
+        )
+        if not orders_data.ok:
+            return HandlerResult(
+                scenario_id=scenario_id,
+                reply="请提供订单号或从下方选择订单。",
+                pending_directive=PendingDirective.CLEAR,
+            )
+
+        payload = orders_data.result
+        orders: list[dict[str, Any]] = payload.get("orders", [])
+        count = int(payload.get("count", 0))
+
+        if not orders:
+            return HandlerResult(
+                scenario_id=scenario_id,
+                reply="该客户暂无订单记录。",
+                pending_directive=PendingDirective.CLEAR,
+            )
+
+        reply = (
+            "请提供订单号或从下方选择订单：\n\n"
+            f"{OrderReplyBuilder.order_list(orders, count)}"
+        )
+        return HandlerResult(
+            scenario_id=scenario_id,
+            reply=reply,
+            pending_directive=PendingDirective.CLEAR,
+            context_update={
+                "recent_orders": _summarize_orders(orders),
+                "last_intent": scenario_id,
+            },
+        )
+
+    async def _call_skill(
+        self,
+        method: str,
+        **kwargs: Any,
+    ) -> ToolResult:
+        """调用 Skill 方法并自动注入 db session。"""
+        if self._skill is None:
+            import app.ai.skills.orders as _real_skill
+            self._skill = _real_skill
+
+        fn = getattr(self._skill, method, None)
+        if fn is None:
+            logger.warning("Skill 方法不存在: %s", method)
+            return _empty_tool_result()
+
+        try:
+            from app.database import AsyncSessionLocal
+        except Exception:
+            try:
+                return await fn(db=None, **kwargs)
+            except Exception:
+                logger.warning("Skill 调用失败（DB 不可用）: method=%s", method)
+                return _empty_tool_result()
+
+        try:
+            async with AsyncSessionLocal() as db:
+                return await fn(db=db, **kwargs)
+        except Exception:
+            logger.warning("Skill 调用失败（DB 运行时异常）: method=%s", method)
+            return _empty_tool_result()
+
+
+# ── 工具函数 ──
+
+
+def _empty_tool_result() -> ToolResult:
+    return ToolResult(ok=False, skill_name="manage_order", error="订单服务暂不可用")
+
+
+def _summarize_orders(orders: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        {
+            "id": o.get("order_id", str(index)),
+            "status": o.get("status", ""),
+            "status_label": o.get("status_label", o.get("status", "")),
+            "payable_amount": o.get("payable_amount", 0),
+        }
+        for index, o in enumerate(orders)
+    ]
+
+
+def _get_order_id(
+    result: OrderReferenceResult,
+    ctx: SessionContext,
+) -> int | None:
+    if result.resolved and result.order_id is not None:
+        return result.order_id
+    if result.reference_type == "active" and ctx.active_order_id:
+        return int(ctx.active_order_id)
+    return None
+
+
+def _filter_orders(
+    orders: list[dict[str, Any]],
+    *,
+    statuses: list[str] | None = None,
+    single_status: str | None = None,
+    time_ref: str | None = None,
+) -> list[dict[str, Any]]:
+    result = list(orders)
+    if statuses:
+        status_set = set(statuses)
+        result = [o for o in result if o.get("status") in status_set]
+    elif single_status:
+        result = [o for o in result if o.get("status") == single_status]
+    if time_ref:
+        result = _filter_by_time(result, time_ref)
+    return result
+
+
+def _filter_by_time(
+    orders: list[dict[str, Any]],
+    time_ref: str,
+) -> list[dict[str, Any]]:
+    now = datetime.now(timezone.utc)
+    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+
+    if time_ref == "today":
+        return [o for o in orders if _parse_order_time(o) >= today_start]
+    if time_ref == "yesterday":
+        yesterday_start = today_start - timedelta(days=1)
+        return [
+            o for o in orders
+            if yesterday_start <= _parse_order_time(o) < today_start
+        ]
+    if time_ref == "this_month":
+        month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        return [o for o in orders if _parse_order_time(o) >= month_start]
+    if time_ref == "recent":
+        week_ago = today_start - timedelta(days=7)
+        return [o for o in orders if _parse_order_time(o) >= week_ago]
+    return orders
+
+
+def _parse_order_time(order: dict[str, Any]) -> datetime:
+    raw = order.get("created_at")
+    if raw:
+        try:
+            if isinstance(raw, str):
+                return datetime.fromisoformat(raw)
+            if isinstance(raw, datetime):
+                return raw
+        except (ValueError, TypeError):
+            pass
+    return datetime.min.replace(tzinfo=timezone.utc)

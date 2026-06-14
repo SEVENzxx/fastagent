@@ -1,0 +1,85 @@
+# ── FastAgent 生产部署配置 ──
+# 启动: docker compose -f docker-compose.prod.yml up -d
+# 与 docker-compose.yml（开发模式，带热重载卷挂载）的区别：
+#   - 前后端使用预构建镜像，不挂载源码卷
+#   - 数据库端口不暴露到宿主机
+#   - 前端 nginx 作为统一入口，代理 API 和 WebSocket
+
+name: fastagent-prod
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg17
+    container_name: fastagent-prod-postgres
+    restart: unless-stopped
+    env_file:
+      - ./.env
+    volumes:
+      - pgdata_prod:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7
+    container_name: fastagent-prod-redis
+    restart: unless-stopped
+    volumes:
+      - redisdata_prod:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  qdrant:
+    image: qdrant/qdrant:v1.12.5
+    container_name: fastagent-prod-qdrant
+    restart: unless-stopped
+    volumes:
+      - qdrantdata_prod:/qdrant/storage
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: fastagent-prod-backend
+    restart: unless-stopped
+    env_file:
+      - ./.env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      DATABASE_URL_SYNC: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      REDIS_URL: redis://redis:6379/0
+      APP_ENV: production
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8000/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: fastagent-prod-frontend
+    restart: unless-stopped
+    ports:
+      - "${PORT:-80}:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+
+volumes:
+  pgdata_prod:
+  redisdata_prod:
+  qdrantdata_prod:

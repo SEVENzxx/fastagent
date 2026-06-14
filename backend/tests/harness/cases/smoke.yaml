@@ -1,0 +1,83 @@
+# Smoke 用例 — 快速验证核心链路是否正常
+env:
+  local:
+    base_url: "http://localhost:8000"
+
+tenant_id: 319767484162940928
+conversation_prefix: "harness"
+
+cases:
+  # ── 问候 ─────────────────────────────────────────────
+  - name: "问候-基础"
+    description: "验证 AI 能否正确响应基础问候"
+    risk_level: "p0"
+    business_constraints:
+      - "不得拒绝回答（如'不支持闲聊'）"
+      - "回复应包含友好问候语"
+    tags: ["smoke", "p0"]
+    messages:
+      - content: "你好"
+    expected:
+      status_code: 200
+      reply_not_empty: true
+      max_latency_ms: 10000
+
+  # ── 商品咨询 ─────────────────────────────────────────
+  - name: "商品咨询-通用"
+    description: "验证 AI 能否正确响应商品查询并返回商品列表"
+    risk_level: "p0"
+    business_constraints:
+      - "不得回答'我不懂商品'或类似拒绝"
+      - "回复应包含具体的商品名称或分类"
+    tags: ["smoke", "p0", "product"]
+    messages:
+      - content: "你们有什么产品"
+    expected:
+      status_code: 200
+      reply_not_empty: true
+      max_latency_ms: 10000
+
+  # ── 订单咨询 ─────────────────────────────────────────
+  - name: "订单咨询-通用"
+    description: "验证 AI 能否识别订单查询意图并引导提供订单信息"
+    risk_level: "p0"
+    business_constraints:
+      - "不得拒绝回答（如'我不支持查询订单'）"
+      - "应引导用户提供订单号以查询"
+    tags: ["smoke", "p0", "order"]
+    messages:
+      - content: "我想查一下订单"
+    expected:
+      status_code: 200
+      reply_not_empty: true
+      max_latency_ms: 12000
+
+  # ── 转人工 ───────────────────────────────────────────
+  - name: "转人工"
+    description: "验证 AI 能否正确识别转人工意图"
+    risk_level: "p1"
+    business_constraints:
+      - "不得拒绝转人工请求"
+      - "必须确认已转到人工客服"
+    tags: ["smoke", "p1", "human"]
+    messages:
+      - content: "转人工"
+    expected:
+      status_code: 200
+      reply_not_empty: true
+      max_latency_ms: 10000
+
+  # ── 未知问题 ─────────────────────────────────────────
+  - name: "未知问题-兜底"
+    description: "验证 AI 对无意义输入的兜底处理"
+    risk_level: "p1"
+    business_constraints:
+      - "不得报错或返回空回复"
+      - "应以礼貌方式表示无法理解并提供帮助选项"
+    tags: ["smoke", "p1", "fallback"]
+    messages:
+      - content: "asdfghjkl"
+    expected:
+      status_code: 200
+      reply_not_empty: true
+      max_latency_ms: 12000

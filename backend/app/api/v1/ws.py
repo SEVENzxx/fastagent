@@ -5,6 +5,7 @@ import asyncio
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from jose import JWTError
 
+from app.common.trace.context import ensure_trace_id, reset_trace_id, set_trace_id
 from app.core.security import decode_token
 from app.core.websocket_manager import manager
 from app.database import AsyncSessionLocal
@@ -49,90 +50,100 @@ async def websocket_endpoint(websocket: WebSocket, conversation_id: int, token: 
     - 写入成功后广播 message.created。
     - 真实客户入站和 AI 回复会在后续渠道/AI 管线中接入。
     """
-    try:
-        payload = decode_token(token)
-        employee_id = int(payload["sub"])
-    except (JWTError, KeyError, ValueError):
-        await websocket.close(code=1008)
-        return
+    # ── trace_id 生命周期（连接级） ──
+    tid = websocket.headers.get("X-Trace-Id", "")
+    if tid:
+        set_trace_id(tid)
+    else:
+        ensure_trace_id()
 
-    async with AsyncSessionLocal() as db:
-        employee = await db.get(Employee, employee_id)
-        if employee is None or employee.deleted_at is not None or employee.is_superuser:
-            await websocket.close(code=1008)
-            return
-        conversation = await conversation_service.get_conversation(
-            db,
-            conversation_id,
-            employee.tenant_id,
-        )
-        if conversation is None:
+    try:
+        try:
+            payload = decode_token(token)
+            employee_id = int(payload["sub"])
+        except (JWTError, KeyError, ValueError):
             await websocket.close(code=1008)
             return
 
-    await manager.connect(conversation_id, websocket)
-    manager.connect_employee(employee_id)
-    await manager.start_redis_subscriber(conversation_id)
+        async with AsyncSessionLocal() as db:
+            employee = await db.get(Employee, employee_id)
+            if employee is None or employee.deleted_at is not None or employee.is_superuser:
+                await websocket.close(code=1008)
+                return
+            conversation = await conversation_service.get_conversation(
+                db,
+                conversation_id,
+                employee.tenant_id,
+            )
+            if conversation is None:
+                await websocket.close(code=1008)
+                return
 
-    # WebSocket 连接建立后，标记员工为在线
-    async with AsyncSessionLocal() as db:
-        emp = await db.get(Employee, employee_id)
-        if emp is not None and emp.online_status != "online":
-            emp.online_status = "online"
-            await db.commit()
+        await manager.connect(conversation_id, websocket)
+        manager.connect_employee(employee_id)
+        await manager.start_redis_subscriber(conversation_id)
 
-    async def heartbeat() -> None:
-        """服务端心跳。
+        # WebSocket 连接建立后，标记员工为在线
+        async with AsyncSessionLocal() as db:
+            emp = await db.get(Employee, employee_id)
+            if emp is not None and emp.online_status != "online":
+                emp.online_status = "online"
+                await db.commit()
 
-        每 30 秒发送一次 ping，让前端能判断连接仍然活着，也方便代理层保持连接不被静默断开。
-        """
-        while True:
-            await asyncio.sleep(30)
-            await websocket.send_json({"type": "ping"})
+        async def heartbeat() -> None:
+            """服务端心跳。
 
-    heartbeat_task = asyncio.create_task(heartbeat())
-    try:
-        await websocket.send_json({"type": "connected", "conversationId": str(conversation_id)})
-        while True:
-            data = await websocket.receive_json()
-            message_type = data.get("type")
-            if message_type == "pong":
-                continue
-            if message_type == "ping":
-                await websocket.send_json({"type": "pong"})
-                continue
-            if message_type != "message.send":
-                continue
+            每 30 秒发送一次 ping，让前端能判断连接仍然活着，也方便代理层保持连接不被静默断开。
+            """
+            while True:
+                await asyncio.sleep(30)
+                await websocket.send_json({"type": "ping"})
 
-            content = str(data.get("content") or "").strip()
-            if not content:
-                continue
+        heartbeat_task = asyncio.create_task(heartbeat())
+        try:
+            await websocket.send_json({"type": "connected", "conversationId": str(conversation_id)})
+            while True:
+                data = await websocket.receive_json()
+                message_type = data.get("type")
+                if message_type == "pong":
+                    continue
+                if message_type == "ping":
+                    await websocket.send_json({"type": "pong"})
+                    continue
+                if message_type != "message.send":
+                    continue
 
-            async with AsyncSessionLocal() as db:
-                conversation, message = await conversation_service.create_message(
-                    db,
-                    conversation_id,
-                    employee.tenant_id,
-                    MessageCreate(
-                        sender_type=str(data.get("senderType") or "AGENT"),
-                        content_type=str(data.get("contentType") or "text"),
-                        content=content,
-                    ),
-                )
-                message = await outbound_message_service.deliver_message(db, conversation, message)
-                await manager.publish(
-                    conversation_id,
-                    {"type": "message.created", "message": _message_payload(message)},
-                )
-    except WebSocketDisconnect:
-        pass
+                content = str(data.get("content") or "").strip()
+                if not content:
+                    continue
+
+                async with AsyncSessionLocal() as db:
+                    conversation, message = await conversation_service.create_message(
+                        db,
+                        conversation_id,
+                        employee.tenant_id,
+                        MessageCreate(
+                            sender_type=str(data.get("senderType") or "AGENT"),
+                            content_type=str(data.get("contentType") or "text"),
+                            content=content,
+                        ),
+                    )
+                    message = await outbound_message_service.deliver_message(db, conversation, message)
+                    await manager.publish(
+                        conversation_id,
+                        {"type": "message.created", "message": _message_payload(message)},
+                    )
+        except WebSocketDisconnect:
+            pass
+        finally:
+            heartbeat_task.cancel()
+            manager.disconnect(conversation_id, websocket)
+            # 若无其他连接，标记员工离线
+            if manager.disconnect_employee(employee_id):
+                async with AsyncSessionLocal() as db:
+                    emp = await db.get(Employee, employee_id)
+                    if emp is not None:
+                        emp.online_status = "offline"
+                        await db.commit()
     finally:
-        heartbeat_task.cancel()
-        manager.disconnect(conversation_id, websocket)
-        # 若无其他连接，标记员工离线
-        if manager.disconnect_employee(employee_id):
-            async with AsyncSessionLocal() as db:
-                emp = await db.get(Employee, employee_id)
-                if emp is not None:
-                    emp.online_status = "offline"
-                    await db.commit()
+        reset_trace_id()

@@ -27,15 +27,44 @@ async def list_orders(
     *,
     contact_id: int | None = None,
     status: str | None = None,
+    status__in: list[str] | None = None,
+    created_from: datetime | None = None,
+    created_to: datetime | None = None,
     employee_id: int | None = None,
     page: int = 1,
     page_size: int = 20,
 ) -> tuple[list[Order], int]:
+    """分页查询租户下的订单列表。
+
+    支持按联系人、状态（单值或多值）、创建时间范围、负责坐席多维度过滤。
+    所有过滤条件均在 SQL 层面执行，不做内存过滤。
+
+    参数：
+        db: 异步数据库会话。
+        tenant_id: 租户 ID。
+        contact_id: 可选，按联系人过滤。
+        status: 可选，按订单状态过滤。
+        status__in: 可选，按多个状态过滤（与 status 互斥，同时传入时使用 status__in）。
+        created_from: 可选，创建时间起始（含）。
+        created_to: 可选，创建时间截止（不含）。
+        employee_id: 可选，按负责坐席过滤。
+        page: 页码（从 1 开始）。
+        page_size: 每页条数。
+
+    返回：
+        (订单列表, 总数) 元组。
+    """
     conditions = [Order.tenant_id == tenant_id]
     if contact_id is not None:
         conditions.append(Order.contact_id == contact_id)
-    if status is not None:
+    if status__in:
+        conditions.append(Order.status.in_(status__in))
+    elif status is not None:
         conditions.append(Order.status == status)
+    if created_from is not None:
+        conditions.append(Order.created_at >= created_from)
+    if created_to is not None:
+        conditions.append(Order.created_at < created_to)
     if employee_id is not None:
         conditions.append(Order.employee_id == employee_id)
 
@@ -56,6 +85,16 @@ async def list_orders(
 async def get_order(
     db: AsyncSession, order_id: int, tenant_id: int
 ) -> Order | None:
+    """按 ID 获取租户下单个订单，自动附带联系人名称。
+
+    参数：
+        db: 异步数据库会话。
+        order_id: 订单 ID。
+        tenant_id: 租户 ID。
+
+    返回：
+        订单对象，不存在返回 None。
+    """
     order = await db.scalar(
         select(Order).where(
             Order.id == order_id,
@@ -77,6 +116,26 @@ async def create_order(
     created_by_type: str = "agent",
     created_by_employee_id: int | None = None,
 ) -> Order:
+    """创建订单，含商品快照生成、总价计算和销售上下文同步。
+
+    SaaS 要点：必须校验 contact 和 product 都属于当前 tenant_id，
+    商品不存在时直接拒绝（不采用搜索型接口的宽松策略）。
+
+    参数：
+        db: 异步数据库会话。
+        tenant_id: 租户 ID。
+        body: 订单创建请求体（含 items 和地址/联系方式）。
+        contact_id: 备选联系人 ID（body 中未传时使用）。
+        conversation_id: 关联会话 ID。
+        created_by_type: 创建来源（"agent" / "customer" / "system"）。
+        created_by_employee_id: 创建者员工 ID。
+
+    返回：
+        新创建的 Order ORM 对象（含 items 关系和联系人名称）。
+
+    异常：
+        ValueError: 联系人或商品不存在于当前租户。
+    """
     effective_contact_id = body.contact_id or contact_id
     if effective_contact_id is None:
         raise ValueError("contact_id 为必填项")
@@ -174,6 +233,22 @@ async def update_order(
     tenant_id: int,
     body: OrderUpdate,
 ) -> Order | None:
+    """更新订单信息，支持增删商品和修改地址/备注等基础字段。
+
+    每次更新后重算 total_amount 和 payable_amount。
+
+    参数：
+        db: 异步数据库会话。
+        order_id: 订单 ID。
+        tenant_id: 租户 ID。
+        body: 订单更新请求体。
+
+    返回：
+        更新后的订单，不存在返回 None。
+
+    异常：
+        ValueError: 新增商品不存在于当前租户。
+    """
     order = await get_order(db, order_id, tenant_id)
     if order is None:
         return None
@@ -245,6 +320,23 @@ async def transition_order_status(
     tenant_id: int,
     to_status: str,
 ) -> Order | None:
+    """变更订单状态，校验状态流转规则并自动处理库存。
+
+    agent_confirmed 时扣减库存，cancelled 时恢复库存。
+    各里程碑状态（confirmed/shipped/signed）自动记录时间戳。
+
+    参数：
+        db: 异步数据库会话。
+        order_id: 订单 ID。
+        tenant_id: 租户 ID。
+        to_status: 目标状态。
+
+    返回：
+        更新后的订单，不存在返回 None。
+
+    异常：
+        ValueError: 状态流转不允许（如从已签收退回）。库存不足。
+    """
     order = await get_order(db, order_id, tenant_id)
     if order is None:
         return None
@@ -289,6 +381,17 @@ async def batch_transition_status(
     order_ids: list[int],
     to_status: str,
 ) -> tuple[list[int], list[int]]:
+    """批量变更订单状态，逐条处理并收集成功/失败 ID。
+
+    参数：
+        db: 异步数据库会话。
+        tenant_id: 租户 ID。
+        order_ids: 订单 ID 列表。
+        to_status: 目标状态。
+
+    返回：
+        (成功 ID 列表, 失败 ID 列表) 元组。
+    """
     succeeded: list[int] = []
     failed: list[int] = []
 
@@ -310,6 +413,16 @@ async def cancel_order(
     order_id: int,
     tenant_id: int,
 ) -> bool:
+    """取消订单，内部调用 transition_order_status("cancelled")。
+
+    参数：
+        db: 异步数据库会话。
+        order_id: 订单 ID。
+        tenant_id: 租户 ID。
+
+    返回：
+        成功取消返回 True，状态不可变更返回 False。
+    """
     try:
         order = await transition_order_status(db, order_id, tenant_id, "cancelled")
         return order is not None
@@ -443,6 +556,7 @@ def detect_missing_info_from_order(order: Order) -> list[str]:
 
 
 async def _attach_contact_names(db: AsyncSession, orders: list[Order]) -> None:
+    """批量补齐订单列表的联系人名称（_contact_name 属性）。"""
     contact_ids = {o.contact_id for o in orders}
     if not contact_ids:
         for o in orders:
