@@ -238,5 +238,5 @@ class ConversationMessageBuffer:
 
     def _create_redis_client(self) -> RedisLike:
         """懒加载真实 Redis 客户端（避免测试环境 import 报错）。"""
-        from app.redis_client import get_redis_client
+        from app.integrations.redis_client import get_redis_client
         return get_redis_client()

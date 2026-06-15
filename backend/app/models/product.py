@@ -25,7 +25,6 @@ class Product(Base):
     floor_price: Mapped[float | None] = mapped_column(Numeric(10, 2), nullable=True, comment="最低报价")
     stock: Mapped[int] = mapped_column(Integer, default=0, server_default="0", comment="库存数量")
     is_sample: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"), comment="是否为样品")
-    sales_template_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True, comment="关联销售模板ID")
     specs: Mapped[dict | None] = mapped_column(JSONB, nullable=True, comment="规格信息 JSON")
     attrs_json: Mapped[dict | None] = mapped_column(JSONB, nullable=True, comment="结构化特征属性 JSON")
     feature_tags: Mapped[list[str] | None] = mapped_column(ARRAY(String), nullable=True, comment="功能标签")

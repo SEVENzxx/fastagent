@@ -245,7 +245,7 @@ class TestAmbiguousIntents:
         """product_search 歧义 → 不短路，走 LLM 判决。"""
         candidates = [
             IntentCandidate(
-                intent="product_search", label="商品搜索",
+                scenario_id="product.detail", label="商品详情",
                 score=0.95, skill=SkillName.PRODUCT,
             ),
         ]
@@ -261,7 +261,7 @@ class TestAmbiguousIntents:
             ),
         ):
             result = await pipeline.recognize("你们有什么产品")
-            # 不应走高置信短路到 product.filter_search
+            # 不应走高置信短路（product.detail 是歧义场景）
             assert result.scenario_id != "product.filter_search"
             # 应通过 LLM 判决
             assert result.scenario_id == "product.catalog"
@@ -271,7 +271,7 @@ class TestAmbiguousIntents:
         """chitchat 歧义 → 不短路。"""
         candidates = [
             IntentCandidate(
-                intent="chitchat", label="闲聊",
+                scenario_id="template.farewell", label="结束对话",
                 score=0.95, skill=SkillName.TEMPLATE,
             ),
         ]
@@ -295,11 +295,11 @@ class TestAmbiguousIntents:
         """非歧义 intent 可以走高置信短路。"""
         candidates = [
             IntentCandidate(
-                intent="confirm_order", label="确认订单",
+                scenario_id="order.confirm", label="确认订单",
                 score=0.95, skill=SkillName.ORDER,
             ),
             IntentCandidate(
-                intent="confirm_order", label="确认订单",
+                scenario_id="order.confirm", label="确认订单",
                 score=0.80, skill=SkillName.ORDER,
             ),
         ]

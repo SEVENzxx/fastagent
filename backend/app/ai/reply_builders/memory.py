@@ -35,3 +35,16 @@ class MemoryReplyBuilder:
     def no_contact() -> str:
         """缺少客户标识时的提示。"""
         return "请先确认客户身份。"
+
+    @staticmethod
+    def recall(items: list[dict]) -> str:
+        """记忆召回回复。"""
+        if not items:
+            return "目前还没有保存关于您的偏好信息。"
+        parts = ["我记得关于您的信息："]
+        for item in items:
+            key = item.get("key", "")
+            value = item.get("value", "")
+            if key and value:
+                parts.append(f"  - {key}：{value}")
+        return "\n".join(parts)

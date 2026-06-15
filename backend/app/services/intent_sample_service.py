@@ -1,11 +1,13 @@
-"""意图样本服务 — 租户自定义意图样本的 CRUD 与 Qdrant 同步。
+"""场景样本服务 — 租户自定义场景样本的 CRUD 与 Qdrant 同步。
 
 核心设计：
   1. 所有写操作先写入 DB，然后同步到 Qdrant。
   2. 新增 / 编辑 → upsert_text（幂等）
   3. 启用 → upsert（启用前可能已被逻辑删除）
-  4. 停用 → 从 Qdrant 删除对应 point，或 payload is_active=false
+  4. 停用 → 从 Qdrant 删除对应 point
   5. 删除 → 从 DB 删除 + 从 Qdrant 删除 point
+
+skill 和 risk_level 由 vector_adapter._resolve_skill() 自动推导，不入库。
 
 多租户隔离：所有查询必须带 tenant_id 过滤。
 """
@@ -27,7 +29,7 @@ logger = logging.getLogger(__name__)
 
 
 class IntentSampleService:
-    """意图样本 CRUD + Qdrant 同步。"""
+    """场景样本 CRUD + Qdrant 同步。"""
 
     def __init__(self) -> None:
         self._vector = VectorSearchService()
@@ -44,10 +46,8 @@ class IntentSampleService:
             payload={
                 "tenant_id": sample.tenant_id,
                 "domain": VectorDomain.INTENT_SAMPLE.value,
-                "intent": sample.intent,
+                "scenario_id": sample.scenario_id,
                 "label": sample.label,
-                "skill": sample.skill,
-                "risk_level": sample.risk_level,
                 "example_text": sample.example_text,
                 "schema_version": SCHEMA_VERSION,
                 "is_active": sample.enabled,
@@ -72,22 +72,18 @@ class IntentSampleService:
         db: AsyncSession,
         tenant_id: int,
         *,
-        intent: str | None = None,
-        skill: str | None = None,
+        scenario_id: str | None = None,
         enabled: bool | None = None,
         skip: int = 0,
         limit: int = 20,
     ) -> tuple[list[IntentSample], int]:
-        """列出租户下的自定义样本，支持 intent / skill / enabled 过滤。"""
+        """列出租户下的自定义样本，支持 scenario_id / enabled 过滤。"""
         query = select(IntentSample).where(IntentSample.tenant_id == tenant_id)
         count_query = select(func.count(IntentSample.id)).where(IntentSample.tenant_id == tenant_id)
 
-        if intent:
-            query = query.where(IntentSample.intent == intent)
-            count_query = count_query.where(IntentSample.intent == intent)
-        if skill:
-            query = query.where(IntentSample.skill == skill)
-            count_query = count_query.where(IntentSample.skill == skill)
+        if scenario_id:
+            query = query.where(IntentSample.scenario_id == scenario_id)
+            count_query = count_query.where(IntentSample.scenario_id == scenario_id)
         if enabled is not None:
             query = query.where(IntentSample.enabled == enabled)
             count_query = count_query.where(IntentSample.enabled == enabled)
@@ -117,10 +113,8 @@ class IntentSampleService:
         """新增样本 → DB 写入 → Qdrant upsert。"""
         sample = IntentSample(
             tenant_id=tenant_id,
-            intent=data.intent,
-            label=data.label,
-            skill=data.skill,
-            risk_level=data.risk_level,
+            scenario_id=data.scenario_id.strip(),
+            label=data.label.strip(),
             example_text=data.example_text.strip(),
             enabled=data.enabled,
             source="tenant_custom",
@@ -138,8 +132,8 @@ class IntentSampleService:
         await db.commit()
         await db.refresh(sample)
         logger.info(
-            "意图样本已创建：id=%s tenant=%s intent=%s qdrant=%s",
-            sample.id, tenant_id, data.intent, point_id,
+            "场景样本已创建：id=%s tenant=%s scenario=%s qdrant=%s",
+            sample.id, tenant_id, data.scenario_id, point_id,
         )
         return sample
 
@@ -157,10 +151,8 @@ class IntentSampleService:
                 continue
             sample = IntentSample(
                 tenant_id=tenant_id,
-                intent=data.intent,
-                label=data.label,
-                skill=data.skill,
-                risk_level=data.risk_level,
+                scenario_id=data.scenario_id.strip(),
+                label=data.label.strip(),
                 example_text=text,
                 enabled=data.enabled,
                 source="tenant_custom",
@@ -180,8 +172,8 @@ class IntentSampleService:
         for s in created:
             await db.refresh(s)
         logger.info(
-            "批量创建意图样本：tenant=%s intent=%s count=%s",
-            tenant_id, data.intent, len(created),
+            "批量创建场景样本：tenant=%s scenario=%s count=%s",
+            tenant_id, data.scenario_id, len(created),
         )
         return created
 
@@ -193,10 +185,10 @@ class IntentSampleService:
     ) -> IntentSample:
         """编辑样本 → DB 更新 → Qdrant re-upsert。"""
         update_data: dict[str, Any] = {}
-        for field in ("intent", "label", "skill", "risk_level", "enabled"):
+        for field in ("scenario_id", "label", "enabled"):
             val = getattr(data, field, None)
             if val is not None:
-                setattr(sample, field, val)
+                setattr(sample, field, val.strip() if isinstance(val, str) else val)
                 update_data[field] = val
 
         if data.example_text is not None:
@@ -205,7 +197,6 @@ class IntentSampleService:
             update_data["example_text"] = clean
 
         if update_data:
-            # 更新 DB
             stmt = (
                 update(IntentSample)
                 .where(IntentSample.id == sample.id)
@@ -228,8 +219,8 @@ class IntentSampleService:
         await db.commit()
         await db.refresh(sample)
         logger.info(
-            "意图样本已更新：id=%s tenant=%s intent=%s",
-            sample.id, sample.tenant_id, sample.intent,
+            "场景样本已更新：id=%s tenant=%s scenario=%s",
+            sample.id, sample.tenant_id, sample.scenario_id,
         )
         return sample
 
@@ -239,11 +230,7 @@ class IntentSampleService:
         sample: IntentSample,
         enabled: bool,
     ) -> IntentSample:
-        """启用 / 停用 → Qdrant 同步。
-
-        启用：重新 upsert 到 Qdrant。
-        停用：从 Qdrant 删除对应 point。
-        """
+        """启用 / 停用 → Qdrant 同步。"""
         stmt = (
             update(IntentSample)
             .where(IntentSample.id == sample.id)
@@ -266,7 +253,7 @@ class IntentSampleService:
         await db.commit()
         await db.refresh(sample)
         logger.info(
-            "意图样本已%s：id=%s tenant=%s",
+            "场景样本已%s：id=%s tenant=%s",
             "启用" if enabled else "停用",
             sample.id, sample.tenant_id,
         )
@@ -284,8 +271,8 @@ class IntentSampleService:
         await db.execute(stmt)
         await db.commit()
         logger.info(
-            "意图样本已删除：id=%s tenant=%s intent=%s",
-            sample.id, sample.tenant_id, sample.intent,
+            "场景样本已删除：id=%s tenant=%s scenario=%s",
+            sample.id, sample.tenant_id, sample.scenario_id,
         )
 
     # ──────────────────────────── 测试召回 ────────────────────────────
@@ -303,7 +290,6 @@ class IntentSampleService:
         """
         from app.ai.rag.vector_search import VectorSearchResult
 
-        # 同时搜索两个 tenant_id
         tenant_hits = await self._vector.search_text(
             domain=VectorDomain.INTENT_SAMPLE,
             tenant_id=tenant_id,
@@ -321,14 +307,14 @@ class IntentSampleService:
             filters={"is_active": True},
         )
 
-        # 合并去重（按 intent + example_text）
+        # 合并去重（按 scenario_id + example_text）
         seen: set[str] = set()
         merged: list[VectorSearchResult] = []
 
         for hit in tenant_hits:
-            key = f"{hit.payload.get('intent','')}:{hit.payload.get('example_text','')}"
+            sid = hit.payload.get("scenario_id") or hit.payload.get("intent", "")
+            key = f"{sid}:{hit.payload.get('example_text','')}"
             if key not in seen:
-                # 租户样本加权重
                 hit = VectorSearchResult(
                     point_id=hit.point_id,
                     score=min(1.0, hit.score + 0.03),
@@ -338,7 +324,8 @@ class IntentSampleService:
                 merged.append(hit)
 
         for hit in platform_hits:
-            key = f"{hit.payload.get('intent','')}:{hit.payload.get('example_text','')}"
+            sid = hit.payload.get("scenario_id") or hit.payload.get("intent", "")
+            key = f"{sid}:{hit.payload.get('example_text','')}"
             if key not in seen:
                 seen.add(key)
                 merged.append(hit)
@@ -347,9 +334,8 @@ class IntentSampleService:
 
         return [
             {
-                "intent": h.payload.get("intent", ""),
+                "scenario_id": h.payload.get("scenario_id") or h.payload.get("intent", ""),
                 "label": h.payload.get("label", ""),
-                "skill": h.payload.get("skill", ""),
                 "score": round(h.score, 4),
                 "example_text": h.payload.get("example_text") or h.payload.get("text", ""),
                 "source": h.payload.get("source", ""),

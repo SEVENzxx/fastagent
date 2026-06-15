@@ -3,6 +3,7 @@
 支持以下 scenario：
   - knowledge.policy
   - knowledge.qa
+  - knowledge.product_qa
 
 Handler 编排 KnowledgeSkill → KnowledgeReplyBuilder。
 4 条路径：追问精准续查 → QA 直出 → 知识库检索（短直出/长摘要）→ "未查到"。
@@ -14,7 +15,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from app.ai import settings
+from app.common.constants.business import KNOWLEDGE_DEIXIS_KEYWORDS, KNOWLEDGE_SHORT_CONTENT_TOKEN_LIMIT
 from app.ai.context.pending_state import PendingDirective
 from app.ai.handlers.base import BaseHandler, HandlerResult
 from app.ai.llm.gateway import LLMUseCase, complete
@@ -23,6 +24,7 @@ from app.ai.recognition.types import ScenarioDecision
 from app.ai.reply_builders.knowledge import KnowledgeReplyBuilder
 from app.ai.context.session_context import SessionContext
 from app.ai.handlers.base import ToolResult
+from app.ai.skills.gateway import SkillError, call_skill
 
 logger = logging.getLogger(__name__)
 
@@ -49,13 +51,29 @@ class KnowledgeHandler(BaseHandler):
         if not text:
             text = getattr(ctx, "last_user_message", "") or ""
 
+        self._init_trace_context(scenario)
+
         if not text.strip():
-            return HandlerResult(
+            result = HandlerResult(
                 scenario_id=scenario,
                 reply="请描述您想了解的问题。",
                 pending_directive=PendingDirective.CLEAR,
             )
+        elif scenario == "knowledge.product_qa":
+            result = await self._handle_product_qa(text, ctx)
+        else:
+            result = await self._execute_knowledge(text, ctx, scenario)
 
+        self._merge_trace_context(result)
+        return result
+
+    async def _execute_knowledge(
+        self,
+        text: str,
+        ctx: SessionContext,
+        scenario: str,
+    ) -> HandlerResult:
+        """执行知识检索（追问 → QA → 知识库 → 无命中）。"""
         # ── 路径 1：追问续查（针对上次知识引用的精准检索） ──
         if self._is_follow_up(text) and ctx.last_knowledge_refs:
             result = await self._try_follow_up(text, ctx, scenario)
@@ -67,10 +85,9 @@ class KnowledgeHandler(BaseHandler):
         if qa_result.ok:
             items = (qa_result.result or {}).get("items", [])
             if items:
-                reply = KnowledgeReplyBuilder.qa_direct(items)
                 return HandlerResult(
                     scenario_id=scenario,
-                    reply=reply,
+                    reply=KnowledgeReplyBuilder.qa_direct(items),
                     pending_directive=PendingDirective.CLEAR,
                     context_update={
                         "last_knowledge_topic": text[:80],
@@ -109,6 +126,47 @@ class KnowledgeHandler(BaseHandler):
         )
 
     # ── 内部路径 ──
+
+    async def _handle_product_qa(
+        self,
+        text: str,
+        ctx: SessionContext,
+    ) -> HandlerResult:
+        """商品知识查询：按 context 中的商品 ID 过滤知识库。
+
+        需要 SessionContext.last_focus_product_id 确定商品。
+        无商品上下文时追问引导。
+        """
+        product_id = ctx.last_focus_product_id
+        if not product_id:
+            return HandlerResult(
+                scenario_id="knowledge.product_qa",
+                reply="请问您想了解哪款商品的详细信息？",
+                pending_directive=PendingDirective.CLEAR,
+            )
+
+        result = await self._call_skill(
+            "search_knowledge",
+            tenant_id=ctx.tenant_id,
+            query=text,
+            product_id=product_id,
+        )
+        if not result.ok:
+            return HandlerResult(
+                scenario_id="knowledge.product_qa",
+                reply="暂时无法查询商品知识，请稍后再试。",
+                pending_directive=PendingDirective.CLEAR,
+            )
+
+        items = (result.result or {}).get("items", [])
+        if not items:
+            return HandlerResult(
+                scenario_id="knowledge.product_qa",
+                reply=f"暂未找到该商品的相关信息。",
+                pending_directive=PendingDirective.CLEAR,
+            )
+
+        return await self._handle_knowledge_hits(text, items, "knowledge.product_qa", ctx.tenant_id)
 
     async def _try_follow_up(
         self,
@@ -153,7 +211,7 @@ class KnowledgeHandler(BaseHandler):
     ) -> HandlerResult:
         """处理知识分块命中：短内容直出，长内容 LLM 摘要。"""
         # 单条短内容 → 直接返回
-        if len(items) == 1 and (items[0].get("token_count") or 0) < settings.KNOWLEDGE_SHORT_CONTENT_TOKEN_LIMIT:
+        if len(items) == 1 and (items[0].get("token_count") or 0) < KNOWLEDGE_SHORT_CONTENT_TOKEN_LIMIT:
             reply = KnowledgeReplyBuilder.knowledge_direct(items)
             return HandlerResult(
                 scenario_id=scenario,
@@ -191,7 +249,7 @@ class KnowledgeHandler(BaseHandler):
 
         检查文本是否包含指代关键词。
         """
-        return any(kw in text for kw in settings.KNOWLEDGE_DEIXIS_KEYWORDS)
+        return any(kw in text for kw in KNOWLEDGE_DEIXIS_KEYWORDS)
 
     async def _summarize_with_llm(
         self,
@@ -217,34 +275,14 @@ class KnowledgeHandler(BaseHandler):
         method: str,
         **kwargs: Any,
     ) -> ToolResult:
-        """调用 Skill 方法并自动注入 db session。
-
-        DB 不可用时（测试环境无 asyncpg、生产 DB 连接失败等），
-        先尝试 db=None（兼容 FakeSkill），失败则返回空 ToolResult。
-        """
+        """调用 Skill 方法（通过 SkillGateway 自动记录 trace + 管理 DB session）。"""
         if self._skill is None:
             import app.ai.skills.knowledge as _real_skill
             self._skill = _real_skill
-
-        fn = getattr(self._skill, method, None)
-        if fn is None:
-            logger.warning("Skill 方法不存在: %s", method)
-            return _empty_tool_result(method)
-
         try:
-            from app.database import AsyncSessionLocal
-        except Exception:
-            try:
-                return await fn(db=None, **kwargs)
-            except Exception:
-                logger.warning("Skill 调用失败（DB 不可用）: method=%s", method)
-                return _empty_tool_result(method)
-
-        try:
-            async with AsyncSessionLocal() as db:
-                return await fn(db=db, **kwargs)
-        except Exception:
-            logger.warning("Skill 调用失败（DB 运行时异常）: method=%s", method)
+            return await call_skill(self._skill, method, **kwargs)
+        except SkillError:
+            logger.warning("Skill 调用失败: method=%s", method)
             return _empty_tool_result(method)
 
 

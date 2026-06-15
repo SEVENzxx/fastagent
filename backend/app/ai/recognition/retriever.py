@@ -25,7 +25,7 @@ from app.ai.recognition.config import DEFAULT_INTENT_CONFIG, IntentRecognitionCo
 @dataclass(frozen=True, slots=True)
 class IntentCandidate:
     """Qdrant 向量召回产出的候选意图（内部类型）。"""
-    intent: str
+    scenario_id: str
     label: str
     score: float
     source: str
@@ -82,7 +82,7 @@ class VectorIntentRetriever:
         )
         return [
             IntentCandidate(
-                intent=str(hit.payload.get("intent") or ""),
+                scenario_id=str(hit.payload.get("scenario_id") or hit.payload.get("intent") or ""),
                 label=str(hit.payload.get("label") or ""),
                 score=hit.score,
                 source=f"qdrant_{hit.payload.get('source', 'unknown')}",
@@ -90,5 +90,5 @@ class VectorIntentRetriever:
                 reason=f"Qdrant 意图样本: {hit.payload.get('example_text') or hit.payload.get('text')}",
             )
             for hit in hits
-            if hit.payload.get("intent")
+            if hit.payload.get("scenario_id") or hit.payload.get("intent")
         ]

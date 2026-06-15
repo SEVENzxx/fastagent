@@ -39,7 +39,7 @@ AsyncSessionLocal = async_sessionmaker(
 )
 
 
-async def get_db() -> AsyncSession:  # type: ignore[misc]
+async def get_db() -> AsyncSession:
     """FastAPI 依赖注入：提供异步数据库会话。"""
     async with AsyncSessionLocal() as session:
         try:

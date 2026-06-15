@@ -9,13 +9,15 @@ from app.schemas.role import RoleResponse
 
 
 class EmployeeCreate(CamelModel):
-    email: EmailStr
-    password: str
-    display_name: str | None = None
-    avatar_url: str | None = None
-    phone: str | None = None
-    skills: list[str] | None = None
-    max_concurrent_chats: int = 10
+    """创建员工"""
+
+    email: EmailStr = Field(description="邮箱（登录账号）")
+    password: str = Field(description="密码")
+    display_name: str | None = Field(None, description="显示名称")
+    avatar_url: str | None = Field(None, description="头像 URL")
+    phone: str | None = Field(None, description="联系电话")
+    skills: list[str] | None = Field(None, description="技能标签列表")
+    max_concurrent_chats: int = Field(10, description="最大同时接待会话数")
 
     @field_validator("password")
     @classmethod
@@ -26,26 +28,30 @@ class EmployeeCreate(CamelModel):
 
 
 class EmployeeUpdate(CamelModel):
-    display_name: str | None = None
-    avatar_url: str | None = None
-    phone: str | None = None
-    skills: list[str] | None = None
-    max_concurrent_chats: int | None = None
+    """更新员工信息"""
+
+    display_name: str | None = Field(None, description="显示名称")
+    avatar_url: str | None = Field(None, description="头像 URL")
+    phone: str | None = Field(None, description="联系电话")
+    skills: list[str] | None = Field(None, description="技能标签列表")
+    max_concurrent_chats: int | None = Field(None, description="最大同时接待会话数")
 
 
 class EmployeeResponse(CamelModel):
-    id: int
-    tenant_id: int
-    email: str
-    display_name: str | None = None
-    avatar_url: str | None = None
-    phone: str | None = None
-    is_superuser: bool
-    online_status: str
-    skills: list[str] | None = None
-    max_concurrent_chats: int
-    last_login_at: datetime | None = None
-    created_at: datetime
+    """员工响应"""
+
+    id: int = Field(description="员工 ID")
+    tenant_id: int = Field(description="租户 ID")
+    email: str = Field(description="邮箱")
+    display_name: str | None = Field(None, description="显示名称")
+    avatar_url: str | None = Field(None, description="头像 URL")
+    phone: str | None = Field(None, description="联系电话")
+    is_superuser: bool = Field(description="是否超级管理员")
+    online_status: str = Field(description="在线状态（online/away/offline）")
+    skills: list[str] | None = Field(None, description="技能标签列表")
+    max_concurrent_chats: int = Field(description="最大同时接待会话数")
+    last_login_at: datetime | None = Field(None, description="最后登录时间")
+    created_at: datetime = Field(description="创建时间")
 
     @field_serializer("id", "tenant_id")
     def serialize_bigint_id(self, value: int) -> str:
@@ -53,20 +59,26 @@ class EmployeeResponse(CamelModel):
 
 
 class EmployeeDetailResponse(EmployeeResponse):
-    roles: list[RoleResponse] = Field(default_factory=list)
+    """员工详情（含角色信息）"""
+
+    roles: list[RoleResponse] = Field(default_factory=list, description="角色列表")
 
 
 class EmployeeRoleAssign(CamelModel):
-    role_ids: list[int]
+    """员工角色分配"""
+
+    role_ids: list[int] = Field(description="角色 ID 列表")
 
 
 class ProfileResponse(CamelModel):
-    id: int
-    email: str
-    display_name: str | None = None
-    avatar_url: str | None = None
-    phone: str | None = None
-    skills: list[str] | None = None
+    """当前员工个人信息"""
+
+    id: int = Field(description="员工 ID")
+    email: str = Field(description="邮箱")
+    display_name: str | None = Field(None, description="显示名称")
+    avatar_url: str | None = Field(None, description="头像 URL")
+    phone: str | None = Field(None, description="联系电话")
+    skills: list[str] | None = Field(None, description="技能标签列表")
 
     @field_serializer("id")
     def serialize_id(self, value: int) -> str:
@@ -74,15 +86,19 @@ class ProfileResponse(CamelModel):
 
 
 class ProfileUpdate(CamelModel):
-    display_name: str | None = None
-    avatar_url: str | None = None
-    phone: str | None = None
-    skills: list[str] | None = None
+    """更新个人信息"""
+
+    display_name: str | None = Field(None, description="显示名称")
+    avatar_url: str | None = Field(None, description="头像 URL")
+    phone: str | None = Field(None, description="联系电话")
+    skills: list[str] | None = Field(None, description="技能标签列表")
 
 
 class PasswordChange(CamelModel):
-    current_password: str
-    new_password: str
+    """修改密码"""
+
+    current_password: str = Field(description="当前密码")
+    new_password: str = Field(description="新密码")
 
     @field_validator("new_password")
     @classmethod

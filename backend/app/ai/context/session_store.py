@@ -9,13 +9,15 @@ Redis client 使用模块级缓存，避免高频调用时重复创建连接。
 from __future__ import annotations
 
 import json
+import logging
 from datetime import datetime, timezone
 from typing import Any, Protocol
 
 from app.ai.context.session_context import SessionContext
-from app.ai.observability import observe_db_call, set_observation_io
 
-DEFAULT_CONVERSATION_STATE_TTL_SECONDS = 3600
+logger = logging.getLogger(__name__)
+from app.ai.observability import observe_db_call, set_observation_io
+from app.common.constants.config import SESSION_TTL
 
 # 模块级 Redis client 缓存，避免每次 ConversationStateStore() 新建连接
 _redis_client: Any | None = None
@@ -35,7 +37,7 @@ def _get_redis_client() -> RedisLike:
     """
     global _redis_client
     if _redis_client is None:
-        from app.redis_client import get_redis_client
+        from app.integrations.redis_client import get_redis_client
         _redis_client = get_redis_client()
     return _redis_client
 
@@ -47,7 +49,7 @@ async def close_cached_redis_client() -> None:
         try:
             await _redis_client.aclose()
         except Exception:
-            pass
+            logger.warning("关闭 SessionStore Redis 连接失败")
         _redis_client = None
 
 
@@ -62,7 +64,7 @@ class ConversationStateStore:
         self,
         redis_client: RedisLike | None = None,
         *,
-        ttl_seconds: int = DEFAULT_CONVERSATION_STATE_TTL_SECONDS,
+        ttl_seconds: int = SESSION_TTL,
     ) -> None:
         self.redis = redis_client or _get_redis_client()
         self.ttl_seconds = int(ttl_seconds)

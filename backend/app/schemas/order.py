@@ -2,7 +2,7 @@
 
 from datetime import datetime
 
-from pydantic import field_serializer, field_validator
+from pydantic import Field, field_serializer, field_validator
 
 from app.schemas.base import CamelModel
 
@@ -15,8 +15,10 @@ STATUS_TRANSITIONS: dict[str, set[str]] = {
     "pending_customer_confirm": {"customer_confirmed", "cancelled"},
     "customer_confirmed": {"agent_confirmed", "cancelled"},
     "agent_confirmed": {"shipped", "cancelled"},
-    "shipped": {"signed"},
-    "signed": set(),
+    "shipped": {"signed", "refunding"},
+    "signed": {"refunding"},
+    "refunding": {"refunded"},
+    "refunded": set(),
     "cancelled": set(),
 }
 
@@ -35,8 +37,8 @@ def can_transition(from_status: str, to_status: str) -> bool:
 class OrderItemCreate(CamelModel):
     """创建订单明细"""
 
-    product_name: str
-    quantity: int = 1
+    product_name: str = Field(description="商品名称")
+    quantity: int = Field(1, description="数量")
 
     @field_validator("quantity")
     @classmethod
@@ -49,9 +51,9 @@ class OrderItemCreate(CamelModel):
 class OrderItemUpdate(CamelModel):
     """更新订单明细"""
 
-    product_name: str | None = None
-    quantity: int | None = None
-    unit_price: float | None = None
+    product_name: str | None = Field(None, description="商品名称")
+    quantity: int | None = Field(None, description="数量")
+    unit_price: float | None = Field(None, description="单价")
 
     @field_validator("quantity")
     @classmethod
@@ -64,14 +66,14 @@ class OrderItemUpdate(CamelModel):
 class OrderItemResponse(CamelModel):
     """订单明细响应"""
 
-    id: int
-    order_id: int
-    product_id: int | None = None
-    product_snapshot: dict | None = None
-    quantity: int
-    unit_price: float
-    subtotal: float
-    created_at: datetime
+    id: int = Field(description="明细 ID")
+    order_id: int = Field(description="订单 ID")
+    product_id: int | None = Field(None, description="商品 ID")
+    product_snapshot: dict | None = Field(None, description="下单时商品快照")
+    quantity: int = Field(description="数量")
+    unit_price: float = Field(description="单价")
+    subtotal: float = Field(description="小计金额")
+    created_at: datetime = Field(description="创建时间")
 
     @field_serializer("id", "order_id", "product_id")
     def serialize_bigint(self, value: int | None) -> str | None:
@@ -88,14 +90,14 @@ class OrderItemResponse(CamelModel):
 class OrderCreate(CamelModel):
     """创建订单"""
 
-    contact_id: int | None = None
-    conversation_id: int | None = None
-    items: list[OrderItemCreate]
-    shipping_address: str | None = None
-    receiver_name: str | None = None
-    receiver_phone: str | None = None
-    remark: str | None = None
-    status: str = "pending_customer_confirm"
+    contact_id: int | None = Field(None, description="客户联系人 ID")
+    conversation_id: int | None = Field(None, description="会话 ID")
+    items: list[OrderItemCreate] = Field(description="订单商品明细")
+    shipping_address: str | None = Field(None, description="收货地址")
+    receiver_name: str | None = Field(None, description="收货人姓名")
+    receiver_phone: str | None = Field(None, description="收货人电话")
+    remark: str | None = Field(None, description="备注")
+    status: str = Field("pending_customer_confirm", description="初始状态")
 
     @field_validator("items")
     @classmethod
@@ -115,20 +117,20 @@ class OrderCreate(CamelModel):
 class OrderUpdate(CamelModel):
     """修改订单"""
 
-    shipping_address: str | None = None
-    receiver_name: str | None = None
-    receiver_phone: str | None = None
-    remark: str | None = None
-    discount_amount: float | None = None
-    add_items: list[OrderItemCreate] | None = None
-    remove_item_ids: list[int] | None = None
-    update_items: list[OrderItemUpdate] | None = None
+    shipping_address: str | None = Field(None, description="收货地址")
+    receiver_name: str | None = Field(None, description="收货人姓名")
+    receiver_phone: str | None = Field(None, description="收货人电话")
+    remark: str | None = Field(None, description="备注")
+    discount_amount: float | None = Field(None, description="优惠金额")
+    add_items: list[OrderItemCreate] | None = Field(None, description="新增商品明细")
+    remove_item_ids: list[int] | None = Field(None, description="待删除的明细 ID 列表")
+    update_items: list[OrderItemUpdate] | None = Field(None, description="待更新的明细列表")
 
 
 class OrderStatusTransition(CamelModel):
     """订单状态变更"""
 
-    status: str
+    status: str = Field(description="目标状态")
 
     @field_validator("status")
     @classmethod
@@ -141,8 +143,8 @@ class OrderStatusTransition(CamelModel):
 class OrderBatchStatusTransition(CamelModel):
     """批量状态变更"""
 
-    order_ids: list[int]
-    status: str
+    order_ids: list[int] = Field(description="要变更的订单 ID 列表")
+    status: str = Field(description="目标状态")
 
     @field_validator("order_ids")
     @classmethod
@@ -162,30 +164,30 @@ class OrderBatchStatusTransition(CamelModel):
 class OrderResponse(CamelModel):
     """订单响应"""
 
-    id: int
-    tenant_id: int
-    contact_id: int
-    conversation_id: int | None = None
-    employee_id: int | None = None
-    status: str
-    total_amount: float
-    discount_amount: float
-    payable_amount: float
-    shipping_address: str | None = None
-    receiver_name: str | None = None
-    receiver_phone: str | None = None
-    remark: str | None = None
-    metadata_: dict | None = None
-    created_by_type: str
-    created_by_employee_id: int | None = None
-    confirmed_at: datetime | None = None
-    shipped_at: datetime | None = None
-    signed_at: datetime | None = None
-    cancelled_at: datetime | None = None
-    created_at: datetime
-    updated_at: datetime
-    items: list[OrderItemResponse] = []
-    contact_name: str | None = None
+    id: int = Field(description="订单 ID")
+    tenant_id: int = Field(description="租户 ID")
+    contact_id: int = Field(description="客户联系人 ID")
+    conversation_id: int | None = Field(None, description="关联会话 ID")
+    employee_id: int | None = Field(None, description="处理坐席 ID")
+    status: str = Field(description="订单状态")
+    total_amount: float = Field(description="订单总金额")
+    discount_amount: float = Field(description="优惠金额")
+    payable_amount: float = Field(description="应付金额")
+    shipping_address: str | None = Field(None, description="收货地址")
+    receiver_name: str | None = Field(None, description="收货人姓名")
+    receiver_phone: str | None = Field(None, description="收货人电话")
+    remark: str | None = Field(None, description="备注")
+    metadata_: dict | None = Field(None, description="扩展元数据")
+    created_by_type: str = Field(description="创建者类型（contact/employee）")
+    created_by_employee_id: int | None = Field(None, description="创建坐席 ID")
+    confirmed_at: datetime | None = Field(None, description="确认时间")
+    shipped_at: datetime | None = Field(None, description="发货时间")
+    signed_at: datetime | None = Field(None, description="签收时间")
+    cancelled_at: datetime | None = Field(None, description="取消时间")
+    created_at: datetime = Field(description="创建时间")
+    updated_at: datetime = Field(description="更新时间")
+    items: list[OrderItemResponse] = Field(default_factory=list, description="订单明细列表")
+    contact_name: str | None = Field(None, description="客户名称")
 
     @field_serializer(
         "id", "tenant_id", "contact_id", "conversation_id",
@@ -200,7 +202,7 @@ class OrderResponse(CamelModel):
 class OrderListResponse(CamelModel):
     """订单列表响应"""
 
-    items: list[OrderResponse]
-    total: int
-    page: int
-    page_size: int
+    items: list[OrderResponse] = Field(description="订单列表")
+    total: int = Field(description="总数")
+    page: int = Field(description="当前页码")
+    page_size: int = Field(description="每页条数")

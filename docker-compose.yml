@@ -57,6 +57,9 @@ services:
       REDIS_URL: redis://redis:6379/0
       QDRANT_URL: http://qdrant:6333
       UV_LINK_MODE: copy
+      HARNESS_API_TOKEN: dev-harness-token
+      HARNESS_EMAIL: admin@fastagent.local
+      HARNESS_PASSWORD: Admin123!
     ports:
       - "${PORT}:8000"
     depends_on:

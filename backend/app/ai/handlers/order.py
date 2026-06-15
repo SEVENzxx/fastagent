@@ -20,6 +20,7 @@ from typing import Any
 from app.ai.components.order_reference import (
     OrderReferenceResolver,
     OrderReferenceResult,
+    _extract_order_number,
 )
 from app.ai.context.pending_state import PendingDirective, PendingState
 from app.ai.handlers.base import BaseHandler, HandlerResult
@@ -27,6 +28,8 @@ from app.ai.recognition.types import ScenarioDecision
 from app.ai.reply_builders.order import OrderReplyBuilder
 from app.ai.context.session_context import SessionContext
 from app.ai.handlers.base import ToolResult
+from app.ai.skills.gateway import SkillError, call_skill
+from app.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -58,26 +61,32 @@ class OrderHandler(BaseHandler):
         if not text:
             text = getattr(ctx, "last_user_message", "") or ""
 
-        if scenario == "order.list":
-            return await self._handle_list(text, ctx)
-        if scenario == "order.filter":
-            return await self._handle_filter(text, ctx)
-        if scenario == "order.detail":
-            return await self._handle_detail(text, ctx)
-        if scenario == "order.shipping_status":
-            return await self._handle_shipping_status(text, ctx)
-        if scenario == "order.create":
-            return await self._handle_create(text, ctx)
-        if scenario == "order.cancel":
-            return await self._handle_cancel(text, ctx)
+        self._init_trace_context(scenario)
 
-        # 未实现的写操作
-        logger.info("订单操作未实现: scenario=%s", scenario)
-        return HandlerResult(
-            scenario_id=scenario,
-            reply="该订单操作功能正在开发中，请稍后再试。",
-            pending_directive=PendingDirective.CLEAR,
-        )
+        if scenario == "order.list":
+            result = await self._handle_list(text, ctx)
+        elif scenario == "order.filter":
+            result = await self._handle_filter(text, ctx)
+        elif scenario == "order.detail":
+            result = await self._handle_detail(text, ctx)
+        elif scenario == "order.shipping_status":
+            result = await self._handle_shipping_status(text, ctx)
+        elif scenario == "order.create":
+            result = await self._handle_create(text, ctx)
+        elif scenario == "order.cancel":
+            result = await self._handle_cancel(text, ctx)
+        elif scenario == "order.refund":
+            result = await self._handle_refund(text, ctx)
+        else:
+            logger.info("订单操作未实现: scenario=%s", scenario)
+            result = HandlerResult(
+                scenario_id=scenario,
+                reply="该订单操作功能正在开发中，请稍后再试。",
+                pending_directive=PendingDirective.CLEAR,
+            )
+
+        self._merge_trace_context(result)
+        return result
 
     async def resume(
         self,
@@ -103,6 +112,8 @@ class OrderHandler(BaseHandler):
             return await self._resume_create_graph(ps, message, ctx)
         if ps.scenario_id == "order.cancel":
             return await self._resume_cancel_graph(ps, message, ctx)
+        if ps.scenario_id == "order.refund":
+            return await self._resume_refund_graph(ps, message, ctx)
 
         return HandlerResult(
             scenario_id=ps.scenario_id,
@@ -239,6 +250,65 @@ class OrderHandler(BaseHandler):
             resume_message=message,
         )
 
+    # ── 售后/退款图 ──
+
+    async def _handle_refund(
+        self,
+        text: str,
+        ctx: SessionContext,
+    ) -> HandlerResult:
+        """售后入口：创建图线程并首次调用。"""
+        if not text.strip():
+            return HandlerResult(
+                scenario_id="order.refund",
+                reply="请描述您要申请售后的问题。",
+                pending_directive=PendingDirective.CLEAR,
+            )
+
+        from app.ai.graphs.order_refund import get_refund_graph
+
+        graph = await get_refund_graph()
+        graph_thread_id = str(uuid.uuid4())
+
+        initial_state: dict[str, Any] = {
+            "tenant_id": ctx.tenant_id,
+            "conversation_id": ctx.conversation_id,
+            "contact_id": ctx.contact_id,
+            "input_text": text,
+        }
+
+        config = {"configurable": {"thread_id": graph_thread_id}}
+
+        return await self._run_graph(
+            scenario_id="order.refund",
+            graph=graph,
+            initial_state=initial_state,
+            config=config,
+            graph_thread_id=graph_thread_id,
+        )
+
+    async def _resume_refund_graph(
+        self,
+        pending: PendingState,
+        message: str,
+        ctx: SessionContext,
+    ) -> HandlerResult:
+        """恢复售后图。"""
+        from app.ai.graphs.order_refund import get_refund_graph
+
+        graph = await get_refund_graph()
+        graph_thread_id = pending.graph_thread_id or ""
+        config = {"configurable": {"thread_id": graph_thread_id}}
+
+        return await self._run_graph(
+            scenario_id="order.refund",
+            graph=graph,
+            initial_state=None,
+            config=config,
+            graph_thread_id=graph_thread_id,
+            resume_message=message,
+        )
+
     # ── 通用图运行器 ──
 
     async def _run_graph(
@@ -256,14 +326,15 @@ class OrderHandler(BaseHandler):
         如果图中断（需要用户输入）→ 返回 SET graph PendingState。
         如果图完成 → 返回 CLEAR 并附带回复。
         """
-        # 尝试注入 DB session
+        # 尝试注入 DB session（测试模式不连接真实 DB）
         db = None
-        try:
-            from app.database import AsyncSessionLocal
+        if not settings.FASTAGENT_TEST_MODE:
+            try:
+                from app.integrations.database import AsyncSessionLocal
 
-            db = AsyncSessionLocal()
-        except Exception:
-            pass
+                db = AsyncSessionLocal()
+            except Exception:
+                logger.warning("创建 DB 会话失败，降级为无 DB 模式")
 
         try:
             # 恢复调用时检查图是否已完成（防御：重复 resume）
@@ -273,6 +344,7 @@ class OrderHandler(BaseHandler):
                     reply = {
                         "order.create": "订单已提交，请勿重复操作。",
                         "order.cancel": "该订单已处理，请勿重复操作。",
+                        "order.refund": "该售后申请已处理，请勿重复操作。",
                     }.get(scenario_id, "操作已完成，请勿重复操作。")
                     return HandlerResult(
                         scenario_id=scenario_id,
@@ -387,6 +459,15 @@ class OrderHandler(BaseHandler):
         payload = orders_data.result
         orders: list[dict[str, Any]] = payload.get("orders", [])
         count = int(payload.get("count", 0))
+
+        # 无订单且用户未提供订单号 → 追问订单号
+        if not orders and not _extract_order_number(text):
+            return HandlerResult(
+                scenario_id="order.list",
+                reply="请提供订单号以便查询。",
+                pending_directive=PendingDirective.CLEAR,
+            )
+
         reply = OrderReplyBuilder.order_list(orders, count)
 
         return HandlerResult(
@@ -437,6 +518,14 @@ class OrderHandler(BaseHandler):
         count = int(payload.get("count", 0))
 
         if not filtered:
+            # 无匹配订单且用户未提供订单号 → 追问订单号
+            if not _extract_order_number(text):
+                return HandlerResult(
+                    scenario_id="order.filter",
+                    reply="请提供订单号以便查询。",
+                    pending_directive=PendingDirective.CLEAR,
+                    context_update={"last_intent": "order.filter"},
+                )
             return HandlerResult(
                 scenario_id="order.filter",
                 reply="暂无符合条件的订单。",
@@ -590,7 +679,7 @@ class OrderHandler(BaseHandler):
         if not orders:
             return HandlerResult(
                 scenario_id=scenario_id,
-                reply="该客户暂无订单记录。",
+                reply="请提供订单号以便查询。",
                 pending_directive=PendingDirective.CLEAR,
             )
 
@@ -613,30 +702,14 @@ class OrderHandler(BaseHandler):
         method: str,
         **kwargs: Any,
     ) -> ToolResult:
-        """调用 Skill 方法并自动注入 db session。"""
+        """调用 Skill 方法（通过 SkillGateway 自动记录 trace + 管理 DB session）。"""
         if self._skill is None:
             import app.ai.skills.orders as _real_skill
             self._skill = _real_skill
-
-        fn = getattr(self._skill, method, None)
-        if fn is None:
-            logger.warning("Skill 方法不存在: %s", method)
-            return _empty_tool_result()
-
         try:
-            from app.database import AsyncSessionLocal
-        except Exception:
-            try:
-                return await fn(db=None, **kwargs)
-            except Exception:
-                logger.warning("Skill 调用失败（DB 不可用）: method=%s", method)
-                return _empty_tool_result()
-
-        try:
-            async with AsyncSessionLocal() as db:
-                return await fn(db=db, **kwargs)
-        except Exception:
-            logger.warning("Skill 调用失败（DB 运行时异常）: method=%s", method)
+            return await call_skill(self._skill, method, **kwargs)
+        except SkillError:
+            logger.warning("Skill 调用失败: method=%s", method)
             return _empty_tool_result()
 
 
@@ -721,5 +794,5 @@ def _parse_order_time(order: dict[str, Any]) -> datetime:
             if isinstance(raw, datetime):
                 return raw
         except (ValueError, TypeError):
-            pass
+            logger.debug("日期解析失败: raw=%s", raw[:100] if isinstance(raw, str) else raw)
     return datetime.min.replace(tzinfo=timezone.utc)

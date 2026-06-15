@@ -45,13 +45,16 @@ def register_default_handlers(registry: HandlerRegistry) -> None:
     registry.register("order.create", OrderHandler())
     registry.register("order.cancel", OrderHandler())
     registry.register("order.confirm", OrderHandler())
+    registry.register("order.refund", OrderHandler())
 
     # Knowledge
     registry.register("knowledge.policy", KnowledgeHandler())
     registry.register("knowledge.qa", KnowledgeHandler())
+    registry.register("knowledge.product_qa", KnowledgeHandler())
 
     # Memory
     registry.register("memory.save", MemoryHandler())
+    registry.register("memory.recall", MemoryHandler())
 
 
 class HandlerRegistry:

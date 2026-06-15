@@ -49,6 +49,8 @@ class Settings(BaseSettings):
     AI_LLM_TIMEOUT_SECONDS: float = 30.0
     AI_GENERAL_REPLY_TIMEOUT_SECONDS: float = 5.0
     AI_LLM_MAX_TOKENS: int = 256
+    AI_DB_TIMEOUT_SECONDS: float = 5.0
+    AI_REDIS_TIMEOUT_SECONDS: float = 2.0
 
     # ── Ollama 原生接口（电商路由 + 槽位提取 /api/generate）──
     AI_LOCAL_LLM_ENABLED: bool = True

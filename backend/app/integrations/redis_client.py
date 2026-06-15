@@ -20,7 +20,7 @@ async def check_redis_connection() -> bool:
     try:
         r = get_redis_client()
         result = await r.ping()
-        await r.aclose()  # type: ignore[attr-defined]
+        await r.aclose()
         return result is True
     except Exception:
         return False

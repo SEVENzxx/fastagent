@@ -6,10 +6,10 @@ import logging
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.config import settings
 from app.ai.rag.query_rewriter import normalize_query
-from app.integrations.reranker_client import RerankerClient
 from app.ai.rag.vector_search import VectorDomain, VectorSearchResult, VectorSearchService
+from app.config import settings
+from app.integrations.reranker_client import RerankerClient
 
 logger = logging.getLogger(__name__)
 
@@ -77,7 +77,7 @@ class RAGService:
                     )
                     return results[: self.rerank_top_k]
             except Exception as exc:
-                logger.warning("RAG reranker failed, using Qdrant scores: %s", exc)
+                logger.warning("RAG 重排序失败，降级使用 Qdrant 分数: %s", exc)
 
         return candidates[: self.rerank_top_k]
 

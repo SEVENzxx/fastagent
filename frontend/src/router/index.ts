@@ -186,6 +186,12 @@ const router = createRouter({
       ],
     },
     {
+      path: '/web-test',
+      name: 'web-test-chat',
+      meta: { public: true, allowAuthenticated: true },
+      component: () => import('../views/tools/WebTestChat.vue'),
+    },
+    {
       path: '/login',
       name: 'login',
       meta: { public: true },
@@ -203,6 +209,7 @@ const router = createRouter({
 router.beforeEach(async (to) => {
   const authStore = useAuthStore()
   const isPublicRoute = to.meta.public === true
+  const allowAuthenticated = to.meta.allowAuthenticated === true
 
   if (!authStore.isAuthenticated && !isPublicRoute) {
     return { path: '/welcome', query: { redirect: to.fullPath } }
@@ -217,14 +224,14 @@ router.beforeEach(async (to) => {
     }
   }
 
-  if (authStore.isAuthenticated && isPublicRoute) {
+  if (authStore.isAuthenticated && isPublicRoute && !allowAuthenticated) {
     return { path: authStore.user?.isSuperuser ? '/platform-admin' : '/' }
   }
 
   if (authStore.user?.isSuperuser) {
     const isPlatformRoute = to.path.startsWith('/platform-admin')
     const isPersonalRoute = to.path === '/profile' || to.path === '/profile/password'
-    if (!isPlatformRoute && !isPersonalRoute) {
+    if (!isPlatformRoute && !isPersonalRoute && !allowAuthenticated) {
       return { path: '/platform-admin' }
     }
   } else if (to.meta.superuser === true) {

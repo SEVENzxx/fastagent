@@ -84,7 +84,7 @@ async def close_checkpointer() -> None:
             if hasattr(_CHECKPOINTER, "conn"):
                 await _CHECKPOINTER.conn.close()
         except Exception:
-            pass
+            logger.warning("关闭取消订单 checkpointer 连接失败")
     _CHECKPOINTER = None
     _GRAPH_INSTANCE = None
 
@@ -194,7 +194,7 @@ async def resolve_order_node(
                     "selected_order_status": order.get("status", ""),
                 }
         except (ValueError, IndexError):
-            pass
+            logger.debug("取消订单：用户序号选择无效")
         return {"error": "无效的选择，请重新选择。", "reply": "请输入有效的订单编号。"}
 
     # 首次调用：从文本或上下文提取订单号

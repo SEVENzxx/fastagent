@@ -1,10 +1,9 @@
-"""意图样本 Pydantic Schemas"""
+"""场景样本 Pydantic Schemas"""
 
 from datetime import datetime
 
-from pydantic import field_serializer, field_validator
+from pydantic import Field, field_serializer, field_validator
 
-from app.ai.recognition.types import RiskLevel, SkillName
 from app.schemas.base import CamelModel
 
 
@@ -12,30 +11,22 @@ from app.schemas.base import CamelModel
 
 
 class IntentSampleCreate(CamelModel):
-    """新增意图样本"""
+    """新增场景样本请求"""
 
-    intent: str
-    label: str
-    skill: str
-    risk_level: str
-    example_text: str
-    enabled: bool = True
+    scenario_id: str = Field(description="场景标识，如 product.catalog")
+    label: str = Field(description="场景中文标签")
+    example_text: str = Field(description="示例文本")
+    enabled: bool = Field(default=True, description="是否启用")
 
-    @field_validator("skill")
+    @field_validator("scenario_id")
     @classmethod
-    def validate_skill(cls, v: str) -> str:
-        allowed = {e.value for e in SkillName}
-        if v not in allowed:
-            raise ValueError(f"skill 必须是 {allowed} 之一")
-        return v
-
-    @field_validator("risk_level")
-    @classmethod
-    def validate_risk_level(cls, v: str) -> str:
-        allowed = {e.value for e in RiskLevel}
-        if v not in allowed:
-            raise ValueError(f"risk_level 必须是 {allowed} 之一")
-        return v
+    def validate_scenario_id(cls, v: str) -> str:
+        text = (v or "").strip()
+        if not text:
+            raise ValueError("scenario_id 不能为空")
+        if "." not in text:
+            raise ValueError("scenario_id 必须包含点号，如 product.catalog")
+        return text
 
     @field_validator("example_text")
     @classmethod
@@ -47,34 +38,24 @@ class IntentSampleCreate(CamelModel):
 
 
 class IntentSampleUpdate(CamelModel):
-    """编辑意图样本"""
+    """编辑场景样本请求"""
 
-    intent: str | None = None
-    label: str | None = None
-    skill: str | None = None
-    risk_level: str | None = None
-    example_text: str | None = None
-    enabled: bool | None = None
+    scenario_id: str | None = Field(default=None, description="场景标识")
+    label: str | None = Field(default=None, description="场景中文标签")
+    example_text: str | None = Field(default=None, description="示例文本")
+    enabled: bool | None = Field(default=None, description="是否启用")
 
-    @field_validator("skill")
+    @field_validator("scenario_id")
     @classmethod
-    def validate_skill(cls, v: str | None) -> str | None:
+    def validate_scenario_id(cls, v: str | None) -> str | None:
         if v is None:
             return v
-        allowed = {e.value for e in SkillName}
-        if v not in allowed:
-            raise ValueError(f"skill 必须是 {allowed} 之一")
-        return v
-
-    @field_validator("risk_level")
-    @classmethod
-    def validate_risk_level(cls, v: str | None) -> str | None:
-        if v is None:
-            return v
-        allowed = {e.value for e in RiskLevel}
-        if v not in allowed:
-            raise ValueError(f"risk_level 必须是 {allowed} 之一")
-        return v
+        text = v.strip()
+        if not text:
+            raise ValueError("scenario_id 不能为空")
+        if "." not in text:
+            raise ValueError("scenario_id 必须包含点号，如 product.catalog")
+        return text
 
     @field_validator("example_text")
     @classmethod
@@ -88,56 +69,47 @@ class IntentSampleUpdate(CamelModel):
 
 
 class IntentSampleBatchCreate(CamelModel):
-    """批量新增意图样本 — 共享 intent / label / skill / risk_level / enabled"""
+    """批量新增场景样本请求"""
 
-    intent: str
-    label: str
-    skill: str
-    risk_level: str
-    examples: list[str]
-    enabled: bool = True
+    scenario_id: str = Field(description="场景标识")
+    label: str = Field(description="场景中文标签")
+    examples: list[str] = Field(description="示例文本列表")
+    enabled: bool = Field(default=True, description="是否启用")
 
-    @field_validator("skill")
+    @field_validator("scenario_id")
     @classmethod
-    def validate_skill(cls, v: str) -> str:
-        allowed = {e.value for e in SkillName}
-        if v not in allowed:
-            raise ValueError(f"skill 必须是 {allowed} 之一")
-        return v
-
-    @field_validator("risk_level")
-    @classmethod
-    def validate_risk_level(cls, v: str) -> str:
-        allowed = {e.value for e in RiskLevel}
-        if v not in allowed:
-            raise ValueError(f"risk_level 必须是 {allowed} 之一")
-        return v
+    def validate_scenario_id(cls, v: str) -> str:
+        text = (v or "").strip()
+        if not text:
+            raise ValueError("scenario_id 不能为空")
+        if "." not in text:
+            raise ValueError("scenario_id 必须包含点号，如 product.catalog")
+        return text
 
 
 class IntentSampleTestSearch(CamelModel):
-    """测试向量召回"""
-    query: str
+    """测试向量召回请求"""
+
+    query: str = Field(description="测试查询文本")
 
 
 # ── 响应 ──
 
 
 class IntentSampleResponse(CamelModel):
-    """意图样本响应"""
+    """场景样本响应"""
 
-    id: int
-    tenant_id: int
-    intent: str
-    label: str
-    skill: str
-    risk_level: str
-    example_text: str
-    enabled: bool
-    source: str
-    schema_version: int
-    qdrant_point_id: str | None = None
-    created_at: datetime
-    updated_at: datetime
+    id: int = Field(description="样本 ID")
+    tenant_id: int = Field(description="租户 ID")
+    scenario_id: str = Field(description="场景标识")
+    label: str = Field(description="场景中文标签")
+    example_text: str = Field(description="示例文本")
+    enabled: bool = Field(description="是否启用")
+    source: str = Field(description="样本来源")
+    schema_version: int = Field(description="Schema 版本号")
+    qdrant_point_id: str | None = Field(default=None, description="Qdrant 向量点 ID")
+    created_at: datetime = Field(description="创建时间")
+    updated_at: datetime = Field(description="更新时间")
 
     @field_serializer("id", "tenant_id")
     def serialize_bigint(self, value: int) -> str:
@@ -145,36 +117,39 @@ class IntentSampleResponse(CamelModel):
 
 
 class IntentSampleListResponse(CamelModel):
-    """意图样本列表响应"""
+    """场景样本列表响应"""
 
-    items: list[IntentSampleResponse]
-    total: int
+    items: list[IntentSampleResponse] = Field(description="样本列表")
+    total: int = Field(description="样本总数")
 
 
 class IntentSampleTestHit(CamelModel):
     """测试召回结果项"""
-    intent: str
-    label: str
-    skill: str
-    score: float
-    example_text: str
-    source: str
-    tenant_id: int
+
+    scenario_id: str = Field(description="场景标识")
+    label: str = Field(description="场景中文标签")
+    score: float = Field(description="相似度分数")
+    example_text: str = Field(description="匹配的示例文本")
+    source: str = Field(description="样本来源")
+    tenant_id: int = Field(description="租户 ID")
 
 
 class IntentSampleTestSearchResponse(CamelModel):
-    """测试召回结果"""
-    query: str
-    results: list[IntentSampleTestHit]
+    """测试召回结果响应"""
+
+    query: str = Field(description="查询文本")
+    results: list[IntentSampleTestHit] = Field(description="召回结果列表")
 
 
 class SkillOption(CamelModel):
     """Skill 枚举选项"""
-    value: str
-    label: str
+
+    value: str = Field(description="Skill 值")
+    label: str = Field(description="Skill 中文标签")
 
 
 class RiskLevelOption(CamelModel):
     """风险等级枚举选项"""
-    value: str
-    label: str
+
+    value: str = Field(description="风险等级值")
+    label: str = Field(description="风险等级中文标签")

@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.websocket_manager import manager
-from app.database import get_db
+from app.integrations.database import get_db
 from app.dependencies import require_permission, require_tenant_user
 from app.models.conversation import Conversation, Message
 from app.models.employee import Employee

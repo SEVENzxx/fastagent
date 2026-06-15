@@ -19,7 +19,7 @@ API Key 在响应中仅返回 has_api_key 布尔值，不传密文或明文。
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.database import get_db
+from app.integrations.database import get_db
 from app.dependencies import require_superuser
 from app.models.employee import Employee
 from app.schemas.admin import (

@@ -238,8 +238,8 @@ class TestMemorySave:
         mock_module = MagicMock()
         mock_module.AsyncSessionLocal = mock_sessionmaker
 
-        old = sys.modules.pop("app.database", None)
-        sys.modules["app.database"] = mock_module
+        old = sys.modules.pop("app.integrations.database", None)
+        sys.modules["app.integrations.database"] = mock_module
         try:
             handler = MemoryHandler(skill=FakeMemorySkill)
             result = await handler.execute(
@@ -248,9 +248,9 @@ class TestMemorySave:
             )
         finally:
             if old is not None:
-                sys.modules["app.database"] = old
+                sys.modules["app.integrations.database"] = old
             else:
-                del sys.modules["app.database"]
+                del sys.modules["app.integrations.database"]
 
         assert "已帮您记住" in result.reply
         mock_db.commit.assert_awaited_once()
@@ -269,8 +269,8 @@ class TestMemorySave:
         mock_module = MagicMock()
         mock_module.AsyncSessionLocal = mock_sessionmaker
 
-        old = sys.modules.pop("app.database", None)
-        sys.modules["app.database"] = mock_module
+        old = sys.modules.pop("app.integrations.database", None)
+        sys.modules["app.integrations.database"] = mock_module
         try:
             handler = MemoryHandler(skill=FakeMemorySkill)
             result = await handler.execute(
@@ -279,9 +279,9 @@ class TestMemorySave:
             )
         finally:
             if old is not None:
-                sys.modules["app.database"] = old
+                sys.modules["app.integrations.database"] = old
             else:
-                del sys.modules["app.database"]
+                del sys.modules["app.integrations.database"]
 
         assert "DB 错误" in result.reply or "保存偏好" in result.reply
         mock_db.rollback.assert_awaited_once()

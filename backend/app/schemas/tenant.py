@@ -1,16 +1,20 @@
-"""Tenant settings schemas."""
+"""租户设置 Schema。"""
 
-from pydantic import field_validator
+from pydantic import Field, field_validator
 
 from app.schemas.base import CamelModel
 
 
 class TenantTemplateResponse(CamelModel):
-    template_json: list[str]
+    """租户属性模板响应"""
+
+    template_json: list[str] = Field(description="属性模板字段名列表")
 
 
 class TenantTemplateUpdate(CamelModel):
-    template_json: list[str]
+    """更新租户属性模板请求"""
+
+    template_json: list[str] = Field(description="属性模板字段名列表")
 
     @field_validator("template_json")
     @classmethod

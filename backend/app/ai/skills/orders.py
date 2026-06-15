@@ -380,6 +380,80 @@ async def cancel_order_draft(
     )
 
 
+async def create_refund(
+    *,
+    tenant_id: int,
+    contact_id: int | None = None,
+    db: AsyncSession,
+    **kwargs,
+) -> ToolResult:
+    """创建售后/退款申请。
+
+    contact_id 校验：contact_id 不为 None 时必须匹配订单所属客户。
+    仅 shipped / signed 状态的订单可发起售后。退款后订单状态变为 refunding。
+    """
+    order_id = kwargs.get("order_id")
+    reason = str(kwargs.get("reason") or "").strip()
+
+    if order_id is None:
+        return ToolResult(ok=False, skill_name="create_refund", error="缺少订单号。")
+    if not reason:
+        return ToolResult(ok=False, skill_name="create_refund", error="缺少退款原因。")
+
+    try:
+        order_id = int(order_id)
+    except (TypeError, ValueError):
+        return ToolResult(ok=False, skill_name="create_refund", error=f"无效订单号：{order_id}")
+
+    order = await order_service.get_order(db, order_id, tenant_id)
+    if order is None:
+        return ToolResult(ok=False, skill_name="create_refund", error=f"未找到订单 #{order_id}。")
+
+    # 写操作：contact_id 为 None 时拒绝
+    if contact_id is None:
+        return ToolResult(
+            ok=False,
+            skill_name="create_refund",
+            error="请先确认客户身份后再申请售后。",
+        )
+
+    # 所有权校验：订单必须属于当前客户
+    if order.contact_id != contact_id:
+        logger.warning(
+            "create_refund 归属校验失败: order=%s tenant=%s order_contact=%s req_contact=%s",
+            order_id, tenant_id, order.contact_id, contact_id,
+        )
+        return ToolResult(ok=False, skill_name="create_refund", error=f"未找到订单 #{order_id}。")
+
+    # 状态校验：仅 shipped / signed 可发起售后
+    if order.status not in ("shipped", "signed"):
+        return ToolResult(
+            ok=False,
+            skill_name="create_refund",
+            error=f"订单 #{order_id} 当前状态为「{_status_label(order.status)}」，不支持售后申请。",
+        )
+
+    try:
+        order = await order_service.transition_order_status(db, order_id, tenant_id, "refunding")
+    except ValueError as exc:
+        return ToolResult(ok=False, skill_name="create_refund", error=str(exc))
+
+    logger.info(
+        "Skill create_refund 成功：order_id=%s tenant_id=%s new_status=refunding reason=%s",
+        order_id, tenant_id, reason[:40],
+    )
+    return ToolResult(
+        ok=True,
+        skill_name="create_refund",
+        result={
+            "order_id": str(order.id),
+            "status": order.status,
+            "status_label": _status_label(order.status),
+            "message": f"订单 #{order.id} 售后申请已提交，退款处理中。原因：{reason}",
+        },
+    )
+
+
 async def manage_order(
     *,
     tenant_id: int,

@@ -1,6 +1,7 @@
 """WebSocket endpoints."""
 
 import asyncio
+import logging
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from jose import JWTError
@@ -8,10 +9,12 @@ from jose import JWTError
 from app.common.trace.context import ensure_trace_id, reset_trace_id, set_trace_id
 from app.core.security import decode_token
 from app.core.websocket_manager import manager
-from app.database import AsyncSessionLocal
+from app.integrations.database import AsyncSessionLocal
 from app.models.employee import Employee
 from app.schemas.conversation import MessageCreate
 from app.services import conversation_service, outbound_message_service
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["WebSocket"])
 
@@ -134,7 +137,7 @@ async def websocket_endpoint(websocket: WebSocket, conversation_id: int, token: 
                         {"type": "message.created", "message": _message_payload(message)},
                     )
         except WebSocketDisconnect:
-            pass
+            logger.info("WebSocket 客户端断开连接: conversation_id=%s employee_id=%s", conversation_id, employee_id)
         finally:
             heartbeat_task.cancel()
             manager.disconnect(conversation_id, websocket)

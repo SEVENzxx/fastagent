@@ -23,7 +23,8 @@ from app.ai.handlers.base import BaseHandler, HandlerResult
 from app.ai.context.pending_state import PendingDirective, PendingState
 from app.ai.recognition.types import ScenarioDecision
 from app.ai.context.session_context import SessionContext
-from app.ai.settings import DEFAULT_PAGE_SIZE
+from app.ai.skills.gateway import SkillError, call_skill
+from app.common.constants.business import DEFAULT_PAGE_SIZE
 from app.ai.skills.products import ProductSkill
 from app.ai.reply_builders.product import ProductReplyBuilder
 from app.ai.components.product_reference_resolver import (
@@ -131,7 +132,7 @@ def _get_default_product_resolver() -> ProductReferenceResolver:
         return _default_product_resolver
     session_factory = None
     try:
-        from app.database import AsyncSessionLocal
+        from app.integrations.database import AsyncSessionLocal
         session_factory = AsyncSessionLocal
     except Exception:
         logger.warning("数据库不可用，ProductReferenceResolver 使用无 DB 降级模式")
@@ -168,29 +169,34 @@ class ProductHandler(BaseHandler):
         if not text:
             text = getattr(ctx, "last_user_message", "") or ""
 
-        if scenario == "product.catalog":
-            return await self._handle_catalog(text, ctx)
-        if scenario == "product.filter_search":
-            return await self._handle_filter_search(decision, ctx)
-        if scenario == "product.semantic_recommend":
-            return await self._handle_semantic_recommend(decision, ctx)
-        if scenario == "product.sku_query":
-            return await self._handle_sku_query(decision, ctx)
-        if scenario == "product.detail":
-            return await self._handle_detail(text, decision, ctx)
-        if scenario == "product.compare":
-            return await self._handle_compare(text, ctx)
-        if scenario == "product.attribute_query":
-            return await self._handle_attribute_query(text, decision, ctx)
-        if scenario == "product.pagination_sort":
-            return await self._handle_pagination_sort(decision, ctx)
+        self._init_trace_context(scenario)
 
-        logger.warning("未处理的商品场景: %s", scenario)
-        return HandlerResult(
-            scenario_id=scenario,
-            reply="该功能正在开发中，请稍后再试。",
-            pending_directive=PendingDirective.CLEAR,
-        )
+        if scenario == "product.catalog":
+            result = await self._handle_catalog(text, ctx)
+        elif scenario == "product.filter_search":
+            result = await self._handle_filter_search(decision, ctx)
+        elif scenario == "product.semantic_recommend":
+            result = await self._handle_semantic_recommend(decision, ctx)
+        elif scenario == "product.sku_query":
+            result = await self._handle_sku_query(decision, ctx)
+        elif scenario == "product.detail":
+            result = await self._handle_detail(text, decision, ctx)
+        elif scenario == "product.compare":
+            result = await self._handle_compare(text, ctx)
+        elif scenario == "product.attribute_query":
+            result = await self._handle_attribute_query(text, decision, ctx)
+        elif scenario == "product.pagination_sort":
+            result = await self._handle_pagination_sort(decision, ctx)
+        else:
+            logger.warning("未处理的商品场景: %s", scenario)
+            result = HandlerResult(
+                scenario_id=scenario,
+                reply="该功能正在开发中，请稍后再试。",
+                pending_directive=PendingDirective.CLEAR,
+            )
+
+        self._merge_trace_context(result)
+        return result
 
     async def resume(
         self,
@@ -206,6 +212,8 @@ class ProductHandler(BaseHandler):
         psc = pending  # PendingState
         scenario = getattr(psc, "scenario_id", "product.detail")
 
+        self._init_trace_context(scenario)
+
         # 多候选澄清恢复
         resolver = self._get_resolver(ctx)
         ref_result = await resolver.resolve(
@@ -216,13 +224,18 @@ class ProductHandler(BaseHandler):
         )
         if ref_result.resolved:
             if scenario == "product.detail":
-                return await self._detail_by_id(
+                result = await self._detail_by_id(
                     ref_result.product_id, ref_result.product_name, ctx,
                 )
-            if scenario == "product.attribute_query":
-                return await self._attribute_by_id(
+            elif scenario == "product.attribute_query":
+                result = await self._attribute_by_id(
                     ref_result.product_id, ref_result.product_name, message, ctx,
                 )
+            else:
+                result = None
+            if result is not None:
+                self._merge_trace_context(result)
+                return result
 
         # 未解析：返回当前的候选追问
         candidates = getattr(psc, "data", {}).get("candidates") or ref_result.candidates
@@ -234,16 +247,20 @@ class ProductHandler(BaseHandler):
                 }
                 for i, c in enumerate(candidates)
             ]
-            return HandlerResult(
+            result = HandlerResult(
                 scenario_id=scenario,
                 reply=ProductReplyBuilder.clarify_candidates(formatted),
                 pending_directive=PendingDirective.KEEP,
             )
-        return HandlerResult(
-            scenario_id=scenario,
-            reply="请提供更完整的商品名称或型号。",
-            pending_directive=PendingDirective.KEEP,
-        )
+        else:
+            result = HandlerResult(
+                scenario_id=scenario,
+                reply="请提供更完整的商品名称或型号。",
+                pending_directive=PendingDirective.KEEP,
+            )
+
+        self._merge_trace_context(result)
+        return result
 
     # ── 场景处理方法 ──
 
@@ -292,9 +309,28 @@ class ProductHandler(BaseHandler):
         candidates = [
             {"id": p["id"], "name": p["name"]} for p in products
         ]
+
+        # 构建价格过滤提示
+        max_p = entities.get("price_max")
+        min_p = entities.get("price_min")
+        suffix = None
+        if max_p is not None and min_p is not None:
+            suffix = f"¥{min_p}-¥{max_p}"
+        elif max_p is not None:
+            suffix = f"¥{max_p}元以下"
+        elif min_p is not None:
+            suffix = f"¥{min_p}元以上"
+        # 用户表达了价格意图（如"便宜""实惠"）但无明确价格范围时补充价格标签
+        if suffix is None:
+            _price_keywords = ("便宜", "实惠", "性价比", "预算", "优惠", "低价", "经济")
+            _raw = entities.get("raw_text", "") or ""
+            _cat = entities.get("raw_category_text", "") or ""
+            if any(kw in _raw + _cat for kw in _price_keywords):
+                suffix = "价格实惠"
+
         return HandlerResult(
             scenario_id="product.filter_search",
-            reply=ProductReplyBuilder.product_list(products),
+            reply=ProductReplyBuilder.product_list(products, header_suffix=suffix),
             pending_directive=PendingDirective.CLEAR,
             context_update={
                 "product_candidates": candidates,
@@ -347,9 +383,31 @@ class ProductHandler(BaseHandler):
         candidates = [
             {"id": p["id"], "name": p["name"]} for p in products
         ]
+
+        # 构建语义推荐提示（特征 + 价格 + 搜索词）
+        suffix_parts: list[str] = []
+        if features:
+            suffix_parts.extend(str(f) for f in features if f)
+        if max_price is not None and min_price is not None:
+            suffix_parts.append(f"¥{min_price}-¥{max_price}")
+        elif max_price is not None:
+            suffix_parts.append(f"¥{max_price}元以下")
+        elif min_price is not None:
+            suffix_parts.append(f"¥{min_price}元以上")
+        # 用户表达了价格意图（如"便宜""实惠"）但无明确价格范围时补充价格标签
+        if not any([min_price, max_price]):
+            _price_keywords = ("便宜", "实惠", "性价比", "预算", "优惠", "低价", "经济")
+            _all_terms = " ".join(str(f) for f in features) + " " + (query_text or "")
+            if any(kw in _all_terms for kw in _price_keywords):
+                suffix_parts.append("价格实惠")
+        # 无任何上下文时用搜索词兜底
+        if not suffix_parts and query_text:
+            suffix_parts.append(query_text[:40])
+        suffix = "、".join(suffix_parts) if suffix_parts else None
+
         return HandlerResult(
             scenario_id="product.semantic_recommend",
-            reply=ProductReplyBuilder.product_list(products),
+            reply=ProductReplyBuilder.product_list(products, header_suffix=suffix),
             pending_directive=PendingDirective.CLEAR,
             context_update={
                 "product_candidates": candidates,
@@ -629,24 +687,11 @@ class ProductHandler(BaseHandler):
         method: str,
         **kwargs: Any,
     ) -> Any:
-        """调用 Skill 方法并自动注入 db session。
-
-        DB 不可用时（测试环境无 asyncpg、生产 DB 连接失败等），
-        先尝试 db=None（兼容 FakeProductSkill），失败则返回方法安全默认值。
-        """
+        """调用 Skill 方法（通过 SkillGateway 自动记录 trace + 管理 DB session）。"""
         try:
-            from app.database import AsyncSessionLocal
-        except Exception:
-            try:
-                return await getattr(self._skill, method)(db=None, **kwargs)
-            except Exception:
-                logger.warning("Skill 调用失败（DB 不可用）: method=%s", method)
-                return _SKILL_DEFAULTS.get(method, [])
-        try:
-            async with AsyncSessionLocal() as db:
-                return await getattr(self._skill, method)(db=db, **kwargs)
-        except Exception:
-            logger.warning("Skill 调用失败（DB 运行时异常）: method=%s", method)
+            return await call_skill(self._skill, method, **kwargs)
+        except SkillError:
+            logger.warning("Skill 调用失败: method=%s", method)
             return _SKILL_DEFAULTS.get(method, [])
 
     async def _detail_by_id(

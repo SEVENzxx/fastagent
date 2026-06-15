@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from app.ai.context.pending_state import PendingDirective, PendingState, PendingStateCorruptedError
-from app.ai.settings import PENDING_TTL_SECONDS
+from app.common.constants.config import PENDING_TTL_SECONDS
 
 logger = logging.getLogger(__name__)
 
@@ -23,7 +23,7 @@ _redis_client: Any | None = None
 def _get_redis_client() -> Any:
     global _redis_client
     if _redis_client is None:
-        from app.redis_client import get_redis_client
+        from app.integrations.redis_client import get_redis_client
         _redis_client = get_redis_client()
     return _redis_client
 
@@ -35,7 +35,7 @@ async def close_cached_pending_redis_client() -> None:
         try:
             await _redis_client.aclose()
         except Exception:
-            pass
+            logger.warning("关闭 PendingService Redis 连接失败")
         _redis_client = None
 
 

@@ -4,7 +4,7 @@ import asyncio
 
 from sqlalchemy import select
 
-from app.database import AsyncSessionLocal
+from app.integrations.database import AsyncSessionLocal
 from app.models.role import Permission, PermissionCode
 
 

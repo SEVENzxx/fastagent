@@ -288,7 +288,7 @@ def _mark_observation_error(observation: Any, exc: Exception) -> None:
     try:
         observation.update(level="ERROR", status_message=str(exc)[:500])
     except Exception:
-        pass
+        logger.debug("标记 observation 错误状态失败")
 
 
 def set_observation_io(
@@ -313,7 +313,7 @@ def set_observation_io(
     try:
         observation.update(**payload)
     except Exception:
-        pass
+        logger.debug("更新 observation payload 失败")
 
 
 def _current_langfuse_trace_context(client: Any) -> dict[str, str] | None:
@@ -449,12 +449,12 @@ def end_sql_observation(
                 }),
             )
         except Exception:
-            pass
+            logger.debug("关闭 DB observation span 失败")
     if manager is not None:
         try:
             manager.__exit__(type(error) if error else None, error, getattr(error, "__traceback__", None))
         except Exception:
-            pass
+            logger.debug("关闭 DB observation manager 失败")
     logger.info(
         "observe_db_call  name=postgresql.%s  type=span  duration_ms=%.1f  rowcount=%s",
         str(metadata.get("operation", "query")).lower(),

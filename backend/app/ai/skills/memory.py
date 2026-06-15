@@ -77,3 +77,29 @@ async def _upsert_memory(
             source="customer_message", metadata_={"source_text": source_text},
         ))
     await db.flush()
+
+
+async def recall_info(
+    *, tenant_id: int, contact_id: int | None = None, db: AsyncSession, **kwargs,
+) -> ToolResult:
+    """查询客户已保存的记忆偏好。"""
+    _ = kwargs
+    if contact_id is None:
+        return ToolResult(ok=False, skill_name="recall_info", error="缺少客户标识")
+
+    try:
+        result = await db.execute(
+            select(SalesMemory).where(
+                SalesMemory.tenant_id == tenant_id,
+                SalesMemory.contact_id == contact_id,
+            ).order_by(SalesMemory.updated_at.desc())
+        )
+        memories = result.scalars().all()
+    except Exception:
+        return ToolResult(ok=False, skill_name="recall_info", error="记忆查询失败")
+
+    items = [
+        {"key": m.key, "value": m.value, "memory_type": m.memory_type}
+        for m in memories
+    ]
+    return ToolResult(ok=True, skill_name="recall_info", result={"items": items})

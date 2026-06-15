@@ -9,10 +9,11 @@ from __future__ import annotations
 import logging
 import uuid
 from dataclasses import dataclass
-from enum import StrEnum
 from typing import Any
 
 from app.ai.observability import observe_vector_call, set_observation_io
+from app.ai.trace import get_trace, inc_vector
+from app.common.enums.base import LabeledEnum
 from app.config import settings
 from app.integrations.embedding_client import EmbeddingClient, EmbeddingClientError
 from app.integrations.qdrant_client import QdrantClientError, QdrantVectorClient
@@ -20,7 +21,7 @@ from app.integrations.qdrant_client import QdrantClientError, QdrantVectorClient
 logger = logging.getLogger(__name__)
 
 
-class VectorDomain(StrEnum):
+class VectorDomain(LabeledEnum):
     """向量域 — 每个值对应一个 Qdrant collection。"""
     INTENT_SAMPLE = "intent_sample"
     KNOWLEDGE_CHUNK = "knowledge_chunk"
@@ -28,6 +29,18 @@ class VectorDomain(StrEnum):
     PRODUCT = "product"
     MARKETING_DOCUMENT = "marketing_document"
     IMAGE = "image"
+
+    @property
+    def label(self) -> str:
+        labels = {
+            VectorDomain.INTENT_SAMPLE: "意图样本",
+            VectorDomain.KNOWLEDGE_CHUNK: "知识分块",
+            VectorDomain.QA_PAIR: "问答对",
+            VectorDomain.PRODUCT: "商品",
+            VectorDomain.MARKETING_DOCUMENT: "营销文档",
+            VectorDomain.IMAGE: "图片",
+        }
+        return labels[self]
 
 
 @dataclass(frozen=True, slots=True)
@@ -114,7 +127,7 @@ class VectorSearchService:
             return stored_point_id
         except (EmbeddingClientError, QdrantClientError, OSError) as exc:
             logger.warning(
-                "Vector upsert failed: domain=%s tenant_id=%s business_id=%s error=%s",
+                "向量写入失败: domain=%s tenant_id=%s business_id=%s error=%s",
                 domain, tenant_id, business_id, exc,
             )
             return None
@@ -136,6 +149,10 @@ class VectorSearchService:
         1. 空 query / embedding 服务禁用 → 返回 []
         2. query embedding → Qdrant search（按 tenant_id + domain + 自定义 filters 过滤）
         """
+        # ── 0: 记录 ResourceTrace ──
+        trace = get_trace()
+        if trace is not None:
+            inc_vector(trace)
         # ── 1: 跳过条件 ──
         clean_query = str(query or "").strip()
         if not clean_query:
@@ -187,7 +204,7 @@ class VectorSearchService:
                 )
         except (EmbeddingClientError, QdrantClientError, OSError) as exc:
             logger.warning(
-                "Vector search failed: domain=%s tenant_id=%s query_len=%s error=%s",
+                "向量检索失败: domain=%s tenant_id=%s query_len=%s error=%s",
                 domain, tenant_id, len(clean_query), exc,
             )
             return []
@@ -230,7 +247,7 @@ class VectorSearchService:
             )
         except QdrantClientError as exc:
             logger.warning(
-                "Vector delete failed: domain=%s tenant_id=%s error=%s",
+                "向量删除失败: domain=%s tenant_id=%s error=%s",
                 domain, tenant_id, exc,
             )
 

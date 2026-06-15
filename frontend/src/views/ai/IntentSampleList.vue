@@ -8,8 +8,6 @@ import type {
   IntentSampleResponse,
   IntentSampleCreate,
   IntentSampleUpdate,
-  SkillOption,
-  RiskLevelOption,
   IntentSampleTestHit,
 } from '@/api/intentSamples'
 
@@ -21,8 +19,7 @@ const page = ref(1)
 const pageSize = ref(20)
 
 // ── Filters ──
-const filterIntent = ref('')
-const filterSkill = ref('')
+const filterScenarioId = ref('')
 const filterEnabled = ref<boolean | ''>('')
 
 // ── Create/Edit Dialog ──
@@ -30,10 +27,8 @@ const dialogVisible = ref(false)
 const editingItem = ref<IntentSampleResponse | null>(null)
 const saving = ref(false)
 const form = ref<IntentSampleCreate>({
-  intent: '',
+  scenarioId: '',
   label: '',
-  skill: '',
-  riskLevel: '',
   exampleText: '',
   enabled: true,
 })
@@ -42,10 +37,8 @@ const form = ref<IntentSampleCreate>({
 const batchDialogVisible = ref(false)
 const batchSaving = ref(false)
 const batchForm = ref({
-  intent: '',
+  scenarioId: '',
   label: '',
-  skill: '',
-  riskLevel: '',
   examples: '',
   enabled: true,
 })
@@ -55,18 +48,13 @@ const searchQuery = ref('')
 const searchLoading = ref(false)
 const searchResults = ref<IntentSampleTestHit[]>([])
 
-// ── Enum Options ──
-const skillOptions = ref<SkillOption[]>([])
-const riskLevelOptions = ref<RiskLevelOption[]>([])
-
 // ── Load Data ──
 async function loadData() {
   loading.value = true
   try {
     const skip = (page.value - 1) * pageSize.value
     const params: Record<string, any> = { skip, limit: pageSize.value }
-    if (filterIntent.value) params.intent = filterIntent.value
-    if (filterSkill.value) params.skill = filterSkill.value
+    if (filterScenarioId.value) params.scenario_id = filterScenarioId.value
     if (filterEnabled.value !== '') params.enabled = filterEnabled.value
     const result = await api.listIntentSamples(params)
     items.value = result.items
@@ -79,30 +67,18 @@ async function loadData() {
   }
 }
 
-async function loadEnumOptions() {
-  try {
-    skillOptions.value = await api.listSkillOptions()
-    riskLevelOptions.value = await api.listRiskLevelOptions()
-  } catch {
-    skillOptions.value = []
-    riskLevelOptions.value = []
-  }
-}
-
 // ── Create / Edit ──
 function openCreate() {
   editingItem.value = null
-  form.value = { intent: '', label: '', skill: '', riskLevel: '', exampleText: '', enabled: true }
+  form.value = { scenarioId: '', label: '', exampleText: '', enabled: true }
   dialogVisible.value = true
 }
 
 function openEdit(item: IntentSampleResponse) {
   editingItem.value = item
   form.value = {
-    intent: item.intent,
+    scenarioId: item.scenarioId,
     label: item.label,
-    skill: item.skill,
-    riskLevel: item.riskLevel,
     exampleText: item.exampleText,
     enabled: item.enabled,
   }
@@ -110,8 +86,12 @@ function openEdit(item: IntentSampleResponse) {
 }
 
 async function handleSave() {
-  if (!form.value.intent || !form.value.label || !form.value.exampleText || !form.value.skill || !form.value.riskLevel) {
+  if (!form.value.scenarioId || !form.value.label || !form.value.exampleText) {
     ElMessage.warning('请填写完整信息')
+    return
+  }
+  if (!form.value.scenarioId.includes('.')) {
+    ElMessage.warning('场景标识必须包含点号，如 product.catalog')
     return
   }
   saving.value = true
@@ -136,13 +116,17 @@ async function handleSave() {
 
 // ── Batch Create ──
 function openBatchCreate() {
-  batchForm.value = { intent: '', label: '', skill: '', riskLevel: '', examples: '', enabled: true }
+  batchForm.value = { scenarioId: '', label: '', examples: '', enabled: true }
   batchDialogVisible.value = true
 }
 
 async function handleBatchSave() {
-  if (!batchForm.value.intent || !batchForm.value.label || !batchForm.value.examples.trim() || !batchForm.value.skill || !batchForm.value.riskLevel) {
+  if (!batchForm.value.scenarioId || !batchForm.value.label || !batchForm.value.examples.trim()) {
     ElMessage.warning('请填写完整信息')
+    return
+  }
+  if (!batchForm.value.scenarioId.includes('.')) {
+    ElMessage.warning('场景标识必须包含点号，如 product.catalog')
     return
   }
   const examples = batchForm.value.examples.split('\n').map((s) => s.trim()).filter(Boolean)
@@ -153,10 +137,8 @@ async function handleBatchSave() {
   batchSaving.value = true
   try {
     await api.batchCreateIntentSamples({
-      intent: batchForm.value.intent,
+      scenarioId: batchForm.value.scenarioId,
       label: batchForm.value.label,
-      skill: batchForm.value.skill,
-      riskLevel: batchForm.value.riskLevel,
       examples,
       enabled: batchForm.value.enabled,
     })
@@ -214,21 +196,7 @@ async function handleTestSearch() {
   }
 }
 
-// ── Skill Display ──
-const skillLabelMap: Record<string, string> = {
-  TEMPLATE: '模板回复',
-  PRODUCT: '商品',
-  ORDER: '订单',
-  RAG: '知识库/RAG',
-  HUMAN: '转人工',
-  FALLBACK: '兜底',
-}
-const riskLabelMap: Record<string, string> = {
-  READ_ONLY: '只读',
-  LOW_RISK_WRITE: '低风险写',
-  HIGH_RISK_WRITE: '高风险写',
-}
-
+// ── Display helpers ──
 const sourceLabelMap: Record<string, string> = {
   platform_default: '平台默认',
   tenant_custom: '自定义',
@@ -236,14 +204,13 @@ const sourceLabelMap: Record<string, string> = {
 
 onMounted(() => {
   loadData()
-  loadEnumOptions()
 })
 </script>
 
 <template>
   <div class="intent-sample-list">
     <div class="page-header">
-      <h2>意图样本管理</h2>
+      <h2>场景样本管理</h2>
       <div class="header-actions">
         <el-button :icon="Search" @click="$nextTick(() => document.getElementById('search-input')?.focus())">
           测试召回
@@ -255,10 +222,7 @@ onMounted(() => {
 
     <!-- Filters -->
     <div class="filters">
-      <el-input v-model="filterIntent" placeholder="搜索 intent" clearable style="width: 160px" @clear="loadData" @keyup.enter="loadData" />
-      <el-select v-model="filterSkill" placeholder="Skill" clearable style="width: 140px" @change="loadData">
-        <el-option v-for="opt in skillOptions" :key="opt.value" :label="opt.label" :value="opt.value" />
-      </el-select>
+      <el-input v-model="filterScenarioId" placeholder="搜索 scenario_id" clearable style="width: 200px" @clear="loadData" @keyup.enter="loadData" />
       <el-select v-model="filterEnabled" placeholder="状态" clearable style="width: 110px" @change="loadData">
         <el-option label="仅启用" :value="true" />
         <el-option label="仅停用" :value="false" />
@@ -268,23 +232,8 @@ onMounted(() => {
 
     <!-- Table -->
     <el-table :data="items" v-loading="loading" stripe>
-      <el-table-column prop="intent" label="意图标识" width="150" />
-      <el-table-column prop="label" label="意图名称" width="120" />
-      <el-table-column prop="skill" label="Skill" width="100">
-        <template #default="{ row }">
-          <el-tag size="small">{{ skillLabelMap[row.skill] || row.skill }}</el-tag>
-        </template>
-      </el-table-column>
-      <el-table-column prop="riskLevel" label="风险等级" width="100">
-        <template #default="{ row }">
-          <el-tag
-            size="small"
-            :type="row.riskLevel === 'HIGH_RISK_WRITE' ? 'danger' : row.riskLevel === 'LOW_RISK_WRITE' ? 'warning' : 'info'"
-          >
-            {{ riskLabelMap[row.riskLevel] || row.riskLevel }}
-          </el-tag>
-        </template>
-      </el-table-column>
+      <el-table-column prop="scenarioId" label="场景标识" width="170" />
+      <el-table-column prop="label" label="场景名称" width="120" />
       <el-table-column prop="exampleText" label="样本文本" min-width="200" show-overflow-tooltip />
       <el-table-column prop="source" label="来源" width="80">
         <template #default="{ row }">
@@ -323,7 +272,7 @@ onMounted(() => {
     <el-divider />
     <div class="test-search">
       <h3>测试召回</h3>
-      <p class="subtitle">输入一句用户消息，查看意图样本向量召回结果</p>
+      <p class="subtitle">输入一句用户消息，查看场景样本向量召回结果</p>
       <div class="search-bar">
         <el-input
           id="search-input"
@@ -343,11 +292,10 @@ onMounted(() => {
         <div v-for="(hit, idx) in searchResults" :key="idx" class="result-card">
           <div class="result-header">
             <el-tag size="small" type="primary">score: {{ hit.score }}</el-tag>
-            <span class="result-intent">{{ hit.intent }} ({{ hit.label }})</span>
-            <el-tag size="small">{{ skillLabelMap[hit.skill] || hit.skill }}</el-tag>
+            <span class="result-scenario">{{ hit.scenarioId }} ({{ hit.label }})</span>
             <el-tag v-if="hit.source === 'tenant_custom'" size="small" type="warning">租户样本</el-tag>
-            <span class="result-text">匹配: {{ hit.exampleText }}</span>
           </div>
+          <div class="result-text">匹配: {{ hit.exampleText }}</div>
         </div>
       </div>
     </div>
@@ -355,36 +303,20 @@ onMounted(() => {
     <!-- ── Create/Edit Dialog ── -->
     <el-dialog
       v-model="dialogVisible"
-      :title="editingItem ? '编辑意图样本' : '新增意图样本'"
+      :title="editingItem ? '编辑场景样本' : '新增场景样本'"
       width="560px"
-      @closed="form = { intent: '', label: '', skill: '', riskLevel: '', exampleText: '', enabled: true }"
+      @closed="form = { scenarioId: '', label: '', exampleText: '', enabled: true }"
     >
       <el-form label-position="top">
         <el-row :gutter="16">
           <el-col :span="12">
-            <el-form-item label="意图标识 (intent)">
-              <el-input v-model="form.intent" placeholder="例如：product_search" />
+            <el-form-item label="场景标识 (scenarioId)">
+              <el-input v-model="form.scenarioId" placeholder="例如：product.catalog" />
             </el-form-item>
           </el-col>
           <el-col :span="12">
-            <el-form-item label="意图名称 (label)">
+            <el-form-item label="场景名称 (label)">
               <el-input v-model="form.label" placeholder="例如：商品搜索" />
-            </el-form-item>
-          </el-col>
-        </el-row>
-        <el-row :gutter="16">
-          <el-col :span="12">
-            <el-form-item label="Skill">
-              <el-select v-model="form.skill" placeholder="选择 Skill" style="width: 100%">
-                <el-option v-for="opt in skillOptions" :key="opt.value" :label="opt.label" :value="opt.value" />
-              </el-select>
-            </el-form-item>
-          </el-col>
-          <el-col :span="12">
-            <el-form-item label="风险等级">
-              <el-select v-model="form.riskLevel" placeholder="选择风险等级" style="width: 100%">
-                <el-option v-for="opt in riskLevelOptions" :key="opt.value" :label="opt.label" :value="opt.value" />
-              </el-select>
             </el-form-item>
           </el-col>
         </el-row>
@@ -404,35 +336,19 @@ onMounted(() => {
     <!-- ── Batch Create Dialog ── -->
     <el-dialog
       v-model="batchDialogVisible"
-      title="批量新增意图样本"
+      title="批量新增场景样本"
       width="560px"
     >
       <el-form label-position="top">
         <el-row :gutter="16">
           <el-col :span="12">
-            <el-form-item label="意图标识 (intent)">
-              <el-input v-model="batchForm.intent" placeholder="例如：product_search" />
+            <el-form-item label="场景标识 (scenarioId)">
+              <el-input v-model="batchForm.scenarioId" placeholder="例如：product.catalog" />
             </el-form-item>
           </el-col>
           <el-col :span="12">
-            <el-form-item label="意图名称 (label)">
+            <el-form-item label="场景名称 (label)">
               <el-input v-model="batchForm.label" placeholder="例如：商品搜索" />
-            </el-form-item>
-          </el-col>
-        </el-row>
-        <el-row :gutter="16">
-          <el-col :span="12">
-            <el-form-item label="Skill">
-              <el-select v-model="batchForm.skill" placeholder="选择 Skill" style="width: 100%">
-                <el-option v-for="opt in skillOptions" :key="opt.value" :label="opt.label" :value="opt.value" />
-              </el-select>
-            </el-form-item>
-          </el-col>
-          <el-col :span="12">
-            <el-form-item label="风险等级">
-              <el-select v-model="batchForm.riskLevel" placeholder="选择风险等级" style="width: 100%">
-                <el-option v-for="opt in riskLevelOptions" :key="opt.value" :label="opt.label" :value="opt.value" />
-              </el-select>
             </el-form-item>
           </el-col>
         </el-row>
@@ -465,6 +381,6 @@ onMounted(() => {
   margin: 8px 0;
 }
 .result-header { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
-.result-intent { font-weight: 500; font-size: 13px; color: #303133; }
-.result-text { color: #909399; font-size: 13px; }
+.result-scenario { font-weight: 500; font-size: 13px; color: #303133; }
+.result-text { color: #909399; font-size: 13px; margin-top: 4px; }
 </style>

@@ -29,10 +29,12 @@ def _get_assistant_service() -> Any:
     return _assistant_service
 
 from app.ai.entry.buffer import ConversationMessageBuffer
+from app.ai.observability import observe_trace
 from app.core.websocket_manager import manager
 from app.models.conversation import Conversation, Message
 from app.schemas.conversation import ConversationUpdate, MessageCreate
 from app.services import conversation_service, outbound_message_service
+from app.common.constants.ai import AI_ROUTE_ASSISTANT_SERVICE, SWITCH_TO_AI_KEYWORD
 from app.services.usage_service import bind_usage_context
 
 logger = logging.getLogger(__name__)
@@ -93,7 +95,7 @@ class FilterPendingHuman(PipelineStep):
             return True
 
         text = (ctx.customer_message.content or "").strip()
-        if text == "智能客服":
+        if text == SWITCH_TO_AI_KEYWORD:
             logger.info("客户要求切回 AI：conversation_id=%s", ctx.conversation.id)
             await conversation_service.update_conversation(
                 ctx.db, ctx.conversation.id, ctx.conversation.tenant_id,
@@ -189,7 +191,7 @@ class RunAssistantOrchestrator(PipelineStep):
 
         # 组装 metadata
         metadata = {
-            "ai_route": "ASSISTANT_SERVICE",
+            "ai_route": AI_ROUTE_ASSISTANT_SERVICE,
             "scenario_id": result.metadata.get("scenario_id", ""),
             "pending_directive": result.metadata.get("pending_directive", "CLEAR"),
             "resource_trace": result.metadata.get("resource_trace", {}),
@@ -240,14 +242,23 @@ async def process_customer_message_with_ai(
         RunAssistantOrchestrator(),
     ]
 
-    try:
-        for step in steps:
-            await step.execute(ctx)
-            if ctx.should_stop:
-                break
-    finally:
-        if ctx.message_buffer is not None and ctx.release_lock:
-            await ctx.message_buffer.release_lock(ctx.conversation.tenant_id, ctx.conversation.id)
+    trace_name = f"message.{conversation.tenant_id}"
+    async with observe_trace(
+        trace_name,
+        user_id=str(conversation.contact_id),
+        session_id=str(conversation.id),
+        tags=["ai"],
+        input_data={"content": customer_message.content[:200]},
+        tenant_id=conversation.tenant_id,
+    ):
+        try:
+            for step in steps:
+                await step.execute(ctx)
+                if ctx.should_stop:
+                    break
+        finally:
+            if ctx.message_buffer is not None and ctx.release_lock:
+                await ctx.message_buffer.release_lock(ctx.conversation.tenant_id, ctx.conversation.id)
 
 
 # ──────────────────────────────────────────────

@@ -15,17 +15,13 @@ from app.utils.id_generator import generate_id
 class Conversation(Base):
     """客户会话"""
 
-    # ── 会话状态常量 ──
+    # ── 常量 ──
     STATUS_AI_PROCESSING = "ai_processing"
     STATUS_PENDING_HUMAN = "pending_human"
     STATUS_HUMAN_PROCESSING = "human_processing"
     STATUS_CLOSED = "closed"
-
-    # ── 处理类型常量 ──
     HANDLING_AI_ONLY = "ai_only"
     HANDLING_HUMAN = "human"
-
-    # ── 发送者类型常量 ──
     SENDER_CUSTOMER = "CUSTOMER"
     SENDER_AGENT = "AGENT"
     SENDER_AI = "AI"
@@ -33,58 +29,25 @@ class Conversation(Base):
 
     __tablename__ = "conversations"
 
-    id: Mapped[int] = mapped_column(
-        BigInteger, primary_key=True, default=generate_id, comment="主键"
-    )
-    tenant_id: Mapped[int] = mapped_column(
-        BigInteger, ForeignKey("tenants.id"), nullable=False, comment="租户ID"
-    )
-    contact_id: Mapped[int] = mapped_column(
-        BigInteger, ForeignKey("contacts.id"), nullable=False, comment="客户ID"
-    )
-    employee_id: Mapped[int | None] = mapped_column(
-        BigInteger, ForeignKey("employees.id"), nullable=True, comment="分配坐席ID"
-    )
-    platform_id: Mapped[int | None] = mapped_column(
-        BigInteger, ForeignKey("platforms.id"), nullable=True, comment="来源渠道ID"
-    )
-    status: Mapped[str] = mapped_column(
-        String(20),
-        nullable=False,
-        default=STATUS_AI_PROCESSING,
-        server_default=STATUS_AI_PROCESSING,
-        comment="会话状态: ai_processing / pending_human / human_processing / closed",
-    )
-    handling_type: Mapped[str] = mapped_column(
-        String(20),
-        nullable=False,
-        default=HANDLING_AI_ONLY,
-        server_default=HANDLING_AI_ONLY,
-        comment="处理类型: ai_only / human",
-    )
-    is_transferred: Mapped[bool] = mapped_column(
-        Boolean, nullable=False, default=False, server_default=text("false"), comment="是否已转人工"
-    )
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, default=generate_id, comment="主键")
+    tenant_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("tenants.id"), nullable=False, comment="租户ID")
+    contact_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("contacts.id"), nullable=False, comment="客户ID")
+    employee_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("employees.id"), nullable=True, comment="分配坐席ID")
+    platform_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("platforms.id"), nullable=True, comment="来源渠道ID")
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default=STATUS_AI_PROCESSING, server_default=STATUS_AI_PROCESSING, comment="会话状态: ai_processing / pending_human / human_processing / closed")
+    handling_type: Mapped[str] = mapped_column(String(20), nullable=False, default=HANDLING_AI_ONLY, server_default=HANDLING_AI_ONLY, comment="处理类型: ai_only / human")
+    is_transferred: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=text("false"), comment="是否已转人工")
     transfer_reason: Mapped[str | None] = mapped_column(Text, nullable=True, comment="转接原因")
     tags: Mapped[list | None] = mapped_column(JSONB, nullable=True, comment="会话标签")
-    last_message_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True, comment="最后消息时间"
-    )
-    idle_timeout_seconds: Mapped[int] = mapped_column(
-        Integer, nullable=False, default=1800, server_default="1800", comment="空闲超时秒数"
-    )
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), comment="创建时间"
-    )
-    closed_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True, comment="关闭时间"
-    )
+    last_message_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, comment="最后消息时间")
+    idle_timeout_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=1800, server_default="1800", comment="空闲超时秒数")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), comment="创建时间")
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, comment="关闭时间")
 
+    # ── 关联 ──
     contact: Mapped["Contact"] = relationship("Contact")
     employee: Mapped["Employee | None"] = relationship("Employee")
-    messages: Mapped[list["Message"]] = relationship(
-        "Message", back_populates="conversation", cascade="all, delete-orphan"
-    )
+    messages: Mapped[list["Message"]] = relationship("Message", back_populates="conversation", cascade="all, delete-orphan")
 
     __table_args__ = (
         Index("idx_conv_tenant_status", "tenant_id", "status"),
@@ -100,30 +63,16 @@ class Message(Base):
 
     __tablename__ = "messages"
 
-    id: Mapped[int] = mapped_column(
-        BigInteger, primary_key=True, default=generate_id, comment="主键"
-    )
-    conversation_id: Mapped[int] = mapped_column(
-        BigInteger, ForeignKey("conversations.id"), nullable=False, comment="会话ID"
-    )
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, default=generate_id, comment="主键")
+    conversation_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("conversations.id"), nullable=False, comment="会话ID")
     sender_type: Mapped[str] = mapped_column(String(10), nullable=False, comment="发送者类型")
-    content_type: Mapped[str] = mapped_column(
-        String(20), nullable=False, default="text", server_default="text", comment="内容类型"
-    )
+    content_type: Mapped[str] = mapped_column(String(20), nullable=False, default="text", server_default="text", comment="内容类型")
     content: Mapped[str | None] = mapped_column(Text, nullable=True, comment="消息内容")
     metadata_: Mapped[dict | None] = mapped_column("metadata", JSONB, nullable=True, comment="消息元数据")
-    reply_to_id: Mapped[int | None] = mapped_column(
-        BigInteger, ForeignKey("messages.id"), nullable=True, comment="回复消息ID"
-    )
-    is_read: Mapped[bool] = mapped_column(
-        Boolean, nullable=False, default=False, server_default=text("false"), comment="是否已读"
-    )
-    is_recalled: Mapped[bool] = mapped_column(
-        Boolean, nullable=False, default=False, server_default=text("false"), comment="是否已撤回"
-    )
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), comment="创建时间"
-    )
+    reply_to_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("messages.id"), nullable=True, comment="回复消息ID")
+    is_read: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=text("false"), comment="是否已读")
+    is_recalled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=text("false"), comment="是否已撤回")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), comment="创建时间")
 
     conversation: Mapped["Conversation"] = relationship("Conversation", back_populates="messages")
     reply_to: Mapped["Message | None"] = relationship("Message", remote_side=[id])

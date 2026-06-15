@@ -1,23 +1,4 @@
-"""销售智能服务 — 客户阶段推进、报价策略、待办/跟进计划、客户 360 视图。
-
-职责
-----
-本模块提供面向销售场景的智能辅助功能：
-  - 客户阶段推进（advance_contact_stage）：单向推进客户阶段（new→inquiry→negotiation→ordered→after_sales→closed）
-  - 报价策略（update_price_strategy）：根据商品底价/标准价自动分档，低于底价标记待审批
-  - 订单同步（sync_order_context）：订单创建/变更后自动更新客户阶段和商品上下文
-  - 待办管理（CRUD）：与聊天会话关联的待办事项，支持状态管理和自动完成时间记录
-  - 跟进计划（create_followup）：为联系人制定下次跟进计划，同步更新销售上下文
-  - 客户 360（get_contact_360）：聚合 7 表数据，一次性返回客户全景画像
-
-设计要点
---------
-- 阶段 rank 只允许向前推进，防止客户阶段回退（如从 "ordered" 退回 "negotiation"）
-- 报价低于底价时 automatic requires_approval=True，防止 AI 绕过底价规则
-- 所有金额使用 Decimal 精确计算，保留两位小数
-- sync_order_context 与 order_service 解耦：订单服务在创建/更新订单后调用本函数同步销售上下文
-- get_contact_360 涉及 7 表查询，仅在客户详情页使用，不在列表页频繁调用
-"""
+"""销售智能服务 — 客户阶段推进、报价策略、待办/跟进计划、客户 360 视图。"""
 
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -39,20 +20,7 @@ _STAGE_RANKS = {"new": 0, "inquiry": 1, "negotiation": 2, "ordered": 3, "after_s
 
 
 async def ensure_sales_context(db: AsyncSession, tenant_id: int, contact_id: int) -> SalesContext:
-    """懒初始化客户销售上下文。
-
-    参数：
-        db: 数据库会话
-        tenant_id: 租户 ID
-        contact_id: 联系人 ID
-
-    返回：
-        已存在的 SalesContext 或新创建的 SalesContext ORM 对象
-
-    说明：
-        该方法在每次需要访问销售上下文时调用，确保即使之前未初始化也能正常运行。
-        通过 db.flush() 而非 commit() 来生成 ID，允许在外部事务中统一提交。
-    """
+    """懒初始化客户销售上下文。"""
     context = await db.scalar(
         select(SalesContext).where(SalesContext.tenant_id == tenant_id, SalesContext.contact_id == contact_id)
     )
@@ -64,19 +32,7 @@ async def ensure_sales_context(db: AsyncSession, tenant_id: int, contact_id: int
 
 
 async def advance_contact_stage(db: AsyncSession, tenant_id: int, contact_id: int, stage: str) -> None:
-    """推进客户阶段（仅允许向前推进）。
-
-    参数：
-        db: 数据库会话
-        tenant_id: 租户 ID
-        contact_id: 联系人 ID
-        stage: 目标阶段，如 "inquiry"、"negotiation"、"ordered" 等
-
-    阶段流转规则：
-        new(0) → inquiry(1) → negotiation(2) → ordered(3) → after_sales(4) → closed(5)
-        仅当目标阶段 rank >= 当前阶段 rank 时才更新，防止阶段倒退。
-        同时更新 last_interaction_at 为当前 UTC 时间。
-    """
+    """推进客户阶段（仅允许向前推进）。"""
     context = await ensure_sales_context(db, tenant_id, contact_id)
     if _STAGE_RANKS.get(stage, 0) >= _STAGE_RANKS.get(context.stage, 0):
         context.stage = stage
@@ -84,23 +40,7 @@ async def advance_contact_stage(db: AsyncSession, tenant_id: int, contact_id: in
 
 
 async def sync_order_context(db: AsyncSession, order: Order) -> None:
-    """订单创建/变更后同步客户阶段和客户×商品上下文。
-
-    参数：
-        db: 数据库会话
-        order: 已创建的 Order ORM 对象（需包含 items 关系）
-
-    同步内容：
-        1. 客户阶段：根据订单状态决定客户整体阶段（ordered / negotiation）
-        2. 客户×商品上下文（ContactProductContext）：逐商品更新
-           - 商品交互阶段（ordered / negotiating）
-           - 已报价金额（quoted_price）
-           - 关联订单 ID
-
-    调用时机：
-        在 order_service 创建或更新订单后调用，确保销售管线数据与订单数据一致。
-        取消/草稿状态的订单不会将客户阶段推进到 ordered。
-    """
+    """订单创建/变更后同步客户阶段和客户×商品上下文。"""
     # 根据订单状态决定客户整体阶段
     stage = "ordered" if order.status not in {"draft", "cancelled"} else "negotiation"
     await advance_contact_stage(db, order.tenant_id, order.contact_id, stage)
@@ -138,35 +78,7 @@ async def update_price_strategy(
     product_name: str | None = None,
     quoted_price: float,
 ) -> dict:
-    """保存报价并自动分档（正常/折扣/低于底价待审批）。
-
-    参数：
-        db: 数据库会话
-        tenant_id: 租户 ID
-        contact_id: 联系人 ID
-        product_id: 商品 ID（与 product_name 二选一）
-        product_name: 商品名称（与 product_id 二选一）
-        quoted_price: 报价金额（float 类型，内部转为 Decimal 精确计算）
-
-    返回：
-        {
-            "product_id": str,         # 商品 ID
-            "product_name": str,       # 商品名称
-            "quoted_price": float,     # 报价金额
-            "floor_price": float,      # 商品底价
-            "price_level": int,        # 报价级别: 1=正常报价, 2=折扣, 3=低于底价
-            "pricing_level": str,      # 定价层级: "normal" / "discount" / "below_floor_pending"
-            "requires_approval": bool, # 是否需要人工审批（price_level==3 时为 True）
-        }
-
-    报价分档规则：
-        - price >= standard（标准价）           → price_level=1, "normal"（正常报价）
-        - floor <= price < standard             → price_level=2, "discount"（折扣报价）
-        - price < floor（底价）                  → price_level=3, "below_floor_pending"（低于底价待审批）
-
-    异常：
-        ValueError: 商品不存在或已下架，或未提供商品 ID/名称
-    """
+    """保存报价并自动分档（正常/折扣/低于底价待审批）。"""
     # 查找商品
     conditions = [Product.tenant_id == tenant_id, Product.is_active.is_(True)]
     if product_id is not None:
@@ -231,17 +143,7 @@ async def list_todos(
     conversation_id: int | None = None,
     contact_id: int | None = None,
 ) -> list[ConversationTodo]:
-    """查询待办列表，按状态升序、到期升序（无截止排最后）、创建降序排列。
-
-    参数：
-        db: 数据库会话
-        tenant_id: 租户 ID
-        conversation_id: 可选，按关联会话过滤
-        contact_id: 可选，按关联联系人过滤
-
-    返回：
-        排序后的 ConversationTodo 列表
-    """
+    """查询待办列表。"""
     stmt = select(ConversationTodo).where(ConversationTodo.tenant_id == tenant_id)
     if conversation_id is not None:
         stmt = stmt.where(ConversationTodo.conversation_id == conversation_id)
@@ -256,23 +158,7 @@ async def list_todos(
 
 
 async def create_todo(db: AsyncSession, tenant_id: int, body: TodoCreate) -> ConversationTodo:
-    """创建待办事项。
-
-    参数：
-        db: 数据库会话
-        tenant_id: 租户 ID
-        body: 待办创建请求体，包含 conversation_id、content、keywords、due_at、created_by_type
-
-    返回：
-        创建的 ConversationTodo ORM 对象
-
-    业务逻辑：
-        待办自动从关联会话继承 contact_id，确保待办与客户关联。
-        通常由客服在与客户对话中手动创建，用于标记需后续跟进的事项。
-
-    异常：
-        ValueError: 关联的会话不存在或不属于当前租户
-    """
+    """创建待办事项。"""
     conversation = await db.scalar(
         select(Conversation).where(
             Conversation.id == body.conversation_id,
@@ -297,21 +183,7 @@ async def create_todo(db: AsyncSession, tenant_id: int, body: TodoCreate) -> Con
 
 
 async def update_todo(db: AsyncSession, tenant_id: int, todo_id: int, body: TodoUpdate) -> ConversationTodo | None:
-    """部分更新待办事项。
-
-    参数：
-        db: 数据库会话
-        tenant_id: 租户 ID
-        todo_id: 待办 ID
-        body: 待办更新请求体（所有字段可选）
-
-    返回：
-        更新后的 ConversationTodo，若不存在或不属于该租户则返回 None
-
-    自动行为：
-        - status='done' 时自动记录完成时间（completed_at）
-        - status 改为其他值时自动清除完成时间
-    """
+    """部分更新待办事项。"""
     todo = await db.scalar(
         select(ConversationTodo).where(
             ConversationTodo.id == todo_id,
@@ -330,24 +202,7 @@ async def update_todo(db: AsyncSession, tenant_id: int, todo_id: int, body: Todo
 
 
 async def create_followup(db: AsyncSession, tenant_id: int, body: FollowupPlanCreate) -> FollowupPlan:
-    """创建跟进计划，同步更新销售上下文跟进状态为 scheduled。
-
-    参数：
-        db: 数据库会话
-        tenant_id: 租户 ID
-        body: 跟进计划创建请求体，包含 contact_id、content、scheduled_at 等
-
-    返回：
-        创建的 FollowupPlan ORM 对象
-
-    业务逻辑：
-        1. 验证联系人存在且属于当前租户
-        2. 创建跟进计划记录
-        3. 同步更新销售上下文（SalesContext）的跟进状态和时间
-
-    异常：
-        ValueError: 联系人不存在或不属于当前租户
-    """
+    """创建跟进计划，同步更新销售上下文跟进状态为 scheduled。"""
     contact = await db.scalar(
         select(Contact).where(Contact.id == body.contact_id, Contact.tenant_id == tenant_id)
     )
@@ -366,35 +221,7 @@ async def create_followup(db: AsyncSession, tenant_id: int, body: FollowupPlanCr
 
 
 async def get_contact_360(db: AsyncSession, tenant_id: int, contact_id: int) -> dict | None:
-    """获取客户 360 全景画像（聚合视图）。
-
-    参数：
-        db: 数据库会话
-        tenant_id: 租户 ID
-        contact_id: 联系人 ID
-
-    返回：
-        None（联系人不存在）或包含以下字段的字典：
-        {
-            "contact_id": int,              # 联系人 ID
-            "name": str,                    # 姓名
-            "phone": str,                   # 电话
-            "address": str,                 # 地址
-            "tags": list[str],              # 标签列表
-            "assigned_employee_name": str,  # 分配的坐席名称
-            "sales_context": SalesContext,  # 销售上下文（阶段/意向/预算等）
-            "memories": list[SalesMemory],  # 销售记忆列表
-            "product_contexts": list[(ContactProductContext, product_name)],  # 商品交互上下文
-            "orders": list[dict],           # 最近 5 笔订单摘要
-            "todos": list[ConversationTodo],# 待办事项列表
-            "followups": list[FollowupPlan],# 最近 10 条跟进计划
-        }
-
-    性能注意：
-        涉及 7 张表的跨表聚合查询（Contact + SalesContext + Employee + SalesMemory
-        + ContactProductContext + Product + Order + ConversationTodo + FollowupPlan）。
-        仅在客户详情页（右侧画像面板）调用，勿在列表页频繁使用。
-    """
+    """获取客户 360 全景画像（聚合视图）。"""
     contact = await db.scalar(
         select(Contact).where(Contact.id == contact_id, Contact.tenant_id == tenant_id)
     )
@@ -449,7 +276,6 @@ async def get_contact_360(db: AsyncSession, tenant_id: int, contact_id: int) -> 
         ).order_by(FollowupPlan.scheduled_at.desc()).limit(10)
     )).scalars().all())
 
-    await db.commit()
     return {
         "contact_id": contact.id,
         "name": contact.name,

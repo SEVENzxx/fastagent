@@ -1,13 +1,13 @@
 """角色与权限模型"""
 
 from datetime import datetime
-from enum import Enum
 from typing import TYPE_CHECKING
 
 from sqlalchemy import BigInteger, DateTime, ForeignKey, Index, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
 
+from app.common.enums.base import LabeledEnum
 from app.models.base import Base
 from app.utils.id_generator import generate_id
 
@@ -65,7 +65,7 @@ class Role(Base):
 
 # ── 权限码枚举 ───────────────────────────────────────────────────────────
 
-class PermissionCode(str, Enum):
+class PermissionCode(LabeledEnum):
     # ── 会话 ──
     VIEW_ASSIGNED_CHATS = "view_assigned_chats"
     VIEW_ALL_CHATS = "view_all_chats"
@@ -126,6 +126,47 @@ class PermissionCode(str, Enum):
     MANAGE_BACKUPS = "manage_backups"
     MANAGE_SYSTEM_SETTINGS = "manage_system_settings"
     EXPORT_DATA = "export_data"
+
+    @property
+    def label(self) -> str:
+        labels = {
+            PermissionCode.VIEW_ASSIGNED_CHATS: "查看分配给我的会话",
+            PermissionCode.VIEW_ALL_CHATS: "查看所有会话",
+            PermissionCode.MANAGE_CONVERSATIONS: "管理会话（回复/转接/关闭）",
+            PermissionCode.VIEW_CONTACTS: "查看客户/联系人列表",
+            PermissionCode.MANAGE_CONTACTS: "管理客户/联系人（添加/编辑/删除）",
+            PermissionCode.EXPORT_CONTACTS: "导出客户列表",
+            PermissionCode.VIEW_PRODUCTS: "查看商品列表",
+            PermissionCode.MANAGE_PRODUCTS: "管理商品（添加/编辑/删除）",
+            PermissionCode.VIEW_ORDERS: "查看订单列表",
+            PermissionCode.MANAGE_ORDERS: "管理订单（创建/编辑）",
+            PermissionCode.UPDATE_ORDER_STATUS: "更新订单状态",
+            PermissionCode.VIEW_KB: "查看知识库",
+            PermissionCode.MANAGE_KB: "管理知识库（上传/编辑/删除）",
+            PermissionCode.VIEW_MARKETING: "查看营销资料",
+            PermissionCode.MANAGE_MARKETING: "管理营销资料",
+            PermissionCode.VIEW_IMAGES: "查看图片库",
+            PermissionCode.MANAGE_IMAGES: "管理图片库",
+            PermissionCode.VIEW_EMPLOYEES: "查看员工列表",
+            PermissionCode.MANAGE_EMPLOYEES: "管理员工（添加/编辑/删除）",
+            PermissionCode.MANAGE_ROLES: "管理角色与权限",
+            PermissionCode.VIEW_BILLING: "查看计费信息",
+            PermissionCode.MANAGE_BILLING: "管理计费设置",
+            PermissionCode.VIEW_ANALYTICS: "查看数据分析",
+            PermissionCode.EXPORT_ANALYTICS: "导出分析报告",
+            PermissionCode.VIEW_CHANNELS: "查看渠道配置",
+            PermissionCode.MANAGE_CHANNELS: "管理渠道配置",
+            PermissionCode.MANAGE_LLM_CONFIG: "管理 LLM 配置",
+            PermissionCode.MANAGE_SENSITIVE_WORDS: "管理敏感词",
+            PermissionCode.MANAGE_INTENT_SAMPLES: "管理意图样本",
+            PermissionCode.MANAGE_TENANTS: "管理租户（平台专有）",
+            PermissionCode.MANAGE_PLANS: "管理套餐（平台专有）",
+            PermissionCode.VIEW_AUDIT_LOGS: "查看审计日志（平台专有）",
+            PermissionCode.MANAGE_BACKUPS: "管理备份（平台专有）",
+            PermissionCode.MANAGE_SYSTEM_SETTINGS: "管理系统设置（平台专有）",
+            PermissionCode.EXPORT_DATA: "导出平台数据（平台专有）",
+        }
+        return labels[self]
 
 
 # ── 权限 ──────────────────────────────────────────────────────────────────

@@ -27,18 +27,7 @@ class MarketingService:
         limit: int = 20,
         is_active: bool | None = None,
     ) -> tuple[list[MarketingDocument], int]:
-        """分页查询租户下营销素材列表。
-
-        参数：
-            db: 异步数据库会话。
-            tenant_id: 租户 ID。
-            skip: 跳过的记录数（偏移）。
-            limit: 最大返回数。
-            is_active: 可选，按启用状态过滤。
-
-        返回：
-            (素材列表, 总数) 元组。
-        """
+        """分页查询租户下营销素材列表。"""
         stmt = select(MarketingDocument).where(MarketingDocument.tenant_id == tenant_id)
         if is_active is not None:
             stmt = stmt.where(MarketingDocument.is_active == is_active)
@@ -61,20 +50,7 @@ class MarketingService:
         top_k: int = 5,
         is_active: bool | None = True,
     ) -> list[MarketingDocument]:
-        """通过 Qdrant 语义搜索租户下的营销素材。
-
-        按向量相似度召回后，再查 DB 获取完整记录，按召回顺序排列。
-
-        参数：
-            db: 异步数据库会话。
-            tenant_id: 租户 ID。
-            query: 搜索查询文本。
-            top_k: 最大召回数量。
-            is_active: 过滤是否启用的素材（None 表示不过滤）。
-
-        返回：
-            匹配的营销素材列表。
-        """
+        """通过 Qdrant 语义搜索租户下的营销素材。"""
         hits = await self.vector_search.search_text(
             domain=VectorDomain.MARKETING_DOCUMENT,
             tenant_id=tenant_id,
@@ -98,16 +74,7 @@ class MarketingService:
         return docs
 
     async def get_doc(self, db: AsyncSession, doc_id: int, tenant_id: int) -> MarketingDocument | None:
-        """按 ID 获取租户下单个营销素材。
-
-        参数：
-            db: 异步数据库会话。
-            doc_id: 素材 ID。
-            tenant_id: 租户 ID。
-
-        返回：
-            素材对象，不存在返回 None。
-        """
+        """按 ID 获取租户下单个营销素材。"""
         stmt = select(MarketingDocument).where(
             MarketingDocument.id == doc_id,
             MarketingDocument.tenant_id == tenant_id,
@@ -125,22 +92,7 @@ class MarketingService:
         question_associations: list[str] | None = None,
         employee_id: int | None = None,
     ) -> MarketingDocument:
-        """创建营销素材并同步索引到 Qdrant。
-
-        创建后立即进行向量索引，确保搜索立即可用。
-
-        参数：
-            db: 异步数据库会话。
-            tenant_id: 租户 ID。
-            title: 素材标题。
-            file_url: 素材文件 URL。
-            file_type: 文件类型。
-            question_associations: 关联的常见问题列表（用于搜索召回）。
-            employee_id: 创建者员工 ID。
-
-        返回：
-            新创建的素材对象。
-        """
+        """创建营销素材并同步索引到 Qdrant。"""
         doc = MarketingDocument(
             tenant_id=tenant_id,
             title=title,
@@ -167,21 +119,7 @@ class MarketingService:
         question_associations: list[str] | None = None,
         is_active: bool | None = None,
     ) -> MarketingDocument | None:
-        """部分更新营销素材，更新后重新索引到 Qdrant。
-
-        参数：
-            db: 异步数据库会话。
-            doc_id: 素材 ID。
-            tenant_id: 租户 ID。
-            title: 新标题（可选）。
-            file_url: 新文件 URL（可选）。
-            file_type: 新文件类型（可选）。
-            question_associations: 新关联问题列表（可选）。
-            is_active: 新启用状态（可选）。
-
-        返回：
-            更新后的素材对象，不存在返回 None。
-        """
+        """部分更新营销素材，更新后重新索引到 Qdrant。"""
         doc = await self.get_doc(db, doc_id, tenant_id)
         if not doc:
             return None
@@ -201,16 +139,7 @@ class MarketingService:
         return doc
 
     async def delete_doc(self, db: AsyncSession, doc_id: int, tenant_id: int) -> bool:
-        """删除营销素材并清理对应的 Qdrant 向量。
-
-        参数：
-            db: 异步数据库会话。
-            doc_id: 素材 ID。
-            tenant_id: 租户 ID。
-
-        返回：
-            成功删除返回 True，不存在返回 False。
-        """
+        """删除营销素材并清理对应的 Qdrant 向量。"""
         doc = await self.get_doc(db, doc_id, tenant_id)
         if not doc:
             return False

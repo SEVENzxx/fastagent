@@ -21,27 +21,7 @@ from app.models.tenant import Tenant
 from app.utils.id_generator import generate_id
 
 
-AGENT_PERMISSION_CODES = {
-    PermissionCode.VIEW_ASSIGNED_CHATS.value,
-    PermissionCode.MANAGE_CONVERSATIONS.value,
-    PermissionCode.VIEW_CONTACTS.value,
-    PermissionCode.VIEW_PRODUCTS.value,
-    PermissionCode.VIEW_ORDERS.value,
-    PermissionCode.VIEW_KB.value,
-    PermissionCode.VIEW_MARKETING.value,
-    PermissionCode.VIEW_IMAGES.value,
-}
-
-# 租户管理员权限：全部业务权限，排除了超管专有的平台管理权限
-# MANAGE_TENANTS / MANAGE_PLANS / VIEW_AUDIT_LOGS / MANAGE_BACKUPS / MANAGE_SYSTEM_SETTINGS / EXPORT_DATA
-PLATFORM_ONLY_PERMISSION_CODES = {
-    PermissionCode.MANAGE_TENANTS.value,
-    PermissionCode.MANAGE_PLANS.value,
-    PermissionCode.VIEW_AUDIT_LOGS.value,
-    PermissionCode.MANAGE_BACKUPS.value,
-    PermissionCode.MANAGE_SYSTEM_SETTINGS.value,
-    PermissionCode.EXPORT_DATA.value,
-}
+from app.services.role_service import AGENT_PERMISSION_CODES, PLATFORM_ONLY_PERMISSION_CODES
 
 
 def _slugify(name: str) -> str:

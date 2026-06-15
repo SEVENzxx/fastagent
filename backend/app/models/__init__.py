@@ -16,7 +16,7 @@ from app.models.operations import AuditLog, LoginHistory, SensitiveWord, SystemN
 from app.models.product import Product
 from app.models.qa_pair import QAPair
 from app.models.sales_memory import SalesMemory
-from app.models.sales_intelligence import ContactProductContext, ConversationTodo, FollowupPlan, SalesContext, SalesTemplate
+from app.models.sales_intelligence import ContactProductContext, ConversationTodo, FollowupPlan, SalesContext
 from app.models.tenant import Tenant
 from app.models.usage import LLMUsageLog
 from app.models.system import BackupRecord, SystemSetting
@@ -48,7 +48,6 @@ __all__ = [
     "SalesMemory",
     "SalesContext",
     "ContactProductContext",
-    "SalesTemplate",
     "FollowupPlan",
     "ConversationTodo",
     "Tenant",

@@ -8,7 +8,7 @@
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.database import get_db
+from app.integrations.database import get_db
 from app.dependencies import get_current_user
 from app.models.employee import Employee
 from app.schemas import (

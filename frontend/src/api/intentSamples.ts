@@ -7,10 +7,8 @@ import request from './request'
 export interface IntentSampleResponse {
   id: string
   tenantId: string
-  intent: string
+  scenarioId: string
   label: string
-  skill: string
-  riskLevel: string
   exampleText: string
   enabled: boolean
   source: string
@@ -26,36 +24,29 @@ export interface IntentSampleListResponse {
 }
 
 export interface IntentSampleCreate {
-  intent: string
+  scenarioId: string
   label: string
-  skill: string
-  riskLevel: string
   exampleText: string
   enabled?: boolean
 }
 
 export interface IntentSampleUpdate {
-  intent?: string
+  scenarioId?: string
   label?: string
-  skill?: string
-  riskLevel?: string
   exampleText?: string
   enabled?: boolean
 }
 
 export interface IntentSampleBatchCreate {
-  intent: string
+  scenarioId: string
   label: string
-  skill: string
-  riskLevel: string
   examples: string[]
   enabled?: boolean
 }
 
 export interface IntentSampleTestHit {
-  intent: string
+  scenarioId: string
   label: string
-  skill: string
   score: number
   exampleText: string
   source: string
@@ -82,8 +73,7 @@ export interface RiskLevelOption {
 // ---------------------------------------------------------------------------
 
 export function listIntentSamples(params?: {
-  intent?: string
-  skill?: string
+  scenarioId?: string
   enabled?: boolean
   skip?: number
   limit?: number

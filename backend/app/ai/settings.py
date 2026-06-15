@@ -1,6 +1,6 @@
 """AI 应用层魔法值常量集中管理。
 
-所有超时、限制、默认值必须定义在此，禁止散落在 Handler/Skill/Service 中。
+应用层业务常量集中管理，禁止散落在 Handler/Skill/Service 中。超时等运维参数在 config.py 中通过 .env 配置。
 """
 
 from __future__ import annotations
@@ -14,15 +14,13 @@ RECENT_ORDERS_LIMIT: int = 10          # 最近订单列表长度上限
 BATCH_GET_PRODUCTS_LIMIT: int = 10     # 批量查询商品 ID 上限
 LAST_KNOWLEDGE_REFS_MAX: int = 5       # last_knowledge_refs 保留条数上限
 
-# ── 超时（秒）──
-LLM_TIMEOUT_SECONDS: int = 30          # LLM 调用超时
-DB_TIMEOUT_SECONDS: int = 5            # 数据库查询超时
-REDIS_TIMEOUT_SECONDS: int = 2         # Redis 读写超时
-
 # ── LLM 限制 ──
 LLM_ENTITY_EXTRACT_MAX_TOKENS: int = 500  # 实体抽取 LLM 最大 token
+PRODUCT_ATTR_EXTRACT_MAX_TOKENS: int = 1024  # 商品属性抽取 max_tokens
 PRODUCT_KNOWLEDGE_TOP_K: int = 5          # 商品知识检索 top_k
 POLICY_KNOWLEDGE_TOP_K: int = 5           # 政策知识检索 top_k
+SCENE_RECOGNITION_MAX_TOKENS: int = 200   # 场景识别 LLM 判决 max_tokens
+SEMANTIC_RECOMMEND_MAX_TOKENS: int = 512  # 语义推荐 LLM max_tokens
 
 # ── Pending ──
 PENDING_TTL_SECONDS: int = 1800        # Pending 默认 TTL（30 分钟）

@@ -85,7 +85,7 @@ async def close_checkpointer() -> None:
             if hasattr(_CHECKPOINTER, "conn"):
                 await _CHECKPOINTER.conn.close()
         except Exception:
-            pass
+            logger.warning("关闭下单 checkpointer 连接失败")
     _CHECKPOINTER = None
     _GRAPH_INSTANCE = None
 
@@ -224,7 +224,7 @@ async def resolve_product_node(
                     "quantity": 1,
                 }
         except (ValueError, IndexError):
-            pass
+            logger.debug("下单：用户序号选择无效")
         return {"error": "无效的选择，请重新选择。", "reply": "请输入有效的商品编号。"}
 
     # 首次调用：尝试 DB 解析

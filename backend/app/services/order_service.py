@@ -1,4 +1,4 @@
-"""订单管理 service — Phase 10"""
+"""订单管理 service。"""
 
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -34,26 +34,7 @@ async def list_orders(
     page: int = 1,
     page_size: int = 20,
 ) -> tuple[list[Order], int]:
-    """分页查询租户下的订单列表。
-
-    支持按联系人、状态（单值或多值）、创建时间范围、负责坐席多维度过滤。
-    所有过滤条件均在 SQL 层面执行，不做内存过滤。
-
-    参数：
-        db: 异步数据库会话。
-        tenant_id: 租户 ID。
-        contact_id: 可选，按联系人过滤。
-        status: 可选，按订单状态过滤。
-        status__in: 可选，按多个状态过滤（与 status 互斥，同时传入时使用 status__in）。
-        created_from: 可选，创建时间起始（含）。
-        created_to: 可选，创建时间截止（不含）。
-        employee_id: 可选，按负责坐席过滤。
-        page: 页码（从 1 开始）。
-        page_size: 每页条数。
-
-    返回：
-        (订单列表, 总数) 元组。
-    """
+    """分页查询租户下的订单列表。"""
     conditions = [Order.tenant_id == tenant_id]
     if contact_id is not None:
         conditions.append(Order.contact_id == contact_id)
@@ -85,16 +66,7 @@ async def list_orders(
 async def get_order(
     db: AsyncSession, order_id: int, tenant_id: int
 ) -> Order | None:
-    """按 ID 获取租户下单个订单，自动附带联系人名称。
-
-    参数：
-        db: 异步数据库会话。
-        order_id: 订单 ID。
-        tenant_id: 租户 ID。
-
-    返回：
-        订单对象，不存在返回 None。
-    """
+    """按 ID 获取租户下单个订单，自动附带联系人名称。"""
     order = await db.scalar(
         select(Order).where(
             Order.id == order_id,
@@ -116,71 +88,10 @@ async def create_order(
     created_by_type: str = "agent",
     created_by_employee_id: int | None = None,
 ) -> Order:
-    """创建订单，含商品快照生成、总价计算和销售上下文同步。
+    """创建订单，含商品快照生成、总价计算和销售上下文同步。"""
+    effective_contact_id = await _resolve_contact_for_order(db, tenant_id, contact_id, body.contact_id)
 
-    SaaS 要点：必须校验 contact 和 product 都属于当前 tenant_id，
-    商品不存在时直接拒绝（不采用搜索型接口的宽松策略）。
-
-    参数：
-        db: 异步数据库会话。
-        tenant_id: 租户 ID。
-        body: 订单创建请求体（含 items 和地址/联系方式）。
-        contact_id: 备选联系人 ID（body 中未传时使用）。
-        conversation_id: 关联会话 ID。
-        created_by_type: 创建来源（"agent" / "customer" / "system"）。
-        created_by_employee_id: 创建者员工 ID。
-
-    返回：
-        新创建的 Order ORM 对象（含 items 关系和联系人名称）。
-
-    异常：
-        ValueError: 联系人或商品不存在于当前租户。
-    """
-    effective_contact_id = body.contact_id or contact_id
-    if effective_contact_id is None:
-        raise ValueError("contact_id 为必填项")
-
-    # 验证联系人在租户内
-    contact_exists = await db.scalar(
-        select(Contact.id).where(
-            Contact.id == effective_contact_id,
-            Contact.tenant_id == tenant_id,
-        )
-    )
-    if contact_exists is None:
-        raise ValueError("联系人不存在")
-
-    # 解析商品并生成快照
-    item_data: list[dict] = []
-    total_amount = Decimal("0")
-
-    for item in body.items:
-        product = await _match_product(db, tenant_id, item.product_name)
-        if product is None:
-            # 下单是有金额、库存和底价约束的业务写操作，不能沿用“搜索不到就保留
-            # 用户原文”的宽松策略。否则错误文本会生成 0 元订单，后续库存扣减和
-            # 报价审批也失去商品依据。
-            raise ValueError(f"未找到可下单商品：{item.product_name}")
-        unit_price = product.price if product.price else Decimal("0")
-        qty = Decimal(str(item.quantity))
-        sub = (unit_price * qty).quantize(Decimal("0.01"))
-
-        snapshot = {
-            "product_name": item.product_name,
-            "sku": product.sku,
-            "specs": product.specs,
-            "original_price": float(product.price) if product.price else None,
-            "floor_price": float(product.floor_price) if product.floor_price else None,
-        }
-
-        item_data.append({
-            "product_id": product.id,
-            "product_snapshot": snapshot,
-            "quantity": item.quantity,
-            "unit_price": float(unit_price),
-            "subtotal": float(sub),
-        })
-        total_amount += sub
+    item_data, total_amount = await _build_order_items_and_total(db, tenant_id, body.items)
 
     discount = Decimal("0")
     payable = total_amount - discount
@@ -233,22 +144,7 @@ async def update_order(
     tenant_id: int,
     body: OrderUpdate,
 ) -> Order | None:
-    """更新订单信息，支持增删商品和修改地址/备注等基础字段。
-
-    每次更新后重算 total_amount 和 payable_amount。
-
-    参数：
-        db: 异步数据库会话。
-        order_id: 订单 ID。
-        tenant_id: 租户 ID。
-        body: 订单更新请求体。
-
-    返回：
-        更新后的订单，不存在返回 None。
-
-    异常：
-        ValueError: 新增商品不存在于当前租户。
-    """
+    """更新订单信息，支持增删商品和修改地址/备注等基础字段。"""
     order = await get_order(db, order_id, tenant_id)
     if order is None:
         return None
@@ -266,42 +162,11 @@ async def update_order(
         order.discount_amount = body.discount_amount
         order.payable_amount = round(order.total_amount - body.discount_amount, 2)
 
-    # 新增商品
     if body.add_items:
-        for add_item in body.add_items:
-            product = await _match_product(db, tenant_id, add_item.product_name)
-            if product is None:
-                raise ValueError(f"未找到可添加商品：{add_item.product_name}")
-            unit_price = product.price if product.price else 0
-            sub = round(unit_price * add_item.quantity, 2)
-            snapshot = {
-                "product_name": add_item.product_name,
-                "sku": product.sku,
-                "original_price": float(product.price) if product.price else None,
-            }
-            order_item = OrderItem(
-                order_id=order.id,
-                product_id=product.id,
-                product_snapshot=snapshot,
-                quantity=add_item.quantity,
-                unit_price=unit_price,
-                subtotal=sub,
-            )
-            db.add(order_item)
-            order.total_amount = round(order.total_amount + sub, 2)
+        await _add_order_items(db, order, tenant_id, body.add_items)
 
-    # 删除商品
     if body.remove_item_ids:
-        for item_id in body.remove_item_ids:
-            item = await db.scalar(
-                select(OrderItem).where(
-                    OrderItem.id == item_id,
-                    OrderItem.order_id == order.id,
-                )
-            )
-            if item:
-                order.total_amount = round(order.total_amount - item.subtotal, 2)
-                await db.delete(item)
+        await _remove_order_items(db, order, body.remove_item_ids)
 
     order.payable_amount = round(order.total_amount - order.discount_amount, 2)
     metadata = dict(order.metadata_ or {})
@@ -320,23 +185,7 @@ async def transition_order_status(
     tenant_id: int,
     to_status: str,
 ) -> Order | None:
-    """变更订单状态，校验状态流转规则并自动处理库存。
-
-    agent_confirmed 时扣减库存，cancelled 时恢复库存。
-    各里程碑状态（confirmed/shipped/signed）自动记录时间戳。
-
-    参数：
-        db: 异步数据库会话。
-        order_id: 订单 ID。
-        tenant_id: 租户 ID。
-        to_status: 目标状态。
-
-    返回：
-        更新后的订单，不存在返回 None。
-
-    异常：
-        ValueError: 状态流转不允许（如从已签收退回）。库存不足。
-    """
+    """变更订单状态，校验状态流转规则并自动处理库存。"""
     order = await get_order(db, order_id, tenant_id)
     if order is None:
         return None
@@ -381,17 +230,7 @@ async def batch_transition_status(
     order_ids: list[int],
     to_status: str,
 ) -> tuple[list[int], list[int]]:
-    """批量变更订单状态，逐条处理并收集成功/失败 ID。
-
-    参数：
-        db: 异步数据库会话。
-        tenant_id: 租户 ID。
-        order_ids: 订单 ID 列表。
-        to_status: 目标状态。
-
-    返回：
-        (成功 ID 列表, 失败 ID 列表) 元组。
-    """
+    """批量变更订单状态，逐条处理并收集成功/失败 ID。"""
     succeeded: list[int] = []
     failed: list[int] = []
 
@@ -413,16 +252,7 @@ async def cancel_order(
     order_id: int,
     tenant_id: int,
 ) -> bool:
-    """取消订单，内部调用 transition_order_status("cancelled")。
-
-    参数：
-        db: 异步数据库会话。
-        order_id: 订单 ID。
-        tenant_id: 租户 ID。
-
-    返回：
-        成功取消返回 True，状态不可变更返回 False。
-    """
+    """取消订单，内部调用 transition_order_status("cancelled")。"""
     try:
         order = await transition_order_status(db, order_id, tenant_id, "cancelled")
         return order is not None
@@ -433,6 +263,108 @@ async def cancel_order(
 # ---------------------------------------------------------------------------
 # 内部辅助函数
 # ---------------------------------------------------------------------------
+
+
+async def _resolve_contact_for_order(
+    db: AsyncSession,
+    tenant_id: int,
+    contact_id: int | None,
+    body_contact_id: int | None,
+) -> int:
+    """校验联系人存在于当前租户，返回有效 contact_id。"""
+    effective_contact_id = body_contact_id or contact_id
+    if effective_contact_id is None:
+        raise ValueError("contact_id 为必填项")
+    contact_exists = await db.scalar(
+        select(Contact.id).where(
+            Contact.id == effective_contact_id,
+            Contact.tenant_id == tenant_id,
+        )
+    )
+    if contact_exists is None:
+        raise ValueError("联系人不存在")
+    return effective_contact_id
+
+
+async def _build_order_items_and_total(
+    db: AsyncSession,
+    tenant_id: int,
+    items: list[object],
+) -> tuple[list[dict], Decimal]:
+    """解析商品并生成快照，返回 (item_data, total_amount)。"""
+    item_data: list[dict] = []
+    total_amount = Decimal("0")
+    for item in items:
+        product = await _match_product(db, tenant_id, item.product_name)
+        if product is None:
+            raise ValueError(f"未找到可下单商品：{item.product_name}")
+        unit_price = product.price if product.price else Decimal("0")
+        qty = Decimal(str(item.quantity))
+        sub = (unit_price * qty).quantize(Decimal("0.01"))
+        snapshot = {
+            "product_name": item.product_name,
+            "sku": product.sku,
+            "specs": product.specs,
+            "original_price": float(product.price) if product.price else None,
+            "floor_price": float(product.floor_price) if product.floor_price else None,
+        }
+        item_data.append({
+            "product_id": product.id,
+            "product_snapshot": snapshot,
+            "quantity": item.quantity,
+            "unit_price": float(unit_price),
+            "subtotal": float(sub),
+        })
+        total_amount += sub
+    return item_data, total_amount
+
+
+async def _add_order_items(
+    db: AsyncSession,
+    order: Order,
+    tenant_id: int,
+    add_items: list[object],
+) -> None:
+    """向已有订单追加商品，同时更新 order.total_amount。"""
+    for add_item in add_items:
+        product = await _match_product(db, tenant_id, add_item.product_name)
+        if product is None:
+            raise ValueError(f"未找到可添加商品：{add_item.product_name}")
+        unit_price = product.price if product.price else 0
+        sub = round(unit_price * add_item.quantity, 2)
+        snapshot = {
+            "product_name": add_item.product_name,
+            "sku": product.sku,
+            "original_price": float(product.price) if product.price else None,
+        }
+        order_item = OrderItem(
+            order_id=order.id,
+            product_id=product.id,
+            product_snapshot=snapshot,
+            quantity=add_item.quantity,
+            unit_price=unit_price,
+            subtotal=sub,
+        )
+        db.add(order_item)
+        order.total_amount = round(order.total_amount + sub, 2)
+
+
+async def _remove_order_items(
+    db: AsyncSession,
+    order: Order,
+    remove_item_ids: list[int],
+) -> None:
+    """从订单中删除指定商品行，同时更新 order.total_amount。"""
+    for item_id in remove_item_ids:
+        item = await db.scalar(
+            select(OrderItem).where(
+                OrderItem.id == item_id,
+                OrderItem.order_id == order.id,
+            )
+        )
+        if item:
+            order.total_amount = round(order.total_amount - item.subtotal, 2)
+            await db.delete(item)
 
 
 async def _match_product(

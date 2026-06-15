@@ -3,7 +3,7 @@
 from fastapi import APIRouter, BackgroundTasks, Depends, Form, HTTPException, Query, UploadFile, File
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.database import AsyncSessionLocal, get_db
+from app.integrations.database import AsyncSessionLocal, get_db
 from app.dependencies import require_permission
 from app.models.employee import Employee
 from app.models.role import PermissionCode

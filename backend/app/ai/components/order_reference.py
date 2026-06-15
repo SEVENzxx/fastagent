@@ -152,7 +152,7 @@ class OrderReferenceResolver:
           5. active_order_id + 指代引用或物流查询 → resolved
           6. 兜底订单意图 → recent
         """
-        _ = contact_id  # 阶段 6 暂不使用，阶段 7 Handler 注入时按 contact 过滤
+        _ = contact_id
 
         if not isinstance(text, str) or not text.strip():
             return OrderReferenceResult(
@@ -160,93 +160,126 @@ class OrderReferenceResolver:
                 reference_type="unresolved",
             )
 
-        # 1. 显式订单号
+        result = (
+            self._try_order_number(text)
+            or await self._try_ordinal(text, context)
+            or self._try_status_time(text)
+            or self._try_list_intent(text)
+            or self._try_active_order(text, context)
+            or self._try_general_intent(text)
+        )
+        return result or OrderReferenceResult(
+            reason="未识别到订单引用",
+            reference_type="unresolved",
+        )
+
+    # ──────────────────────────────────────
+    # 解析步骤（按优先级）
+    # ──────────────────────────────────────
+
+    @staticmethod
+    def _try_order_number(text: str) -> OrderReferenceResult | None:
+        """步骤 1：显式订单号（8 位以上数字）。"""
         order_number = _extract_order_number(text)
-        if order_number:
-            return OrderReferenceResult(
-                resolved=True,
-                order_id=int(order_number),
-                order_number=order_number,
-                reference_type="order_number",
-                reason=f"解析到订单号 {order_number}",
-            )
+        if not order_number:
+            return None
+        return OrderReferenceResult(
+            resolved=True,
+            order_id=int(order_number),
+            order_number=order_number,
+            reference_type="order_number",
+            reason=f"解析到订单号 {order_number}",
+        )
 
-        # 2. 序号引用（"第一个订单"）
+    @staticmethod
+    async def _try_ordinal(text: str, context: SessionContext) -> OrderReferenceResult | None:
+        """步骤 2：序号引用（"第一个订单"）。"""
         ordinal = _extract_ordinal(text)
-        if ordinal is not None and context.recent_orders:
-            idx = ordinal - 1
-            if 0 <= idx < len(context.recent_orders):
-                order = context.recent_orders[idx]
-                oid = order.get("id") or order.get("order_id")
-                return OrderReferenceResult(
-                    resolved=True,
-                    order_id=int(oid) if oid else None,
-                    order_number=str(oid) if oid else None,
-                    reference_type="ordinal",
-                    candidates=list(context.recent_orders),
-                    reason=f"序号引用: 第{ordinal}个订单",
-                )
+        if ordinal is None or not context.recent_orders:
+            return None
+        idx = ordinal - 1
+        if not (0 <= idx < len(context.recent_orders)):
+            return None
+        order = context.recent_orders[idx]
+        oid = order.get("id") or order.get("order_id")
+        return OrderReferenceResult(
+            resolved=True,
+            order_id=int(oid) if oid else None,
+            order_number=str(oid) if oid else None,
+            reference_type="ordinal",
+            candidates=list(context.recent_orders),
+            reason=f"序号引用: 第{ordinal}个订单",
+        )
 
-        # 3. 状态条件 + 时间条件（组合过滤，不提前 return）
+    @staticmethod
+    def _try_status_time(text: str) -> OrderReferenceResult | None:
+        """步骤 3：状态条件 + 时间条件（组合过滤）。"""
         status_group = StatusResolver.resolve_group(text)
         single_status = StatusResolver.resolve(text) if not status_group else None
         time_ref = _extract_time_ref(text)
 
-        if status_group or single_status or time_ref:
-            kwargs: dict[str, Any] = {
-                "resolved": False,
-                "reference_type": "status" if (status_group or single_status) else "time",
-            }
-            reason_parts: list[str] = []
-            if status_group:
-                kwargs["statuses"] = list(status_group)
-                reason_parts.append(f"状态过滤: {status_group}")
-            elif single_status:
-                kwargs["status"] = single_status
-                reason_parts.append(f"订单状态: {single_status}")
-            if time_ref:
-                kwargs["time_ref"] = time_ref
-                reason_parts.append(f"时间范围: {time_ref}")
-            kwargs["reason"] = " + ".join(reason_parts)
-            return OrderReferenceResult(**kwargs)
+        if not (status_group or single_status or time_ref):
+            return None
 
-        # 5. 列表意图（不引用具体订单，优先于 active 检查）
-        if _has_list_intent(text):
-            return OrderReferenceResult(
-                resolved=False,
-                reference_type="recent",
-                reason="订单列表意图",
-            )
+        kwargs: dict[str, Any] = {
+            "resolved": False,
+            "reference_type": "status" if (status_group or single_status) else "time",
+        }
+        reason_parts: list[str] = []
+        if status_group:
+            kwargs["statuses"] = list(status_group)
+            reason_parts.append(f"状态过滤: {status_group}")
+        elif single_status:
+            kwargs["status"] = single_status
+            reason_parts.append(f"订单状态: {single_status}")
+        if time_ref:
+            kwargs["time_ref"] = time_ref
+            reason_parts.append(f"时间范围: {time_ref}")
+        kwargs["reason"] = " + ".join(reason_parts)
+        return OrderReferenceResult(**kwargs)
 
-        # 6. 上下文 active_order_id + 指代引用或物流查询
-        ctx_order_id = context.active_order_id
-        if ctx_order_id:
-            if _has_deixis_ref(text) and _has_order_intent(text):
-                return OrderReferenceResult(
-                    resolved=True,
-                    order_id=int(ctx_order_id),
-                    order_number=ctx_order_id,
-                    reference_type="active",
-                    reason=f"指代引用活跃订单 {ctx_order_id}",
-                )
-            if _has_shipping_intent(text):
-                return OrderReferenceResult(
-                    resolved=True,
-                    order_id=int(ctx_order_id),
-                    order_number=ctx_order_id,
-                    reference_type="active",
-                    reason=f"物流查询引用活跃订单 {ctx_order_id}",
-                )
-
-        # 7. 兜底：近期订单意图
-        if _has_order_intent(text) or _has_shipping_intent(text):
-            return OrderReferenceResult(
-                resolved=False,
-                reference_type="recent",
-                reason="订单查询意图，无精确引用",
-            )
-
+    @staticmethod
+    def _try_list_intent(text: str) -> OrderReferenceResult | None:
+        """步骤 4：列表意图（不引用具体订单）。"""
+        if not _has_list_intent(text):
+            return None
         return OrderReferenceResult(
-            reason="未识别到订单引用",
-            reference_type="unresolved",
+            resolved=False,
+            reference_type="recent",
+            reason="订单列表意图",
+        )
+
+    @staticmethod
+    def _try_active_order(text: str, context: SessionContext) -> OrderReferenceResult | None:
+        """步骤 5：上下文 active_order_id + 指代/物流查询。"""
+        ctx_order_id = context.active_order_id
+        if not ctx_order_id:
+            return None
+        if _has_deixis_ref(text) and _has_order_intent(text):
+            return OrderReferenceResult(
+                resolved=True,
+                order_id=int(ctx_order_id),
+                order_number=ctx_order_id,
+                reference_type="active",
+                reason=f"指代引用活跃订单 {ctx_order_id}",
+            )
+        if _has_shipping_intent(text):
+            return OrderReferenceResult(
+                resolved=True,
+                order_id=int(ctx_order_id),
+                order_number=ctx_order_id,
+                reference_type="active",
+                reason=f"物流查询引用活跃订单 {ctx_order_id}",
+            )
+        return None
+
+    @staticmethod
+    def _try_general_intent(text: str) -> OrderReferenceResult | None:
+        """步骤 6：兜底订单/物流意图。"""
+        if not (_has_order_intent(text) or _has_shipping_intent(text)):
+            return None
+        return OrderReferenceResult(
+            resolved=False,
+            reference_type="recent",
+            reason="订单查询意图，无精确引用",
         )

@@ -42,18 +42,7 @@ class ImageService:
         limit: int = 20,
         product_id: int | None = None,
     ) -> tuple[list[Image], int]:
-        """分页查询租户下图片列表，支持按商品 ID 过滤。
-
-        参数：
-            db: 异步数据库会话。
-            tenant_id: 租户 ID。
-            skip: 跳过的记录数。
-            limit: 最大返回数。
-            product_id: 可选，按关联商品过滤。
-
-        返回：
-            (图片列表, 总数) 元组。
-        """
+        """分页查询租户下图片列表，支持按商品 ID 过滤。"""
         stmt = select(Image).where(Image.tenant_id == tenant_id)
         if product_id is not None:
             stmt = stmt.where(Image.product_id == product_id)
@@ -76,18 +65,7 @@ class ImageService:
         top_k: int = 5,
         product_id: int | None = None,
     ) -> list[Image]:
-        """通过 Qdrant 语义搜索租户下的图片素材。
-
-        参数：
-            db: 异步数据库会话。
-            tenant_id: 租户 ID。
-            query: 搜索文本。
-            top_k: 最大召回数量。
-            product_id: 可选，限制仅搜索某商品关联图片。
-
-        返回：
-            按相似度排序的图片列表。
-        """
+        """通过 Qdrant 语义搜索租户下的图片素材。"""
         filters = {"product_id": str(product_id)} if product_id is not None else None
         hits = await self.vector_search.search_text(
             domain=VectorDomain.IMAGE,
@@ -107,16 +85,7 @@ class ImageService:
         return images
 
     async def get_image(self, db: AsyncSession, image_id: int, tenant_id: int) -> Image | None:
-        """按 ID 获取租户下单张图片。
-
-        参数：
-            db: 异步数据库会话。
-            image_id: 图片 ID。
-            tenant_id: 租户 ID。
-
-        返回：
-            图片对象，不存在返回 None。
-        """
+        """按 ID 获取租户下单张图片。"""
         stmt = select(Image).where(Image.id == image_id, Image.tenant_id == tenant_id)
         result = await db.execute(stmt)
         return result.scalar_one_or_none()
@@ -128,20 +97,7 @@ class ImageService:
         tenant_id: int,
         employee_id: int | None = None,
     ) -> Image:
-        """上传图片文件并保存到本地磁盘，同步索引元数据到 Qdrant。
-
-        文件以 UUID 前缀重命名避免冲突，上传后立即向量化索引。
-        当前不含多模态 embedding，仅索引文件名等文本元数据。
-
-        参数：
-            db: 异步数据库会话。
-            file: FastAPI UploadFile 对象。
-            tenant_id: 租户 ID。
-            employee_id: 上传者员工 ID。
-
-        返回：
-            新创建的 Image ORM 对象。
-        """
+        """上传图片文件并保存到本地磁盘，同步索引元数据到 Qdrant。"""
         IMAGE_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
         safe_name = f"{uuid.uuid4().hex}_{file.filename or 'image'}"
         file_path = IMAGE_UPLOAD_DIR / safe_name
@@ -172,18 +128,7 @@ class ImageService:
         tags: list[str] | None = None,
         product_id: int | None = None,
     ) -> Image | None:
-        """更新图片的标签和关联商品，并重新同步 Qdrant 索引。
-
-        参数：
-            db: 异步数据库会话。
-            image_id: 图片 ID。
-            tenant_id: 租户 ID。
-            tags: 新标签列表（可选）。
-            product_id: 新关联商品 ID（可选）。
-
-        返回：
-            更新后的图片，不存在返回 None。
-        """
+        """更新图片的标签和关联商品，并重新同步 Qdrant 索引。"""
         image = await self.get_image(db, image_id, tenant_id)
         if not image:
             return None
@@ -197,16 +142,7 @@ class ImageService:
         return image
 
     async def delete_image(self, db: AsyncSession, image_id: int, tenant_id: int) -> bool:
-        """删除图片并清理磁盘文件和 Qdrant 向量。
-
-        参数：
-            db: 异步数据库会话。
-            image_id: 图片 ID。
-            tenant_id: 租户 ID。
-
-        返回：
-            成功删除返回 True，不存在返回 False。
-        """
+        """删除图片并清理磁盘文件和 Qdrant 向量。"""
         image = await self.get_image(db, image_id, tenant_id)
         if not image:
             return False
@@ -214,7 +150,7 @@ class ImageService:
         try:
             os.remove(image.storage_path)
         except OSError:
-            pass
+            logger.warning("删除图片文件失败: path=%s", image.storage_path)
         await db.delete(image)
         await db.commit()
         if point_id:

@@ -156,3 +156,17 @@ cases:
       status_code: 200
       reply_not_empty: true
       max_latency_ms: 10000
+
+  - name: "商品-语义推荐"
+    description: "用户表达模糊需求希望推荐商品，验证 AI 能识别语义推荐意图"
+    risk_level: "p2"
+    business_constraints:
+      - "应识别用户的模糊推荐需求，不得直接拒绝"
+      - "推荐的商品应与用户描述相关"
+    tags: ["product", "p2"]
+    messages:
+      - content: "推荐一款便宜好用的耳机"
+    expected:
+      status_code: 200
+      reply_not_empty: true
+      max_latency_ms: 15000

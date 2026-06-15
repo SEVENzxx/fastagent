@@ -82,3 +82,48 @@ cases:
       reply_not_empty: true
       reply_contains_any: ["订单号", "单号", "哪个订单", "订单编号"]
       max_latency_ms: 12000
+
+  - name: "订单-发货状态"
+    description: "用户查询物流发货状态，验证 AI 能识别物流查询意图"
+    risk_level: "p1"
+    business_constraints:
+      - "应识别为物流/发货查询意图"
+      - "不得拒绝回答，应引导提供订单号"
+    tags: ["order", "p1"]
+    messages:
+      - content: "我的订单怎么还没发货"
+    expected:
+      status_code: 200
+      reply_not_empty: true
+      reply_contains_any: ["订单号", "单号", "发货", "物流"]
+      max_latency_ms: 12000
+
+  - name: "订单-取消"
+    description: "用户要求取消订单，验证 AI 能处理取消意图"
+    risk_level: "p1"
+    business_constraints:
+      - "不得直接拒绝取消"
+      - "应引导用户提供订单号或说明取消流程"
+    tags: ["order", "p1"]
+    messages:
+      - content: "取消订单"
+    expected:
+      status_code: 200
+      reply_not_empty: true
+      reply_contains_any: ["订单号", "单号", "取消"]
+      max_latency_ms: 12000
+
+  - name: "订单-确认骨架"
+    description: "用户要求确认订单，验证 AI 能处理确认意图"
+    risk_level: "p2"
+    business_constraints:
+      - "应识别确认订单意图"
+      - "不得直接拒绝"
+    tags: ["order", "p2"]
+    messages:
+      - content: "确认订单"
+    expected:
+      status_code: 200
+      reply_not_empty: true
+      reply_contains_any: ["确认", "订单", "下单"]
+      max_latency_ms: 12000

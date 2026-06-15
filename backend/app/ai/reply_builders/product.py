@@ -15,17 +15,28 @@ class ProductReplyBuilder:
         products: list[dict[str, Any]],
         *,
         category: str | None = None,
+        header_suffix: str | None = None,
         show_pagination: bool = False,
     ) -> str:
-        """商品列表回复。"""
+        """商品列表回复。
+
+        Args:
+            products: 商品列表
+            category: 分类名称（可选），如 "耳机"
+            header_suffix: 标题后缀（可选），如 "¥500元以下"
+            show_pagination: 是否显示翻页提示
+        """
         if not products:
             return "暂时没有找到相关商品，请尝试其他关键词或分类。"
 
         lines: list[str] = []
         if category:
-            lines.append(f"以下是为您找到的 {category} 商品：")
+            prefix = f"以下是为您找到的 {category} 商品"
         else:
-            lines.append("以下是为您找到的商品：")
+            prefix = "以下是为您找到的商品"
+        if header_suffix:
+            prefix += f"（{header_suffix}）"
+        lines.append(f"{prefix}：")
 
         for i, p in enumerate(products, 1):
             name = p.get("name", "未知商品")

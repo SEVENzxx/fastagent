@@ -16,6 +16,8 @@ import json
 import logging
 from typing import Any
 
+from app.common.constants.config import IDEMPOTENCY_TTL
+
 logger = logging.getLogger(__name__)
 
 _fallback_store: dict[str, dict[str, Any]] = {}
@@ -28,7 +30,7 @@ _PLACEHOLDER: dict[str, Any] = {}
 class IdempotencyService:
     """幂等服务，Redis → 内存 dict 降级。"""
 
-    def __init__(self, prefix: str = "idempotency", default_ttl: int = 86400) -> None:
+    def __init__(self, prefix: str = "idempotency", default_ttl: int = IDEMPOTENCY_TTL) -> None:
         self._prefix = prefix
         self._default_ttl = default_ttl
         self._redis: Any = None
@@ -37,7 +39,7 @@ class IdempotencyService:
     async def _get_redis(self) -> Any:
         if self._redis is None and not self._in_memory:
             try:
-                from app.redis_client import get_redis_client
+                from app.integrations.redis_client import get_redis_client
 
                 self._redis = get_redis_client()
             except Exception:
@@ -125,4 +127,4 @@ class IdempotencyService:
 
 
 # 模块级单例
-order_idempotency = IdempotencyService(prefix="idempotency:order", default_ttl=86400)
+order_idempotency = IdempotencyService(prefix="idempotency:order", default_ttl=IDEMPOTENCY_TTL)

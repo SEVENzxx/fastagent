@@ -2,7 +2,7 @@
 
 from datetime import datetime
 
-from pydantic import field_serializer
+from pydantic import Field, field_serializer
 
 from app.schemas.base import CamelModel
 
@@ -15,13 +15,13 @@ from app.schemas.base import CamelModel
 class KnowledgeChunkResponse(CamelModel):
     """知识分块响应"""
 
-    id: int
-    doc_id: int
-    chunk_index: int
-    content: str
-    token_count: int
-    metadata: dict | None = None
-    created_at: datetime
+    id: int = Field(description="分块 ID")
+    doc_id: int = Field(description="所属文档 ID")
+    chunk_index: int = Field(description="分块序号")
+    content: str = Field(description="分块内容")
+    token_count: int = Field(description="token 数量")
+    metadata: dict | None = Field(default=None, description="分块元数据")
+    created_at: datetime = Field(description="创建时间")
 
     @field_serializer("id", "doc_id")
     def serialize_bigint(self, value: int) -> str:
@@ -34,33 +34,33 @@ class KnowledgeChunkResponse(CamelModel):
 
 
 class KnowledgeDocCreate(CamelModel):
-    """上传知识文档"""
+    """上传知识文档请求"""
 
-    title: str
-    file_type: str  # 支持 pdf / docx / md / txt / html
+    title: str = Field(description="文档标题")
+    file_type: str = Field(description="文件类型（pdf/docx/md/txt/html）")
 
 
 class KnowledgeDocUpdate(CamelModel):
-    """更新知识文档"""
+    """更新知识文档请求"""
 
-    title: str | None = None
-    status: str | None = None  # processing / ready / failed 三种处理状态
+    title: str | None = Field(default=None, description="文档标题")
+    status: str | None = Field(default=None, description="处理状态（processing/ready/failed）")
 
 
 class KnowledgeDocResponse(CamelModel):
     """知识文档列表项响应"""
 
-    id: int
-    title: str
-    file_type: str
-    storage_path: str
-    status: str
-    chunk_count: int
-    product_id: int | None = None
-    error_message: str | None = None
-    created_by_employee_id: int | None = None
-    created_at: datetime
-    updated_at: datetime
+    id: int = Field(description="文档 ID")
+    title: str = Field(description="文档标题")
+    file_type: str = Field(description="文件类型")
+    storage_path: str = Field(description="存储路径")
+    status: str = Field(description="处理状态")
+    chunk_count: int = Field(description="分块数量")
+    product_id: int | None = Field(default=None, description="关联商品 ID")
+    error_message: str | None = Field(default=None, description="错误信息")
+    created_by_employee_id: int | None = Field(default=None, description="上传者员工 ID")
+    created_at: datetime = Field(description="创建时间")
+    updated_at: datetime = Field(description="更新时间")
 
     @field_serializer("id", "product_id", "created_by_employee_id")
     def serialize_bigint(self, value: int | None) -> str | None:
@@ -72,11 +72,11 @@ class KnowledgeDocResponse(CamelModel):
 class KnowledgeDocDetailResponse(KnowledgeDocResponse):
     """知识文档详情（含分块列表）"""
 
-    chunks: list[KnowledgeChunkResponse] = []
+    chunks: list[KnowledgeChunkResponse] = Field(default_factory=list, description="分块列表")
 
 
 class KnowledgeDocListResponse(CamelModel):
     """知识文档列表响应"""
 
-    items: list[KnowledgeDocResponse]
-    total: int
+    items: list[KnowledgeDocResponse] = Field(description="文档列表")
+    total: int = Field(description="文档总数")

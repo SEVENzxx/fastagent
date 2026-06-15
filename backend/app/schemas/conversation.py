@@ -27,13 +27,15 @@ CONTENT_TYPES = {"text", "image", "voice", "file", "card", "event"}
 
 
 class ConversationCreate(CamelModel):
-    contact_id: int
-    employee_id: int | None = None
-    platform_id: int | None = None
-    status: str = Conversation.STATUS_AI_PROCESSING
-    handling_type: str = Conversation.HANDLING_AI_ONLY
-    tags: list[str] = Field(default_factory=list)
-    idle_timeout_seconds: int = 1800
+    """创建会话"""
+
+    contact_id: int = Field(description="客户联系人 ID")
+    employee_id: int | None = Field(None, description="坐席员工 ID（预分配）")
+    platform_id: int | None = Field(None, description="渠道平台 ID")
+    status: str = Field(Conversation.STATUS_AI_PROCESSING, description="会话初始状态")
+    handling_type: str = Field(Conversation.HANDLING_AI_ONLY, description="处理方式（ai_only/human）")
+    tags: list[str] = Field(default_factory=list, description="标签列表")
+    idle_timeout_seconds: int = Field(1800, description="空闲超时时间（秒）")
 
     @field_validator("status")
     @classmethod
@@ -51,13 +53,15 @@ class ConversationCreate(CamelModel):
 
 
 class ConversationUpdate(CamelModel):
-    status: str | None = None
-    employee_id: int | None = None
-    handling_type: str | None = None
-    is_transferred: bool | None = None
-    transfer_reason: str | None = None
-    tags: list[str] | None = None
-    idle_timeout_seconds: int | None = None
+    """更新会话"""
+
+    status: str | None = Field(None, description="会话状态")
+    employee_id: int | None = Field(None, description="分配坐席 ID")
+    handling_type: str | None = Field(None, description="处理方式")
+    is_transferred: bool | None = Field(None, description="是否已转接")
+    transfer_reason: str | None = Field(None, description="转接原因")
+    tags: list[str] | None = Field(None, description="标签列表")
+    idle_timeout_seconds: int | None = Field(None, description="空闲超时时间（秒）")
 
     @field_validator("status")
     @classmethod
@@ -75,25 +79,27 @@ class ConversationUpdate(CamelModel):
 
 
 class ConversationResponse(CamelModel):
-    id: int
-    tenant_id: int
-    contact_id: int
-    contact_name: str | None = None
-    contact_avatar_url: str | None = None
-    employee_id: int | None = None
-    employee_name: str | None = None
-    platform_id: int | None = None
-    status: str
-    handling_type: str
-    is_transferred: bool
-    transfer_reason: str | None = None
-    tags: list[str] = Field(default_factory=list)
-    last_message_at: datetime | None = None
-    last_message_preview: str | None = None
-    unread_count: int = 0
-    idle_timeout_seconds: int
-    created_at: datetime
-    closed_at: datetime | None = None
+    """会话响应"""
+
+    id: int = Field(description="会话 ID")
+    tenant_id: int = Field(description="租户 ID")
+    contact_id: int = Field(description="客户联系人 ID")
+    contact_name: str | None = Field(None, description="客户名称")
+    contact_avatar_url: str | None = Field(None, description="客户头像 URL")
+    employee_id: int | None = Field(None, description="当前处理坐席 ID")
+    employee_name: str | None = Field(None, description="当前处理坐席名称")
+    platform_id: int | None = Field(None, description="渠道平台 ID")
+    status: str = Field(description="会话状态")
+    handling_type: str = Field(description="处理方式（ai_only/human）")
+    is_transferred: bool = Field(description="是否已转接")
+    transfer_reason: str | None = Field(None, description="转接原因")
+    tags: list[str] = Field(default_factory=list, description="标签列表")
+    last_message_at: datetime | None = Field(None, description="最后消息时间")
+    last_message_preview: str | None = Field(None, description="最后消息预览")
+    unread_count: int = Field(0, description="未读数")
+    idle_timeout_seconds: int = Field(description="空闲超时时间（秒）")
+    created_at: datetime = Field(description="创建时间")
+    closed_at: datetime | None = Field(None, description="关闭时间")
 
     @field_serializer("id", "tenant_id", "contact_id", "employee_id", "platform_id")
     def serialize_bigint(self, value: int | None) -> str | None:
@@ -103,18 +109,22 @@ class ConversationResponse(CamelModel):
 
 
 class ConversationListResponse(CamelModel):
-    items: list[ConversationResponse]
-    total: int
-    page: int
-    page_size: int
+    """会话列表响应"""
+
+    items: list[ConversationResponse] = Field(description="会话列表")
+    total: int = Field(description="总数")
+    page: int = Field(description="当前页码")
+    page_size: int = Field(description="每页条数")
 
 
 class MessageCreate(CamelModel):
-    sender_type: str = Conversation.SENDER_AGENT
-    content_type: str = "text"
-    content: str
-    metadata: dict | None = None
-    reply_to_id: int | None = None
+    """创建消息"""
+
+    sender_type: str = Field(Conversation.SENDER_AGENT, description="发送者类型")
+    content_type: str = Field("text", description="消息内容类型（text/image/voice/file/card/event）")
+    content: str = Field(description="消息内容")
+    metadata: dict | None = Field(None, description="消息扩展元数据")
+    reply_to_id: int | None = Field(None, description="回复目标消息 ID")
 
     @field_validator("sender_type")
     @classmethod
@@ -141,16 +151,18 @@ class MessageCreate(CamelModel):
 
 
 class MessageResponse(CamelModel):
-    id: int
-    conversation_id: int
-    sender_type: str
-    content_type: str
-    content: str | None = None
-    metadata: dict | None = None
-    reply_to_id: int | None = None
-    is_read: bool
-    is_recalled: bool = False
-    created_at: datetime
+    """消息响应"""
+
+    id: int = Field(description="消息 ID")
+    conversation_id: int = Field(description="所属会话 ID")
+    sender_type: str = Field(description="发送者类型")
+    content_type: str = Field(description="消息内容类型")
+    content: str | None = Field(None, description="消息内容")
+    metadata: dict | None = Field(None, description="消息扩展元数据")
+    reply_to_id: int | None = Field(None, description="回复目标消息 ID")
+    is_read: bool = Field(description="是否已读")
+    is_recalled: bool = Field(False, description="是否已撤回")
+    created_at: datetime = Field(description="发送时间")
 
     @field_serializer("id", "conversation_id", "reply_to_id")
     def serialize_bigint(self, value: int | None) -> str | None:
@@ -160,7 +172,9 @@ class MessageResponse(CamelModel):
 
 
 class MessageListResponse(CamelModel):
-    items: list[MessageResponse]
-    total: int
-    page: int
-    page_size: int
+    """消息列表响应"""
+
+    items: list[MessageResponse] = Field(description="消息列表")
+    total: int = Field(description="总数")
+    page: int = Field(description="当前页码")
+    page_size: int = Field(description="每页条数")

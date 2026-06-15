@@ -24,6 +24,8 @@ from app.ai.recognition.pipeline import RecognitionPipeline
 from app.ai.recognition.types import ScenarioDecision
 from app.ai.context.session_context import SessionContext
 from app.ai.context.session_store import ConversationStateStore
+from app.ai.scenario.policy_guard import PolicyGuard, PolicyViolation
+from app.ai.scenario.spec import get_spec
 
 logger = logging.getLogger(__name__)
 
@@ -186,6 +188,7 @@ class AssistantService:
                     pending_directive=PendingDirective.CLEAR,
                 )
             else:
+                context.last_user_message = text
                 result = await handler.execute(decision, context)
             return await self._finalize(
                 result, context, tenant_id, conversation_id,
@@ -240,6 +243,7 @@ class AssistantService:
             )
 
         try:
+            context.last_user_message = text
             result = await handler.resume(pending, text, context)
         except NotImplementedError:
             logger.warning(
@@ -267,6 +271,9 @@ class AssistantService:
         conversation_id: int,
     ) -> AssistantRuntimeResult:
         """场景识别后执行对应 Handler。"""
+        # 在 Handler 执行前记录用户消息，供 handler 通过 ctx.last_user_message 读取
+        context.last_user_message = text
+
         try:
             decision = await self.recognition.recognize(text, context)
         except Exception as exc:
@@ -327,12 +334,16 @@ class AssistantService:
     ) -> AssistantRuntimeResult:
         """主编排唯一收口点。
 
-        1. 应用 PendingDirective（失败重试一次）
-        2. 更新并保存 SessionContext
-        3. 填充 ResourceTrace
-        4. 返回 AssistantRuntimeResult
+        1. ScenarioSpec 权限校验
+        2. 应用 PendingDirective（失败重试一次）
+        3. 更新并保存 SessionContext
+        4. 填充 ResourceTrace
+        5. 返回 AssistantRuntimeResult
         """
-        # 步骤 1: 应用 PendingDirective（失败重试一次）
+        # 步骤 1: ScenarioSpec 权限校验
+        violations = self._validate_spec(result)
+
+        # 步骤 2: 应用 PendingDirective（失败重试一次）
         pending_ok = await self._apply_pending_with_retry(
             result, tenant_id, conversation_id,
         )
@@ -344,23 +355,44 @@ class AssistantService:
             result.pending_directive = PendingDirective.CLEAR
             result.pending_state = None
 
-        # 步骤 2: 更新并保存 SessionContext
+        # 步骤 3: 更新并保存 SessionContext
         try:
             updated = context.apply(result.context_update)
             await self.session_store.set(tenant_id, conversation_id, updated)
         except Exception as exc:
             logger.error("SessionContext 写入失败: %s", exc)
 
-        # 步骤 3: 填充 ResourceTrace（ScenarioSpec 校验在后续阶段接入）
+        # 步骤 4: 填充 ResourceTrace
         result.resource_trace.pending_directive = result.pending_directive
 
-        # 步骤 4: 组装 AssistantRuntimeResult
+        # 步骤 5: 组装 AssistantRuntimeResult
         final = AssistantRuntimeResult.from_handler_result(result)
         logger.info(
             "【AssistantService】完成 scenario=%s directive=%s",
             result.scenario_id, result.pending_directive.value,
         )
         return final
+
+    def _validate_spec(self, result: HandlerResult) -> list[PolicyViolation]:
+        """校验 HandlerResult 是否符合 ScenarioSpec。
+        越权时记录告警并降级回复，不向用户暴露内部错误。
+        """
+        spec = get_spec(result.scenario_id)
+        if spec is None:
+            return []
+
+        violations = PolicyGuard.validate_result(spec, result)
+        for v in violations:
+            logger.warning("【SpecViolation】%s", v.message)
+
+        for v in violations:
+            if v.code in ("READ_ONLY_WRITE_SKILL", "HUMAN_REQUIRED_AUTO_EXEC"):
+                result.reply = "系统检测到操作异常，已自动终止。请重新描述您的问题或转人工客服。"
+                result.pending_directive = PendingDirective.CLEAR
+                result.pending_state = None
+                break  # 只降级一次
+
+        return violations
 
     async def _apply_pending_with_retry(
         self,

@@ -36,8 +36,8 @@ from app.api.v1.webhooks import router as webhooks_router
 from app.api.v1.usage import router as usage_router
 from app.api.v1.intent_samples import router as intent_samples_router
 from app.api.v1.ws import router as ws_router
-from app.database import check_db_connection
-from app.redis_client import check_redis_connection
+from app.integrations.database import check_db_connection
+from app.integrations.redis_client import check_redis_connection
 import uvicorn
 
 
@@ -120,8 +120,10 @@ app.include_router(ws_router)
 # Internal / debug API — 仅在 development/test 环境注册
 if settings.APP_ENV in ("development", "test"):
     from app.api.v1.internal.harness import router as harness_router
+    from app.api.v1.internal.web_test import router as web_test_router
     app.include_router(harness_router, prefix="/api/v1")
-    logger.info("Internal Harness API 已注册（APP_ENV=%s）", settings.APP_ENV)
+    app.include_router(web_test_router, prefix="/api/v1")
+    logger.info("Internal API（Harness/WebTest）已注册（APP_ENV=%s）", settings.APP_ENV)
 
 # ── 健康检查 ─────────────────────────────────────────────────────────────
 @app.get("/health")

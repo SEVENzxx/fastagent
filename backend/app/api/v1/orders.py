@@ -3,7 +3,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.database import get_db
+from app.integrations.database import get_db
 from app.dependencies import require_permission
 from app.models.employee import Employee
 from app.models.role import PermissionCode

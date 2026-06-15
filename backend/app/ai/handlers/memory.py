@@ -18,6 +18,7 @@ from app.ai.recognition.types import ScenarioDecision
 from app.ai.reply_builders.memory import MemoryReplyBuilder
 from app.ai.context.session_context import SessionContext
 from app.ai.handlers.base import ToolResult
+from app.ai.skills.gateway import SkillError, call_skill, call_skill_tx
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +28,7 @@ class MemoryHandler(BaseHandler):
 
     支持 memory.* 场景：
       - memory.save
+      - memory.recall
     不实现 resume()，单轮操作无需 Pending 恢复。
     """
 
@@ -45,49 +47,64 @@ class MemoryHandler(BaseHandler):
         if not text:
             text = getattr(ctx, "last_user_message", "") or ""
 
+        self._init_trace_context(scenario)
+
         if not text.strip():
-            return HandlerResult(
+            result = HandlerResult(
                 scenario_id=scenario,
                 reply=MemoryReplyBuilder.no_text(),
                 pending_directive=PendingDirective.CLEAR,
             )
-
-        if ctx.contact_id is None:
-            return HandlerResult(
+        elif ctx.contact_id is None:
+            result = HandlerResult(
                 scenario_id=scenario,
                 reply=MemoryReplyBuilder.no_contact(),
                 pending_directive=PendingDirective.CLEAR,
             )
-
-        result = await self._call_skill(
-            "remember_info",
-            tenant_id=ctx.tenant_id,
-            contact_id=ctx.contact_id,
-            customer_text=text,
-        )
-
-        if not result.ok:
-            logger.warning(
-                "【记忆保存失败】tenant_id=%s contact_id=%s error=%s",
-                ctx.tenant_id, ctx.contact_id, result.error,
+        elif scenario == "memory.recall":
+            skill_result = await self._call_skill(
+                "recall_info",
+                tenant_id=ctx.tenant_id,
+                contact_id=ctx.contact_id,
             )
-            return HandlerResult(
+            if skill_result.ok:
+                items = (skill_result.result or {}).get("items", [])
+                reply = MemoryReplyBuilder.recall(items)
+            else:
+                reply = MemoryReplyBuilder.error(skill_result.error)
+            result = HandlerResult(
                 scenario_id=scenario,
-                reply=MemoryReplyBuilder.error(result.error),
+                reply=reply,
                 pending_directive=PendingDirective.CLEAR,
             )
-
-        saved = (result.result or {}).get("saved", [])
-        if saved:
-            reply = MemoryReplyBuilder.saved(saved)
         else:
-            reply = MemoryReplyBuilder.nothing_saved()
+            skill_result = await self._call_skill(
+                "remember_info",
+                tenant_id=ctx.tenant_id,
+                contact_id=ctx.contact_id,
+                customer_text=text,
+            )
+            if not skill_result.ok:
+                logger.warning(
+                    "【记忆保存失败】tenant_id=%s contact_id=%s error=%s",
+                    ctx.tenant_id, ctx.contact_id, skill_result.error,
+                )
+                result = HandlerResult(
+                    scenario_id=scenario,
+                    reply=MemoryReplyBuilder.error(skill_result.error),
+                    pending_directive=PendingDirective.CLEAR,
+                )
+            else:
+                saved = (skill_result.result or {}).get("saved", [])
+                reply = MemoryReplyBuilder.saved(saved) if saved else MemoryReplyBuilder.nothing_saved()
+                result = HandlerResult(
+                    scenario_id=scenario,
+                    reply=reply,
+                    pending_directive=PendingDirective.CLEAR,
+                )
 
-        return HandlerResult(
-            scenario_id=scenario,
-            reply=reply,
-            pending_directive=PendingDirective.CLEAR,
-        )
+        self._merge_trace_context(result)
+        return result
 
     # ── 内部方法 ──
 
@@ -96,37 +113,12 @@ class MemoryHandler(BaseHandler):
         method: str,
         **kwargs: Any,
     ) -> ToolResult:
-        """调用 Skill 方法，自动注入 db session 并提交事务。
-
-        memory.save 是写操作，成功时 commit()，失败时 rollback()。
-        DB 不可用时先尝试 db=None（兼容 FakeSkill），失败则返回空 ToolResult。
-        """
+        """调用 Skill 方法（通过 SkillGateway 自动记录 trace + 管理 DB session + 事务）。"""
         if self._skill is None:
             import app.ai.skills.memory as _real_skill
             self._skill = _real_skill
-
-        fn = getattr(self._skill, method, None)
-        if fn is None:
-            logger.warning("Skill 方法不存在: %s", method)
-            return ToolResult(ok=False, skill_name=method, error="记忆服务暂不可用")
-
         try:
-            from app.database import AsyncSessionLocal
-        except Exception:
-            try:
-                return await fn(db=None, **kwargs)
-            except Exception:
-                logger.warning("Skill 调用失败（DB 不可用）: method=%s", method)
-                return ToolResult(ok=False, skill_name=method, error="记忆服务暂不可用")
-
-        try:
-            async with AsyncSessionLocal() as db:
-                result = await fn(db=db, **kwargs)
-                if result.ok:
-                    await db.commit()
-                else:
-                    await db.rollback()
-                return result
-        except Exception:
-            logger.warning("Skill 调用失败（DB 运行时异常）: method=%s", method)
+            return await call_skill_tx(self._skill, method, **kwargs)
+        except SkillError:
+            logger.warning("Skill 调用失败: method=%s", method)
             return ToolResult(ok=False, skill_name=method, error="记忆服务暂不可用")

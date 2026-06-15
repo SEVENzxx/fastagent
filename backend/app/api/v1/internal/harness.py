@@ -26,7 +26,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.database import get_db
+from app.integrations.database import get_db
 from app.models.contact import Contact
 from app.models.conversation import Conversation, Message
 from app.schemas.conversation import ConversationCreate, MessageCreate
@@ -71,11 +71,11 @@ async def _verify_harness(request: Request) -> None:
         logger.warning("HARNESS_API_TOKEN 未设置，Harness API 不可用")
         raise HTTPException(
             status_code=503,
-            detail="HARNESS_API_TOKEN not configured",
+            detail="HARNESS_API_TOKEN 未配置",
         )
     header_token = request.headers.get("X-Harness-Token")
     if not header_token or header_token != token:
-        raise HTTPException(status_code=403, detail="Invalid harness token")
+        raise HTTPException(status_code=403, detail="Harness Token 无效")
 
 
 # ── Schemas ──────────────────────────────────────────────────────────────

@@ -1,8 +1,4 @@
-"""知识分块模型。
-
-真实向量存储在 Qdrant。PostgreSQL 只保存业务字段和 qdrant_point_id，
-用于链路追踪和回查。
-"""
+"""知识分块模型。向量存储在 Qdrant，PostgreSQL 只保存业务字段和 qdrant_point_id。"""
 
 from datetime import datetime
 
@@ -21,12 +17,7 @@ class KnowledgeChunk(Base):
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, default=generate_id, comment="主键")
     tenant_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("tenants.id"), nullable=False, comment="租户 ID")
-    doc_id: Mapped[int] = mapped_column(
-        BigInteger,
-        ForeignKey("knowledge_docs.id", ondelete="CASCADE"),
-        nullable=False,
-        comment="知识文档 ID",
-    )
+    doc_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("knowledge_docs.id", ondelete="CASCADE"), nullable=False, comment="知识文档 ID")
     chunk_index: Mapped[int] = mapped_column(Integer, nullable=False, comment="分块序号")
     content: Mapped[str] = mapped_column(Text, nullable=False, comment="分块内容")
     token_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0", comment="token 数量")

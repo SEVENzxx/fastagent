@@ -5,7 +5,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 import io
 
-from app.database import get_db
+from app.integrations.database import get_db
 from app.dependencies import require_permission, require_tenant_user
 from app.models.employee import Employee
 from app.models.role import PermissionCode
@@ -33,7 +33,6 @@ def _to_response(product) -> ProductResponse:
         floor_price=float(product.floor_price) if product.floor_price is not None else None,
         stock=product.stock,
         is_sample=product.is_sample,
-        sales_template_id=product.sales_template_id,
         specs=product.specs,
         is_active=product.is_active,
         created_at=product.created_at,

@@ -11,7 +11,7 @@ from typing import Any
 
 from app.ai.rag.vector_search import VectorDomain, VectorSearchService
 from app.ai.handlers.base import ToolResult
-from app.services.rag_service import RAGService
+from app.ai.services.rag_service import RAGService
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +55,7 @@ async def search_knowledge(
     tenant_id: int,
     query: str,
     doc_ids: list[str] | None = None,
+    product_id: str | None = None,
     db: Any = None,
     top_k: int = 5,
     min_score: float = 0.65,
@@ -65,6 +66,7 @@ async def search_knowledge(
         tenant_id: 租户 ID。
         query: 检索文本。
         doc_ids: 可选，按文档 ID 过滤（追问场景缩小范围）。
+        product_id: 可选，按商品 ID 过滤（商品知识精准召回）。
         db: 保留参数，兼容 Handler _call_skill 签名。
         top_k: 最大返回数。
         min_score: 最低相似度阈值。
@@ -78,6 +80,8 @@ async def search_knowledge(
     filters: dict[str, Any] = {}
     if doc_ids:
         filters["doc_id"] = doc_ids
+    if product_id:
+        filters["product_id"] = product_id
 
     try:
         hits = await vs.search_text(
@@ -98,6 +102,7 @@ async def search_knowledge(
         items.append({
             "id": str(payload.get("chunk_id") or payload.get("business_id") or hit.point_id),
             "doc_id": str(payload.get("doc_id") or ""),
+            "product_id": str(payload.get("product_id") or ""),
             "content": str(payload.get("text") or ""),
             "token_count": payload.get("token_count"),
             "title": str(payload.get("title") or payload.get("doc_title") or ""),

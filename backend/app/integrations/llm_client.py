@@ -11,10 +11,11 @@ import asyncio
 import logging
 import time
 from collections.abc import AsyncIterator
-from enum import Enum
 from typing import Any
 
 from app.ai.observability import observe_llm_call, set_observation_io
+from app.common.constants.config import TENANT_LLM_CONFIG_CACHE_TTL
+from app.common.enums.base import LabeledEnum
 from app.common.trace.context import get_trace_id
 from app.config import settings
 from app.integrations.base import BaseClient, BaseClientError
@@ -45,7 +46,7 @@ class LLMClientError(RuntimeError):
     """模型服务不可用、配置缺失或返回格式异常时抛出。"""
 
 
-class LLMUseCase(str, Enum):
+class LLMUseCase(LabeledEnum):
     """模型选择策略。业务层只声明用途，不自行选择模型来源。"""
 
     INTENT_JUDGE = "intent_judge"
@@ -61,6 +62,19 @@ class LLMUseCase(str, Enum):
         # TODO: 暂时跳过租户 LLM 配置，全部走本地模型。
         # 恢复时改回: return self in {self.RAG_REPLY, self.AGENT}
         return False
+
+    @property
+    def label(self) -> str:
+        labels = {
+            LLMUseCase.INTENT_JUDGE: "意图判定",
+            LLMUseCase.INTENT_RECALL: "意图召回",
+            LLMUseCase.GENERAL_REPLY: "通用回复",
+            LLMUseCase.RAG_REPLY: "知识库回复",
+            LLMUseCase.AGENT: "Agent 推理",
+            LLMUseCase.PRODUCT_ATTR_EXTRACT: "商品属性抽取",
+            LLMUseCase.PRODUCT_SEMANTIC_SEARCH: "商品语义搜索",
+        }
+        return labels[self]
 
 
 class LLMClient(BaseClient):
@@ -115,7 +129,7 @@ class LLMClient(BaseClient):
 
         # 先查 Redis
         try:
-            from app.redis_client import get_redis_client
+            from app.integrations.redis_client import get_redis_client
             redis = get_redis_client()
             raw = await redis.get(cache_key)
             await redis.aclose()
@@ -142,7 +156,7 @@ class LLMClient(BaseClient):
         # 回退查 DB
         try:
             from sqlalchemy import select
-            from app.database import AsyncSessionLocal
+            from app.integrations.database import AsyncSessionLocal
             from app.models.llm_config import LLMConfig
             from app.models.tenant import Tenant
 
@@ -173,7 +187,7 @@ class LLMClient(BaseClient):
                         "model": config.model,
                         "is_active": config.is_active,
                     })
-                    await redis.setex(cache_key, 86400, cache_data)
+                    await redis.setex(cache_key, TENANT_LLM_CONFIG_CACHE_TTL, cache_data)
                     await redis.aclose()
                 except Exception:
                     logger.warning("写入租户 LLM 配置缓存失败：tenant_id=%s", tenant_id)

@@ -14,6 +14,53 @@ from app.ai.recognition.types import IntentCandidate, RiskLevel, SkillName
 logger = logging.getLogger(__name__)
 
 
+# scenario_id 前缀 → (SkillName, RiskLevel) 映射
+_SCENARIO_SKILL_MAP: dict[str, tuple[SkillName, RiskLevel]] = {
+    "product.catalog": (SkillName.PRODUCT, RiskLevel.READ_ONLY),
+    "product.filter_search": (SkillName.PRODUCT, RiskLevel.READ_ONLY),
+    "product.semantic_recommend": (SkillName.PRODUCT, RiskLevel.READ_ONLY),
+    "product.detail": (SkillName.PRODUCT, RiskLevel.READ_ONLY),
+    "product.compare": (SkillName.PRODUCT, RiskLevel.READ_ONLY),
+    "product.attribute_query": (SkillName.PRODUCT, RiskLevel.READ_ONLY),
+    "product.pagination_sort": (SkillName.PRODUCT, RiskLevel.READ_ONLY),
+    "product.sku_query": (SkillName.PRODUCT, RiskLevel.READ_ONLY),
+    "order.list": (SkillName.ORDER, RiskLevel.READ_ONLY),
+    "order.detail": (SkillName.ORDER, RiskLevel.READ_ONLY),
+    "order.shipping_status": (SkillName.ORDER, RiskLevel.READ_ONLY),
+    "order.create": (SkillName.ORDER, RiskLevel.HIGH_RISK_WRITE),
+    "order.cancel": (SkillName.ORDER, RiskLevel.HIGH_RISK_WRITE),
+    "order.confirm": (SkillName.ORDER, RiskLevel.HIGH_RISK_WRITE),
+    "order.filter": (SkillName.ORDER, RiskLevel.READ_ONLY),
+    "knowledge.policy": (SkillName.RAG, RiskLevel.READ_ONLY),
+    "knowledge.qa": (SkillName.RAG, RiskLevel.READ_ONLY),
+    "knowledge.product_qa": (SkillName.RAG, RiskLevel.READ_ONLY),
+    "memory.save": (SkillName.MEMORY, RiskLevel.LOW_RISK_WRITE),
+    "memory.recall": (SkillName.MEMORY, RiskLevel.READ_ONLY),
+    "template.greeting": (SkillName.TEMPLATE, RiskLevel.READ_ONLY),
+    "template.confirmation": (SkillName.TEMPLATE, RiskLevel.READ_ONLY),
+    "template.farewell": (SkillName.TEMPLATE, RiskLevel.READ_ONLY),
+    "human.transfer": (SkillName.HUMAN, RiskLevel.HIGH_RISK_WRITE),
+}
+
+
+def _resolve_skill(scenario_id: str) -> tuple[SkillName, RiskLevel]:
+    """按 scenario_id 解析 SkillName 和 RiskLevel。"""
+    result = _SCENARIO_SKILL_MAP.get(scenario_id)
+    if result is not None:
+        return result
+    # 前缀兜底
+    prefix = scenario_id.split(".")[0] if "." in scenario_id else ""
+    prefix_map = {
+        "product": (SkillName.PRODUCT, RiskLevel.READ_ONLY),
+        "order": (SkillName.ORDER, RiskLevel.READ_ONLY),
+        "knowledge": (SkillName.RAG, RiskLevel.READ_ONLY),
+        "memory": (SkillName.MEMORY, RiskLevel.LOW_RISK_WRITE),
+        "template": (SkillName.TEMPLATE, RiskLevel.READ_ONLY),
+        "human": (SkillName.HUMAN, RiskLevel.HIGH_RISK_WRITE),
+    }
+    return prefix_map.get(prefix, (SkillName.FALLBACK, RiskLevel.READ_ONLY))
+
+
 class IntentVectorAdapter:
     """向量召回适配器：召回候选意图并附加 skill / risk_level 信息。
 
@@ -39,11 +86,11 @@ class IntentVectorAdapter:
         raw = await self._retriever.retrieve(text, tenant_id=tenant_id)
         candidates: list[IntentCandidate] = []
         for r in raw:
-            skill, risk = self._resolve_skill(r.intent)
-            if not r.intent or r.intent == "unknown_intent":
+            if not r.scenario_id or r.scenario_id == "unknown_intent":
                 continue
+            skill, _risk = _resolve_skill(r.scenario_id)
             candidates.append(IntentCandidate(
-                intent=r.intent,
+                scenario_id=r.scenario_id,
                 label=r.label,
                 score=r.score,
                 skill=skill,
@@ -57,9 +104,4 @@ class IntentVectorAdapter:
         )
         return candidates
 
-    def _resolve_skill(self, intent: str) -> tuple[SkillName, RiskLevel]:
-        """按 intent 解析 skill 和 risk_level，兜底为 FALLBACK。"""
-        try:
-            return self._config.skill_for(intent)
-        except (KeyError, AttributeError):
-            return SkillName.FALLBACK, RiskLevel.READ_ONLY
+    # _resolve_skill 已提升为模块级函数，前缀场景映射

@@ -118,20 +118,7 @@ async def list_contacts(
     page: int = 1,
     page_size: int = 20,
 ) -> tuple[list[Contact], int]:
-    """分页查询租户联系人列表，支持关键词/标签/坐席多维过滤。
-
-    参数：
-        db: 异步数据库会话。
-        tenant_id: 租户 ID。
-        keyword: 按名称/电话/地址模糊搜索。
-        tag: 按标签过滤。
-        assigned_employee_id: 按分配坐席过滤。
-        page: 页码。
-        page_size: 每页条数。
-
-    返回：
-        (联系人列表, 总数)，列表已附带坐席名称。
-    """
+    """分页查询租户联系人列表，支持关键词/标签/坐席多维过滤。"""
     conditions = [Contact.tenant_id == tenant_id]
     clean_keyword = keyword.strip()
 
@@ -190,16 +177,7 @@ async def get_contact(
     contact_id: int,
     tenant_id: int,
 ) -> Contact | None:
-    """按 ID 获取租户下单个联系人，附带坐席名称。
-
-    参数：
-        db: 异步数据库会话。
-        contact_id: 联系人 ID。
-        tenant_id: 租户 ID。
-
-    返回：
-        联系人对象，不存在返回 None。
-    """
+    """按 ID 获取租户下单个联系人，附带坐席名称。"""
     contact = await db.scalar(
         select(Contact).where(Contact.id == contact_id, Contact.tenant_id == tenant_id)
     )
@@ -213,21 +191,7 @@ async def create_contact(
     tenant_id: int,
     body: ContactCreate,
 ) -> Contact:
-    """在租户下创建联系人。
-
-    校验坐席存在性，名称首尾空格自动清理。
-
-    参数：
-        db: 异步数据库会话。
-        tenant_id: 租户 ID。
-        body: 联系人创建请求体。
-
-    返回：
-        新创建的联系人对象。
-
-    异常：
-        ValueError: 分配的坐席不存在。
-    """
+    """在租户下创建联系人。"""
     await _ensure_employee(db, tenant_id, body.assigned_employee_id)
     contact = Contact(
         tenant_id=tenant_id,
@@ -252,20 +216,7 @@ async def update_contact(
     tenant_id: int,
     body: ContactUpdate,
 ) -> Contact | None:
-    """部分更新联系人信息。
-
-    参数：
-        db: 异步数据库会话。
-        contact_id: 联系人 ID。
-        tenant_id: 租户 ID。
-        body: 联系人更新请求体。
-
-    返回：
-        更新后的联系人，不存在返回 None。
-
-    异常：
-        ValueError: 新分配的坐席不存在。
-    """
+    """部分更新联系人信息。"""
     contact = await get_contact(db, contact_id, tenant_id)
     if contact is None:
         return None
@@ -296,20 +247,7 @@ async def assign_contact(
     tenant_id: int,
     body: ContactAssign,
 ) -> Contact | None:
-    """将联系人分配（或转移）给指定坐席。
-
-    参数：
-        db: 异步数据库会话。
-        contact_id: 联系人 ID。
-        tenant_id: 租户 ID。
-        body: 分配请求体（含 assigned_employee_id）。
-
-    返回：
-        更新后的联系人，不存在返回 None。
-
-    异常：
-        ValueError: 分配的坐席不存在。
-    """
+    """将联系人分配（或转移）给指定坐席。"""
     contact = await get_contact(db, contact_id, tenant_id)
     if contact is None:
         return None
@@ -324,16 +262,7 @@ async def assign_contact(
 
 
 async def delete_contact(db: AsyncSession, contact_id: int, tenant_id: int) -> bool:
-    """物理删除联系人。
-
-    参数：
-        db: 异步数据库会话。
-        contact_id: 联系人 ID。
-        tenant_id: 租户 ID。
-
-    返回：
-        成功删除返回 True，不存在返回 False。
-    """
+    """物理删除联系人。"""
     contact = await get_contact(db, contact_id, tenant_id)
     if contact is None:
         return False
@@ -455,24 +384,105 @@ async def _load_existing_identity_sets(
     return names, phones, wecom_ids
 
 
+async def _validate_contact_import_row(
+    row_number: int,
+    row: dict[str, str],
+    tenant_id: int,
+    existing_names: set[str],
+    existing_phones: set[str],
+    existing_wecom_ids: set[str],
+    seen_names: dict[str, int],
+    seen_phones: dict[str, int],
+    seen_wecom_ids: dict[str, int],
+    valid_employee_ids: set[int],
+) -> tuple[list[ContactImportError], tuple[int, dict]]:
+    """校验 CSV 单行联系人数据。"""
+    row_errors: list[ContactImportError] = []
+    name = row.get("name", "").strip()
+    if not name:
+        row_errors.append(ContactImportError(row=row_number, field="联系人名称", message="联系人名称不能为空"))
+    elif len(name) > 200:
+        row_errors.append(ContactImportError(row=row_number, field="联系人名称", message="联系人名称不能超过200个字符"))
+    elif name in seen_names:
+        row_errors.append(
+            ContactImportError(
+                row=row_number, field="联系人名称",
+                message=f"文件内联系人名称与第 {seen_names[name]} 行重复",
+            )
+        )
+    elif name in existing_names:
+        row_errors.append(ContactImportError(row=row_number, field="联系人名称", message="联系人名称已存在"))
+    else:
+        seen_names[name] = row_number
+
+    phone = row.get("phone", "").strip() or None
+    if phone and len(phone) > 20:
+        row_errors.append(ContactImportError(row=row_number, field="电话", message="电话不能超过20个字符"))
+    elif phone and phone in seen_phones:
+        row_errors.append(
+            ContactImportError(
+                row=row_number, field="电话",
+                message=f"文件内电话与第 {seen_phones[phone]} 行重复",
+            )
+        )
+    elif phone and phone in existing_phones:
+        row_errors.append(ContactImportError(row=row_number, field="电话", message="电话已存在"))
+    elif phone:
+        seen_phones[phone] = row_number
+
+    avatar_url = row.get("avatar_url", "").strip() or None
+    if avatar_url and len(avatar_url) > 500:
+        row_errors.append(ContactImportError(row=row_number, field="头像地址", message="头像地址不能超过500个字符"))
+
+    try:
+        external_ids = _parse_external_ids(row)
+    except ValueError as exc:
+        row_errors.append(ContactImportError(row=row_number, field="外部ID JSON", message=str(exc)))
+        external_ids = {}
+
+    wecom_id = external_ids.get("wecom_external_userid")
+    if isinstance(wecom_id, str) and wecom_id.strip():
+        clean_wecom_id = wecom_id.strip()
+        external_ids["wecom_external_userid"] = clean_wecom_id
+        if clean_wecom_id in seen_wecom_ids:
+            row_errors.append(
+                ContactImportError(
+                    row=row_number, field="企微外部联系人ID",
+                    message=f"文件内企微 ID 与第 {seen_wecom_ids[clean_wecom_id]} 行重复",
+                )
+            )
+        elif clean_wecom_id in existing_wecom_ids:
+            row_errors.append(ContactImportError(row=row_number, field="企微外部联系人ID", message="企微 ID 已存在"))
+        else:
+            seen_wecom_ids[clean_wecom_id] = row_number
+
+    try:
+        assigned_employee_id = _parse_assigned_employee_id(row.get("assigned_employee_id", ""))
+    except ValueError as exc:
+        row_errors.append(ContactImportError(row=row_number, field="分配员工ID", message=str(exc)))
+        assigned_employee_id = None
+    if assigned_employee_id is not None and assigned_employee_id not in valid_employee_ids:
+        row_errors.append(ContactImportError(row=row_number, field="分配员工ID", message="分配员工不存在"))
+
+    import_entry = {
+        "tenant_id": tenant_id,
+        "name": name,
+        "avatar_url": avatar_url,
+        "phone": phone,
+        "address": row.get("address", "").strip() or None,
+        "external_ids": external_ids,
+        "tags": _parse_tags(row.get("tags", "")),
+        "assigned_employee_id": assigned_employee_id,
+    }
+    return row_errors, (row_number, import_entry)
+
+
 async def import_contacts_csv(
     db: AsyncSession,
     tenant_id: int,
     content: bytes,
 ) -> ContactImportResponse:
-    """批量导入 CSV 联系人。
-
-    支持 UTF-8 BOM 和 GBK 编码自动检测。逐行校验：名称必填且不重复、
-    电话不重复、企微 ID 不重复、分配员工存在。全部行通过校验后才写入数据库。
-
-    参数：
-        db: 异步数据库会话。
-        tenant_id: 租户 ID。
-        content: CSV 文件的 bytes 内容。
-
-    返回：
-        ContactImportResponse（成功/失败 + 行数 + 错误列表）。
-    """
+    """批量导入 CSV 联系人。"""
     try:
         text = content.decode("utf-8-sig")
     except UnicodeDecodeError:
@@ -498,92 +508,14 @@ async def import_contacts_csv(
         if not any(row.values()):
             continue
 
-        row_errors: list[ContactImportError] = []
-        name = row.get("name", "").strip()
-        if not name:
-            row_errors.append(ContactImportError(row=row_number, field="联系人名称", message="联系人名称不能为空"))
-        elif len(name) > 200:
-            row_errors.append(ContactImportError(row=row_number, field="联系人名称", message="联系人名称不能超过200个字符"))
-        elif name in seen_names:
-            row_errors.append(
-                ContactImportError(
-                    row=row_number,
-                    field="联系人名称",
-                    message=f"文件内联系人名称与第 {seen_names[name]} 行重复",
-                )
-            )
-        elif name in existing_names:
-            row_errors.append(ContactImportError(row=row_number, field="联系人名称", message="联系人名称已存在"))
-        else:
-            seen_names[name] = row_number
-
-        phone = row.get("phone", "").strip() or None
-        if phone and len(phone) > 20:
-            row_errors.append(ContactImportError(row=row_number, field="电话", message="电话不能超过20个字符"))
-        elif phone and phone in seen_phones:
-            row_errors.append(
-                ContactImportError(
-                    row=row_number,
-                    field="电话",
-                    message=f"文件内电话与第 {seen_phones[phone]} 行重复",
-                )
-            )
-        elif phone and phone in existing_phones:
-            row_errors.append(ContactImportError(row=row_number, field="电话", message="电话已存在"))
-        elif phone:
-            seen_phones[phone] = row_number
-
-        avatar_url = row.get("avatar_url", "").strip() or None
-        if avatar_url and len(avatar_url) > 500:
-            row_errors.append(ContactImportError(row=row_number, field="头像地址", message="头像地址不能超过500个字符"))
-
-        try:
-            external_ids = _parse_external_ids(row)
-        except ValueError as exc:
-            row_errors.append(ContactImportError(row=row_number, field="外部ID JSON", message=str(exc)))
-            external_ids = {}
-
-        wecom_id = external_ids.get("wecom_external_userid")
-        if isinstance(wecom_id, str) and wecom_id.strip():
-            clean_wecom_id = wecom_id.strip()
-            external_ids["wecom_external_userid"] = clean_wecom_id
-            if clean_wecom_id in seen_wecom_ids:
-                row_errors.append(
-                    ContactImportError(
-                        row=row_number,
-                        field="企微外部联系人ID",
-                        message=f"文件内企微 ID 与第 {seen_wecom_ids[clean_wecom_id]} 行重复",
-                    )
-                )
-            elif clean_wecom_id in existing_wecom_ids:
-                row_errors.append(ContactImportError(row=row_number, field="企微外部联系人ID", message="企微 ID 已存在"))
-            else:
-                seen_wecom_ids[clean_wecom_id] = row_number
-
-        try:
-            assigned_employee_id = _parse_assigned_employee_id(row.get("assigned_employee_id", ""))
-        except ValueError as exc:
-            row_errors.append(ContactImportError(row=row_number, field="分配员工ID", message=str(exc)))
-            assigned_employee_id = None
-        if assigned_employee_id is not None and assigned_employee_id not in valid_employee_ids:
-            row_errors.append(ContactImportError(row=row_number, field="分配员工ID", message="分配员工不存在"))
-
-        errors.extend(row_errors)
-        import_rows.append(
-            (
-                row_number,
-                {
-                    "tenant_id": tenant_id,
-                    "name": name,
-                    "avatar_url": avatar_url,
-                    "phone": phone,
-                    "address": row.get("address", "").strip() or None,
-                    "external_ids": external_ids,
-                    "tags": _parse_tags(row.get("tags", "")),
-                    "assigned_employee_id": assigned_employee_id,
-                },
-            )
+        row_errors, row_entry = await _validate_contact_import_row(
+            row_number, row, tenant_id,
+            existing_names, existing_phones, existing_wecom_ids,
+            seen_names, seen_phones, seen_wecom_ids,
+            valid_employee_ids,
         )
+        errors.extend(row_errors)
+        import_rows.append(row_entry)
 
     if not import_rows:
         return ContactImportResponse(

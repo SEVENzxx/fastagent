@@ -35,10 +35,7 @@ class Contact(Base):
         BigInteger, ForeignKey("contacts.id"), nullable=True, comment="合并来源联系人ID"
     )
     assigned_employee_id: Mapped[int | None] = mapped_column(
-        BigInteger,
-        ForeignKey("employees.id"),
-        nullable=True,
-        comment="分配员工ID，用于后续企微消息自动路由",
+        BigInteger, ForeignKey("employees.id"), nullable=True, comment="分配员工ID"
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), comment="创建时间"

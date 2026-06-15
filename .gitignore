@@ -223,6 +223,9 @@ frontend/dist/
 .npm/
 .yarn/
 
+# Database migrations (generated, committed separately)
+backend/alembic/versions/
+
 # Docker
 pgdata/
 redisdata/
@@ -230,6 +233,9 @@ redisdata/
 # Runtime / local artifacts
 backend/data/checkpoints/
 backend/reports/harness/
+
+# Knowledge uploads (content files, not code)
+backend/uploads/knowledge/
 frontend/$USER_HOME/
 frontend/vite-*.log
 

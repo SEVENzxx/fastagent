@@ -19,7 +19,7 @@
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.database import get_db
+from app.integrations.database import get_db
 from app.dependencies import require_permission, require_superuser
 from app.models.employee import Employee
 from app.models.role import PermissionCode

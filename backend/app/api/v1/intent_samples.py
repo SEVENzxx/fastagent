@@ -1,7 +1,6 @@
-"""意图样本管理 API — 租户自定义意图样本 CRUD + 测试召回。
+"""场景样本管理 API — 租户自定义场景样本 CRUD + 测试召回。
 
 所有接口需要 manage_intent_samples 权限。
-Skill 和 RiskLevel 必须后端枚举校验，禁止前端随便传字符串入库。
 """
 
 from __future__ import annotations
@@ -12,7 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.recognition.types import RiskLevel, SkillName
-from app.database import get_db
+from app.integrations.database import get_db
 from app.dependencies import require_permission
 from app.models.employee import Employee
 from app.models.role import PermissionCode
@@ -32,7 +31,7 @@ from app.services.intent_sample_service import IntentSampleService
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/ai/intent-samples", tags=["意图样本"])
+router = APIRouter(prefix="/ai/intent-samples", tags=["场景样本"])
 
 _service = IntentSampleService()
 
@@ -41,10 +40,8 @@ def _to_response(sample) -> IntentSampleResponse:
     return IntentSampleResponse(
         id=sample.id,
         tenant_id=sample.tenant_id,
-        intent=sample.intent,
+        scenario_id=sample.scenario_id,
         label=sample.label,
-        skill=sample.skill,
-        risk_level=sample.risk_level,
         example_text=sample.example_text,
         enabled=sample.enabled,
         source=sample.source,
@@ -57,20 +54,18 @@ def _to_response(sample) -> IntentSampleResponse:
 
 @router.get("", response_model=IntentSampleListResponse)
 async def list_intent_samples(
-    intent: str | None = Query(None, description="按 intent 过滤"),
-    skill: str | None = Query(None, description="按 skill 过滤"),
+    scenario_id: str | None = Query(None, description="按 scenario_id 过滤"),
     enabled: bool | None = Query(None, description="按启用状态过滤"),
     skip: int = Query(0, ge=0),
     limit: int = Query(20, ge=1, le=100),
     current_user: Employee = Depends(require_permission(PermissionCode.MANAGE_INTENT_SAMPLES)),
     db: AsyncSession = Depends(get_db),
 ):
-    """获取当前租户的自定义意图样本列表"""
+    """获取当前租户的自定义场景样本列表"""
     items, total = await _service.list_samples(
         db,
         current_user.tenant_id,
-        intent=intent,
-        skill=skill,
+        scenario_id=scenario_id,
         enabled=enabled,
         skip=skip,
         limit=limit,
@@ -87,7 +82,7 @@ async def create_intent_sample(
     current_user: Employee = Depends(require_permission(PermissionCode.MANAGE_INTENT_SAMPLES)),
     db: AsyncSession = Depends(get_db),
 ):
-    """新增意图样本 → DB 写入 + Qdrant upsert"""
+    """新增场景样本 → DB 写入 + Qdrant upsert"""
     sample = await _service.create_sample(db, current_user.tenant_id, body)
     return _to_response(sample)
 
@@ -98,7 +93,7 @@ async def batch_create_intent_samples(
     current_user: Employee = Depends(require_permission(PermissionCode.MANAGE_INTENT_SAMPLES)),
     db: AsyncSession = Depends(get_db),
 ):
-    """批量新增意图样本 — 共享 intent / label / skill / risk_level"""
+    """批量新增场景样本 — 共享 scenario_id / label"""
     created = await _service.create_sample_batch(db, current_user.tenant_id, body)
     return [_to_response(s) for s in created]
 
@@ -110,7 +105,7 @@ async def update_intent_sample(
     current_user: Employee = Depends(require_permission(PermissionCode.MANAGE_INTENT_SAMPLES)),
     db: AsyncSession = Depends(get_db),
 ):
-    """编辑意图样本 → DB 更新 + Qdrant re-upsert"""
+    """编辑场景样本 → DB 更新 + Qdrant re-upsert"""
     sample = await _service.get_sample(db, sample_id, current_user.tenant_id)
     if not sample:
         raise HTTPException(status_code=404, detail="样本不存在")
@@ -125,7 +120,7 @@ async def toggle_intent_sample_enabled(
     current_user: Employee = Depends(require_permission(PermissionCode.MANAGE_INTENT_SAMPLES)),
     db: AsyncSession = Depends(get_db),
 ):
-    """启用/停用意图样本 → DB 更新 + Qdrant 同步"""
+    """启用/停用场景样本 → DB 更新 + Qdrant 同步"""
     sample = await _service.get_sample(db, sample_id, current_user.tenant_id)
     if not sample:
         raise HTTPException(status_code=404, detail="样本不存在")
@@ -139,7 +134,7 @@ async def delete_intent_sample(
     current_user: Employee = Depends(require_permission(PermissionCode.MANAGE_INTENT_SAMPLES)),
     db: AsyncSession = Depends(get_db),
 ):
-    """删除意图样本 → DB 删除 + Qdrant 同步删除"""
+    """删除场景样本 → DB 删除 + Qdrant 同步删除"""
     sample = await _service.get_sample(db, sample_id, current_user.tenant_id)
     if not sample:
         raise HTTPException(status_code=404, detail="样本不存在")
@@ -152,8 +147,7 @@ async def test_search_intent_samples(
     current_user: Employee = Depends(require_permission(PermissionCode.MANAGE_INTENT_SAMPLES)),
     db: AsyncSession = Depends(get_db),
 ):
-    """测试向量召回 — 输入一句 query，返回匹配的意图样本（含平台默认 + 租户自定义）"""
-    # 解析 query 时触发向量搜索，不需要 db，为保持接口签名一致保留 db 参数
+    """测试向量召回 — 输入一句 query，返回匹配的场景样本（含平台默认 + 租户自定义）"""
     results = await _service.test_search(db, body.query, current_user.tenant_id)
     return IntentSampleTestSearchResponse(
         query=body.query,

@@ -6,7 +6,7 @@ from jose import JWTError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.security import decode_token
-from app.database import get_db
+from app.integrations.database import get_db
 from app.models.employee import Employee
 from app.services.role_service import get_employee_permission_codes
 

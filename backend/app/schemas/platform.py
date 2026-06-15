@@ -11,11 +11,13 @@ PLATFORM_TYPES = {"wecom"}
 
 
 class PlatformCreate(CamelModel):
-    type: str = "wecom"
-    name: str | None = "企业微信"
-    config: dict = Field(default_factory=dict)
-    webhook_url: str | None = None
-    is_active: bool = True
+    """创建渠道配置请求"""
+
+    type: str = Field(default="wecom", description="渠道类型")
+    name: str | None = Field(default="企业微信", description="渠道名称")
+    config: dict = Field(default_factory=dict, description="渠道配置信息")
+    webhook_url: str | None = Field(default=None, description="Webhook URL")
+    is_active: bool = Field(default=True, description="是否启用")
 
     @field_validator("type")
     @classmethod
@@ -35,21 +37,25 @@ class PlatformCreate(CamelModel):
 
 
 class PlatformUpdate(CamelModel):
-    name: str | None = None
-    config: dict | None = None
-    webhook_url: str | None = None
-    is_active: bool | None = None
+    """更新渠道配置请求"""
+
+    name: str | None = Field(default=None, description="渠道名称")
+    config: dict | None = Field(default=None, description="渠道配置信息")
+    webhook_url: str | None = Field(default=None, description="Webhook URL")
+    is_active: bool | None = Field(default=None, description="是否启用")
 
 
 class PlatformResponse(CamelModel):
-    id: int
-    tenant_id: int
-    type: str
-    name: str | None = None
-    config: dict
-    webhook_url: str | None = None
-    is_active: bool
-    created_at: datetime
+    """渠道配置响应"""
+
+    id: int = Field(description="渠道 ID")
+    tenant_id: int = Field(description="租户 ID")
+    type: str = Field(description="渠道类型")
+    name: str | None = Field(default=None, description="渠道名称")
+    config: dict = Field(description="渠道配置信息")
+    webhook_url: str | None = Field(default=None, description="Webhook URL")
+    is_active: bool = Field(description="是否启用")
+    created_at: datetime = Field(description="创建时间")
 
     @field_serializer("id", "tenant_id")
     def serialize_bigint(self, value: int | None) -> str | None:
@@ -59,5 +65,7 @@ class PlatformResponse(CamelModel):
 
 
 class PlatformListResponse(CamelModel):
-    items: list[PlatformResponse]
-    total: int
+    """渠道配置列表响应"""
+
+    items: list[PlatformResponse] = Field(description="渠道配置列表")
+    total: int = Field(description="渠道配置总数")

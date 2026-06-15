@@ -7,11 +7,11 @@ from app.schemas.base import CamelModel
 
 
 class CategoryCreate(CamelModel):
-    """创建分类"""
+    """创建分类请求"""
 
-    name: str
-    parent_id: int | None = None
-    sort_order: int = 0
+    name: str = Field(description="分类名称")
+    parent_id: int | None = Field(default=None, description="父分类 ID")
+    sort_order: int = Field(default=0, description="排序序号")
 
     @field_validator("name")
     @classmethod
@@ -23,22 +23,22 @@ class CategoryCreate(CamelModel):
 
 
 class CategoryUpdate(CamelModel):
-    """更新分类"""
+    """更新分类请求"""
 
-    name: str | None = None
-    parent_id: int | None = None
-    sort_order: int | None = None
+    name: str | None = Field(default=None, description="分类名称")
+    parent_id: int | None = Field(default=None, description="父分类 ID")
+    sort_order: int | None = Field(default=None, description="排序序号")
 
 
 class CategoryResponse(CamelModel):
     """分类响应"""
 
-    id: int
-    tenant_id: int
-    parent_id: int | None = None
-    name: str
-    sort_order: int
-    created_at: datetime
+    id: int = Field(description="分类 ID")
+    tenant_id: int = Field(description="租户 ID")
+    parent_id: int | None = Field(default=None, description="父分类 ID")
+    name: str = Field(description="分类名称")
+    sort_order: int = Field(description="排序序号")
+    created_at: datetime = Field(description="创建时间")
 
     @field_serializer("id", "tenant_id", "parent_id")
     def serialize_bigint(self, value: int | None) -> str | None:
@@ -50,7 +50,7 @@ class CategoryResponse(CamelModel):
 class CategoryTreeResponse(CategoryResponse):
     """分类树节点响应"""
 
-    children: list["CategoryTreeResponse"] = Field(default_factory=list)
+    children: list["CategoryTreeResponse"] = Field(default_factory=list, description="子分类列表")
 
     @field_serializer("id", "tenant_id", "parent_id")
     def serialize_bigint(self, value: int | None) -> str | None:

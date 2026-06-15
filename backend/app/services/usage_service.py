@@ -1,22 +1,4 @@
-"""用量计量服务 — ContextVar 隔离 + Token 估算 + 成本计算 + Redis 缓冲写入。
-
-职责
-----
-本模块提供 LLM 调用用量追踪和成本计算能力：
-  - 用量上下文（UsageContext）：通过 ContextVar 绑定到 asyncio Task，并发请求不串租户。
-  - Redis 缓冲写入：每次 LLM 调用先写入 Redis 队列，后台 worker 批量落库。
-    消除 LLM 响应路径上的 DB commit 延迟。
-  - Token 估算（estimate_tokens）：自部署模型不返回 usage 时的保守估算兜底。
-  - 成本计算：从租户关联的 LLM 配置中读取定价信息，按 token 量计算费用。
-
-设计要点
---------
-- ContextVar 确保不同 asyncio Task 的用量上下文互不干扰。
-- LLM 调用完成 → record_current_usage → Redis LPUSH → 立即返回。
-  后台 _flush_loop 每隔几秒消费 Redis 队列，批量 insert + commit。
-- Redis 不可用时降级为同步写 DB（record_current_usage_sync）。
-- 成本公式：(prompt_tokens × input_rate + completion_tokens × output_rate) / 1000
-"""
+"""用量计量服务 — ContextVar 隔离 + Token 估算 + 成本计算 + Redis 缓冲写入。"""
 
 from __future__ import annotations
 
@@ -44,14 +26,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass(slots=True)
 class UsageContext:
-    """LLM 调用计量上下文，由 ContextVar 按 asyncio Task 隔离。
-
-    属性：
-        tenant_id: 当前租户 ID
-        conversation_id: 关联的会话 ID（可选）
-        message_id: 关联的消息 ID（可选）
-        source: 调用来源标识
-    """
+    """LLM 调用计量上下文，由 ContextVar 按 asyncio Task 隔离。"""
     tenant_id: int
     conversation_id: int | None = None
     message_id: int | None = None
@@ -75,18 +50,7 @@ def bind_usage_context(
     message_id: int | None = None,
     source: str = "ai_pipeline",
 ) -> None:
-    """绑定当前 asyncio Task 的用量上下文，后续 LLM 调用自动记账到该租户。
-
-    参数：
-        tenant_id: 租户 ID
-        conversation_id: 关联的会话 ID（可选）
-        message_id: 关联的消息 ID（可选）
-        source: 调用来源标识
-
-    使用方式：
-        在 AI 处理管线的入口处调用一次 bind_usage_context()，
-        后续该请求链路中的所有 LLM 调用都会自动关联到正确的租户和会话。
-    """
+    """绑定当前 asyncio Task 的用量上下文，后续 LLM 调用自动记账到该租户。"""
     _usage_context.set(UsageContext(
         tenant_id=tenant_id,
         conversation_id=conversation_id,
@@ -120,10 +84,7 @@ async def _get_redis():
 
 
 async def start_usage_flush_worker() -> None:
-    """启动后台 worker，定期消费 Redis 队列并批量写 DB。
-
-    在 FastAPI lifespan 或 main() 中调用，仅启动一次。
-    """
+    """启动后台 worker，定期消费 Redis 队列并批量写 DB。"""
     global _flush_task
     if _flush_task is not None and not _flush_task.done():
         return
@@ -134,7 +95,7 @@ async def start_usage_flush_worker() -> None:
 
 async def _flush_loop() -> None:
     """后台循环：批量拉取 Redis 队列，解析 JSON，批量 insert 到 DB。"""
-    from app.database import AsyncSessionLocal
+    from app.integrations.database import AsyncSessionLocal
 
     while True:
         await asyncio.sleep(_flush_interval)
@@ -217,13 +178,7 @@ async def record_current_usage(
     success: bool = True,
     error_message: str | None = None,
 ) -> None:
-    """记录一条 LLM 用量日志 — Redis 缓冲优先，不可用时降级同步写 DB。
-
-    设计说明：
-        - 优先写入 Redis 队列，由后台 _flush_loop 批量落地，不阻塞 LLM 响应。
-        - Redis 不可用时降级为 record_current_usage_sync（同步写 DB）。
-        - 无上下文时静默跳过。
-    """
+    """记录一条 LLM 用量日志 — Redis 缓冲优先，不可用时降级同步写 DB。"""
     context = _usage_context.get()
     if context is None:
         return
@@ -259,7 +214,7 @@ async def record_current_usage(
 
 async def record_current_usage_sync(context: UsageContext, payload: dict) -> None:
     """同步写用量日志到 DB（Redis 不可用时的降级路径）。"""
-    from app.database import AsyncSessionLocal
+    from app.integrations.database import AsyncSessionLocal
 
     prompt_tokens = payload["prompt_tokens"]
     completion_tokens = payload["completion_tokens"]
@@ -300,28 +255,7 @@ async def record_current_usage_sync(context: UsageContext, payload: dict) -> Non
 
 
 async def tenant_dashboard(db: AsyncSession, tenant_id: int) -> dict[str, Any]:
-    """获取租户仪表盘数据：业务指标 + LLM 累计消费 + 套餐限额。
-
-    参数：
-        db: 数据库会话
-        tenant_id: 租户 ID
-
-    返回：
-        {
-            "conversation_count": int,   # 会话总数
-            "message_count": int,        # 消息总数
-            "order_count": int,          # 订单总数
-            "knowledge_doc_count": int,  # 知识库文档数
-            "image_count": int,          # 图片素材数
-            "llm_total_tokens": int,     # LLM 累计 token 消耗
-            "llm_total_cost": float,     # LLM 累计费用
-            "plan_limits": dict,         # 当前套餐的限额配置
-        }
-
-    说明：
-        聚合查询涉及 6 张业务表 + LLM 用量表 + 租户/套餐关联表，
-        仅用于租户首页仪表盘展示，勿在高频接口中调用。
-    """
+    """获取租户仪表盘数据：业务指标 + LLM 累计消费 + 套餐限额。"""
     async def count(model, *conditions) -> int:
         return int(await db.scalar(select(func.count(model.id)).where(*conditions)) or 0)
 
@@ -361,17 +295,7 @@ async def list_usage_logs(
     page: int = 1,
     page_size: int = 50,
 ) -> tuple[list[LLMUsageLog], int]:
-    """查询 LLM 用量日志，支持按租户过滤和分页。
-
-    参数：
-        db: 数据库会话
-        tenant_id: 可选，按租户过滤；不传返回全平台数据（仅超管使用）
-        page: 页码
-        page_size: 每页条数
-
-    返回：
-        (用量日志列表, 总数) 元组，按创建时间倒序
-    """
+    """查询 LLM 用量日志，支持按租户过滤和分页。"""
     conditions = [LLMUsageLog.tenant_id == tenant_id] if tenant_id is not None else []
     base = select(LLMUsageLog).where(*conditions)
     total = int(await db.scalar(select(func.count()).select_from(base.subquery())) or 0)

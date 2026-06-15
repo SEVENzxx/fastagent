@@ -4,6 +4,8 @@ import socket
 import threading
 import time
 
+from app.common.errors.codes import AppError
+
 # ── 全局唯一 work_id ──────────────────────────────────────────────────────
 # 基于 hostname 取模，自动分配 0-31 的 work_id
 _WORK_ID = abs(hash(socket.gethostname())) % 32
@@ -51,7 +53,7 @@ class SnowflakeGenerator:
             ts = self._current_ms()
 
             if ts < self.last_timestamp:
-                raise RuntimeError("时钟回拨，拒绝生成 ID")
+                raise AppError("时钟回拨，拒绝生成 ID", code="CLOCK_BACKWARD", http_status=500)
 
             if ts == self.last_timestamp:
                 self.sequence = (self.sequence + 1) & _MAX_SEQUENCE

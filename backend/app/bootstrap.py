@@ -16,7 +16,7 @@ import logging
 from sqlalchemy import func, select
 
 from app.core.security import hash_password
-from app.database import AsyncSessionLocal
+from app.integrations.database import AsyncSessionLocal
 from app.models.employee import Employee
 from app.models.role import Permission, PermissionCode, Role, RolePermission, EmployeeRole
 from app.models.tenant import Tenant
@@ -30,44 +30,6 @@ _DEFAULT_ADMIN = {
     "display_name": "超级管理员",
 }
 
-# PermissionCode 枚举 → 中文描述映射
-_PERMISSION_DESCRIPTIONS = {
-    PermissionCode.VIEW_ASSIGNED_CHATS: "查看分配给我的会话",
-    PermissionCode.VIEW_ALL_CHATS: "查看所有会话",
-    PermissionCode.MANAGE_CONVERSATIONS: "管理会话（回复/转接/关闭）",
-    PermissionCode.VIEW_CONTACTS: "查看客户/联系人列表",
-    PermissionCode.MANAGE_CONTACTS: "管理客户/联系人（添加/编辑/删除）",
-    PermissionCode.EXPORT_CONTACTS: "导出客户列表",
-    PermissionCode.VIEW_PRODUCTS: "查看商品列表",
-    PermissionCode.MANAGE_PRODUCTS: "管理商品（添加/编辑/删除）",
-    PermissionCode.VIEW_ORDERS: "查看订单列表",
-    PermissionCode.MANAGE_ORDERS: "管理订单（创建/编辑）",
-    PermissionCode.UPDATE_ORDER_STATUS: "更新订单状态",
-    PermissionCode.VIEW_KB: "查看知识库",
-    PermissionCode.MANAGE_KB: "管理知识库（上传/编辑/删除）",
-    PermissionCode.VIEW_MARKETING: "查看营销资料",
-    PermissionCode.MANAGE_MARKETING: "管理营销资料",
-    PermissionCode.VIEW_IMAGES: "查看图片库",
-    PermissionCode.MANAGE_IMAGES: "管理图片库",
-    PermissionCode.VIEW_EMPLOYEES: "查看员工列表",
-    PermissionCode.MANAGE_EMPLOYEES: "管理员工（添加/编辑/删除）",
-    PermissionCode.MANAGE_ROLES: "管理角色与权限",
-    PermissionCode.VIEW_BILLING: "查看计费信息",
-    PermissionCode.MANAGE_BILLING: "管理计费设置",
-    PermissionCode.VIEW_ANALYTICS: "查看数据分析",
-    PermissionCode.EXPORT_ANALYTICS: "导出分析报告",
-    PermissionCode.VIEW_CHANNELS: "查看渠道配置",
-    PermissionCode.MANAGE_CHANNELS: "管理渠道配置",
-    PermissionCode.MANAGE_LLM_CONFIG: "管理 LLM 配置",
-    PermissionCode.MANAGE_SENSITIVE_WORDS: "管理敏感词",
-    PermissionCode.MANAGE_INTENT_SAMPLES: "管理意图样本",
-    PermissionCode.MANAGE_TENANTS: "管理租户（平台专有）",
-    PermissionCode.MANAGE_PLANS: "管理套餐（平台专有）",
-    PermissionCode.VIEW_AUDIT_LOGS: "查看审计日志（平台专有）",
-    PermissionCode.MANAGE_BACKUPS: "管理备份（平台专有）",
-    PermissionCode.MANAGE_SYSTEM_SETTINGS: "管理系统设置（平台专有）",
-    PermissionCode.EXPORT_DATA: "导出平台数据（平台专有）",
-}
 
 
 async def _seed_permissions(db) -> int:
@@ -77,7 +39,7 @@ async def _seed_permissions(db) -> int:
         existing = await db.scalar(select(Permission).where(Permission.code == code.value))
         if existing:
             continue
-        desc = _PERMISSION_DESCRIPTIONS.get(code)
+        desc = code.label
         db.add(Permission(
             id=hash(code.value) % (10 ** 15),
             code=code.value,
@@ -186,18 +148,16 @@ async def _seed_intent_samples() -> None:
         point_id = await vs.upsert_text(
             domain=VectorDomain.INTENT_SAMPLE,
             tenant_id=0,
-            business_id=f"{example.intent}:{example.example_text}",
+            business_id=f"{example.scenario_id}:{example.example_text}",
             text=example.example_text,
             payload={
-                "intent": example.intent,
+                "scenario_id": example.scenario_id,
                 "label": example.label,
-                "skill": example.skill,
                 "risk_level": example.risk_level,
                 "example_text": example.example_text,
                 "schema_version": SCHEMA_VERSION,
                 "is_active": True,
                 "source": "platform_default",
-                "route": example.route,
             },
         )
         if point_id:

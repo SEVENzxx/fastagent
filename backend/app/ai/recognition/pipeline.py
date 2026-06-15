@@ -30,7 +30,7 @@ from app.ai.prompts.scene_recognition import (
 from app.ai.recognition.entity_extractors import extract_all
 from app.ai.recognition.rule_matcher import RuleMatcher
 from app.ai.recognition.types import ScenarioDecision
-from app.ai.settings import HIGH_CONFIDENCE_GAP, HIGH_CONFIDENCE_SCORE
+from app.common.constants.config import HIGH_CONFIDENCE_GAP, HIGH_CONFIDENCE_SCORE, SCENE_RECOGNITION_MAX_TOKENS
 
 logger = logging.getLogger(__name__)
 
@@ -66,20 +66,38 @@ class RecognitionPipeline:
         message: str,
         context: Any | None = None,
     ) -> ScenarioDecision:
-        """识别用户消息的场景。
-
-        Args:
-            message: 用户消息原文
-            context: 当前会话上下文（可选）
-
-        Returns:
-            ScenarioDecision
-        """
+        """识别用户消息的场景。"""
         started = time.perf_counter()
         normalized = self._normalizer.normalize(str(message or ""))
 
         # ── 1: 上下文优先（短确认 + 草稿订单 → order.confirm）──
-        # 这一步必须在规则匹配之前，否则"好的"会被 SILENT 规则截获
+        priority = self._check_scene_priority(normalized, context, started)
+        if priority is not None:
+            return priority
+
+        # ── 2: 强规则匹配（不触发 LLM / Vector）──
+        rule_hit = self._check_rule_match(normalized, started)
+        if rule_hit is not None:
+            return rule_hit
+
+        # ── 3: 粗实体抽取 + 向量召回 ──
+        entities = extract_all(normalized)
+        candidates = await self._vector.retrieve(normalized, tenant_id=self._ctx_get(context, "tenant_id", 0))
+
+        # ── 4: 根据候选情况决策 ──
+        if not candidates:
+            return await self._decide_without_candidates(normalized, entities, started)
+
+        return await self._decide_with_candidates(normalized, candidates, entities, started)
+
+    # ──────────────────────────────────────
+    # 决策子步骤
+    # ──────────────────────────────────────
+
+    def _check_scene_priority(
+        self, normalized: str, context: Any, started: float,
+    ) -> ScenarioDecision | None:
+        """上下文优先：短确认 + 草稿订单 → order.confirm。"""
         if context and normalized.strip() in _CONFIRM_SIGNALS and self._ctx_get(context, "draft_order_id"):
             elapsed = (time.perf_counter() - started) * 1000
             logger.info(
@@ -91,55 +109,54 @@ class RecognitionPipeline:
                 confidence=0.92,
                 entities={"reason": "短确认词+草稿订单"},
             )
+        return None
 
-        # ── 2: 强规则匹配（不触发 LLM / Vector）──
+    def _check_rule_match(self, normalized: str, started: float) -> ScenarioDecision | None:
+        """强规则匹配。"""
         rule_result = self._rule_matcher.match(normalized)
-        if rule_result is not None:
+        if rule_result is None:
+            return None
+        elapsed = (time.perf_counter() - started) * 1000
+        logger.info(
+            "【场景识别】强规则命中 scenario=%s confidence=%.2f tenant=%s elapsed=%.0fms",
+            rule_result.scenario_id, rule_result.confidence,
+            self._ctx_get(None, "tenant_id", 0), elapsed,
+        )
+        return rule_result
+
+    async def _decide_without_candidates(
+        self, normalized: str, entities: dict, started: float,
+    ) -> ScenarioDecision:
+        """无向量候选 → LLM 直接判决或兜底。"""
+        llm_result = await self._llm_judge(normalized, [])
+        if llm_result is not None:
+            llm_result.entities.update(entities)
             elapsed = (time.perf_counter() - started) * 1000
             logger.info(
-                "【场景识别】强规则命中 scenario=%s confidence=%.2f tenant=%s elapsed=%.0fms",
-                rule_result.scenario_id, rule_result.confidence,
-                self._ctx_get(context, "tenant_id", 0), elapsed,
+                "【场景识别】LLM 直接判决 scenario=%s confidence=%.2f elapsed=%.0fms",
+                llm_result.scenario_id, llm_result.confidence, elapsed,
             )
-            return rule_result
+            return llm_result
+        elapsed = (time.perf_counter() - started) * 1000
+        logger.warning("【场景识别】完全兜底 elapsed=%.0fms", elapsed)
+        return ScenarioDecision(
+            scenario_id="template.fallback",
+            confidence=0.0,
+            entities=entities,
+        )
 
-        # ── 3: 粗实体抽取（提示，非最终业务 ID）──
-        entities = extract_all(normalized)
-
-        # ── 4: 向量召回候选 ──
-        candidates = await self._vector.retrieve(normalized, tenant_id=self._ctx_get(context, "tenant_id", 0))
-
-        # ── 5: 无向量候选 → LLM 直接判决 ──
-        if not candidates:
-            llm_result = await self._llm_judge(normalized, [])
-            if llm_result is not None:
-                llm_result.entities.update(entities)
-                elapsed = (time.perf_counter() - started) * 1000
-                logger.info(
-                    "【场景识别】LLM 直接判决 scenario=%s confidence=%.2f elapsed=%.0fms",
-                    llm_result.scenario_id, llm_result.confidence, elapsed,
-                )
-                return llm_result
-            # LLM 失败 → 兜底
-            elapsed = (time.perf_counter() - started) * 1000
-            logger.warning(
-                "【场景识别】完全兜底 elapsed=%.0fms", elapsed,
-            )
-            return ScenarioDecision(
-                scenario_id="template.fallback",
-                confidence=0.0,
-                entities=entities,
-            )
-
-        # ── 6: 高置信候选 → 同 intent 集群或最高分明显领先则直接返回 ──
+    async def _decide_with_candidates(
+        self, normalized: str, candidates: list, entities: dict, started: float,
+    ) -> ScenarioDecision:
+        """有向量候选 → 高置信短路 / LLM 精判 / 降级。"""
         top = candidates[0]
         if self._high_confidence_eligible(top, candidates):
-            scenario_id = self._map_intent_to_scenario(top.intent, top.skill.value)
+            scenario_id = top.scenario_id
             elapsed = (time.perf_counter() - started) * 1000
             logger.info(
                 "【场景识别】向量高置信 scenario=%s confidence=%.2f tenant=%s elapsed=%.0fms",
                 scenario_id, top.score,
-                self._ctx_get(context, "tenant_id", 0), elapsed,
+                self._ctx_get(None, "tenant_id", 0), elapsed,
             )
             return ScenarioDecision(
                 scenario_id=scenario_id,
@@ -147,7 +164,6 @@ class RecognitionPipeline:
                 entities=entities,
             )
 
-        # ── 7: LLM 精判（有候选）──
         llm_result = await self._llm_judge(normalized, candidates[:5])
         if llm_result is not None:
             llm_result.entities.update(entities)
@@ -158,9 +174,8 @@ class RecognitionPipeline:
             )
             return llm_result
 
-        # ── 8: LLM 失败 → 取最高分候选 ──
         top = max(candidates, key=lambda c: c.score)
-        scenario_id = self._map_intent_to_scenario(top.intent, top.skill.value)
+        scenario_id = top.scenario_id
         elapsed = (time.perf_counter() - started) * 1000
         logger.warning(
             "【场景识别】LLM 降级兜底 scenario=%s confidence=%.2f elapsed=%.0fms",
@@ -178,21 +193,21 @@ class RecognitionPipeline:
 
     @staticmethod
     def _high_confidence_eligible(top: Any, candidates: list[Any]) -> bool:
-        """高置信候选检查：同集群或分数明显领先 且 intent 映射不歧义。"""
-        # 歧义 intent 不走高置信短路，交给 LLM 判断
-        ambiguous_intents = {"product_search", "product_inquiry", "chitchat", "unknown_intent"}
-        if top.intent in ambiguous_intents:
+        """高置信候选检查：同集群或分数明显领先 且 scenario_id 映射不歧义。"""
+        # 歧义 scenario_id 不走高置信短路，交给 LLM 判断
+        ambiguous_scenarios = {"product.detail", "product.compare", "template.farewell", "template.fallback"}
+        if top.scenario_id in ambiguous_scenarios:
             return False
 
         top_k = min(3, len(candidates))
-        all_same_intent = all(
-            c.intent == top.intent and c.skill == top.skill
+        all_same_scenario = all(
+            c.scenario_id == top.scenario_id and c.skill == top.skill
             for c in candidates[:top_k]
         )
         second = candidates[1] if len(candidates) > 1 else None
         gap = top.score - (second.score if second else 0)
         return top.score >= HIGH_CONFIDENCE_SCORE and (
-            gap >= HIGH_CONFIDENCE_GAP or all_same_intent
+            gap >= HIGH_CONFIDENCE_GAP or all_same_scenario
         )
 
     async def _llm_judge(
@@ -202,7 +217,7 @@ class RecognitionPipeline:
     ) -> ScenarioDecision | None:
         """调用 LLM 做场景判决。"""
         candidate_list = [
-            {"intent": c.intent, "label": c.label, "score": c.score, "skill": c.skill.value}
+            {"scenario_id": c.scenario_id, "label": c.label, "score": c.score, "skill": c.skill.value}
             for c in candidates
         ]
 
@@ -225,7 +240,7 @@ class RecognitionPipeline:
             raw = await complete(
                 LLMUseCase.INTENT_JUDGE,
                 messages,
-                max_tokens=200,
+                max_tokens=SCENE_RECOGNITION_MAX_TOKENS,
                 temperature=0.1,
             )
             content = (raw or "").strip()
@@ -260,7 +275,7 @@ class RecognitionPipeline:
             "transfer_request": "human.transfer",
             "complaint": "human.transfer",
             "abuse": "human.transfer",
-            "return_refund": "human.transfer",
+            "return_refund": "order.refund",
             # PRODUCT （只映射无歧义的）
             "product_price": "product.filter_search",
             "product_stock": "product.sku_query",

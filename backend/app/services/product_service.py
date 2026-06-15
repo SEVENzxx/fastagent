@@ -142,23 +142,7 @@ async def list_products(
     page: int = 1,
     page_size: int = 20,
 ) -> tuple[list[Product], int]:
-    """分页查询租户商品列表，支持关键词向量搜索和多维过滤。
-
-    关键词搜索走 Qdrant 语义召回，再回 DB 做组合过滤。搜索结果按向量相似度排列。
-
-    参数：
-        db: 异步数据库会话。
-        tenant_id: 租户 ID。
-        keyword: 语义搜索关键词（空则全量）。
-        category_id: 按分类过滤。
-        is_active: 按上架状态下架过滤。
-        is_sample: 按样品标记过滤。
-        min_price/max_price: 价格区间。
-        page/page_size: 分页。
-
-    返回：
-        (商品列表, 总数)，列表已附带分类名称。
-    """
+    """分页查询租户商品列表，支持关键词向量搜索和多维过滤。"""
     conditions = [Product.tenant_id == tenant_id]
     clean_keyword = keyword.strip()
 
@@ -296,16 +280,7 @@ async def _index_product(product: Product, category_path: str | None = None) -> 
 async def get_product(
     db: AsyncSession, product_id: int, tenant_id: int
 ) -> Product | None:
-    """按 ID 获取租户下单个商品，附带分类名称。
-
-    参数：
-        db: 异步数据库会话。
-        product_id: 商品 ID。
-        tenant_id: 租户 ID。
-
-    返回：
-        商品对象，不存在返回 None。
-    """
+    """按 ID 获取租户下单个商品，附带分类名称。"""
     product = await db.scalar(
         select(Product).where(
             Product.id == product_id,
@@ -320,21 +295,7 @@ async def get_product(
 async def create_product(
     db: AsyncSession, tenant_id: int, body: ProductCreate
 ) -> Product:
-    """在租户下创建商品，含分类校验、SKU 唯一性校验和 Qdrant 索引。
-
-    分类路径会从 DB 逆向构建（如 白酒/酱香型）用于向量索引增强。
-
-    参数：
-        db: 异步数据库会话。
-        tenant_id: 租户 ID。
-        body: 商品创建请求体。
-
-    返回：
-        新创建的 Product ORM 对象。
-
-    异常：
-        ValueError: 名称为空、SKU 重复、分类不存在。
-    """
+    """在租户下创建商品，含分类校验、SKU 唯一性校验和 Qdrant 索引。"""
     name = body.name.strip()
     if not name:
         raise ValueError("商品名称不能为空")
@@ -354,7 +315,6 @@ async def create_product(
         floor_price=body.floor_price,
         stock=body.stock,
         is_sample=body.is_sample,
-        sales_template_id=body.sales_template_id,
         specs=body.specs,
         attrs_json=normalize_attrs_json(body.attrs_json, template_fields),
         feature_tags=body.feature_tags,
@@ -378,20 +338,7 @@ async def update_product(
     tenant_id: int,
     body: ProductUpdate,
 ) -> Product | None:
-    """部分更新商品信息，更新后重新索引到 Qdrant。
-
-    参数：
-        db: 异步数据库会话。
-        product_id: 商品 ID。
-        tenant_id: 租户 ID。
-        body: 商品更新请求体。
-
-    返回：
-        更新后的商品，不存在返回 None。
-
-    异常：
-        ValueError: 名称空、SKU 重复、分类不存在。
-    """
+    """部分更新商品信息，更新后重新索引到 Qdrant。"""
     product = await get_product(db, product_id, tenant_id)
     if product is None:
         return None
@@ -442,16 +389,7 @@ async def update_product(
 async def delete_product(
     db: AsyncSession, product_id: int, tenant_id: int
 ) -> bool:
-    """删除商品并清理对应的 Qdrant 向量。
-
-    参数：
-        db: 异步数据库会话。
-        product_id: 商品 ID。
-        tenant_id: 租户 ID。
-
-    返回：
-        成功删除返回 True，不存在返回 False。
-    """
+    """删除商品并清理对应的 Qdrant 向量。"""
     product = await get_product(db, product_id, tenant_id)
     if product is None:
         return False
@@ -585,24 +523,120 @@ async def _resolve_import_category(
     return category_id
 
 
+async def _validate_import_row(
+    index: int,
+    row: dict[str, str],
+    categories_by_id: dict[int, Category],
+    category_paths: dict[str, int],
+    seen_skus: dict[str, int],
+    seen_names: dict[tuple[int | None, str], int],
+) -> tuple[list[ProductImportError], tuple]:
+    """校验 CSV 单行数据，返回(错误列表, 导入行数据元组)。
+
+    seen_skus/seen_names 在函数内更新，用于文件内重复检测。
+    """
+    name = row.get("name", "").strip()
+    row_errors: list[ProductImportError] = []
+    if not name:
+        row_errors.append(ProductImportError(row=index, field="商品名称", message="商品名称不能为空"))
+    if len(name) > 300:
+        row_errors.append(ProductImportError(row=index, field="商品名称", message="商品名称不能超过300个字符"))
+
+    category_id: int | None = None
+    category_path: str | None = None
+    try:
+        category_id = await _resolve_import_category(row, categories_by_id, category_paths)
+    except ValueError as exc:
+        row_errors.append(ProductImportError(row=index, field="分类", message=str(exc)))
+    if not row_errors:
+        raw_path = row.get("category_path", "")
+        if raw_path:
+            category_path = "/".join(part.strip() for part in raw_path.split("/") if part.strip())
+
+    sku = row.get("sku", "").strip() or None
+    if sku and len(sku) > 100:
+        row_errors.append(ProductImportError(row=index, field="SKU", message="SKU不能超过100个字符"))
+    if sku:
+        if sku in seen_skus:
+            row_errors.append(
+                ProductImportError(
+                    row=index, field="SKU", message=f"文件内 SKU 与第 {seen_skus[sku]} 行重复",
+                )
+            )
+        else:
+            seen_skus[sku] = index
+
+    name_key = (category_id, name)
+    if name:
+        if name_key in seen_names:
+            row_errors.append(
+                ProductImportError(
+                    row=index, field="商品名称",
+                    message=f"文件内同一分类商品名称与第 {seen_names[name_key]} 行重复",
+                )
+            )
+        else:
+            seen_names[name_key] = index
+
+    try:
+        price = _parse_float(row.get("price", ""), "售价")
+    except ValueError as exc:
+        row_errors.append(ProductImportError(row=index, field="售价", message=str(exc)))
+        price = None
+    try:
+        floor_price = _parse_float(row.get("floor_price", ""), "底价")
+    except ValueError as exc:
+        row_errors.append(ProductImportError(row=index, field="底价", message=str(exc)))
+        floor_price = None
+    if price is not None and floor_price is not None and floor_price > price:
+        row_errors.append(ProductImportError(row=index, field="底价", message="底价不能高于售价"))
+    try:
+        stock = _parse_stock(row.get("stock", ""))
+    except ValueError as exc:
+        row_errors.append(ProductImportError(row=index, field="库存", message=str(exc)))
+        stock = 0
+    try:
+        is_sample = _parse_bool(row.get("is_sample", ""), default=False)
+    except ValueError as exc:
+        row_errors.append(ProductImportError(row=index, field="是否样品", message=str(exc)))
+        is_sample = False
+    try:
+        is_active = _parse_bool(row.get("is_active", ""), default=True)
+    except ValueError as exc:
+        row_errors.append(ProductImportError(row=index, field="状态", message=str(exc)))
+        is_active = True
+    try:
+        specs = _parse_specs(row.get("specs", ""))
+    except ValueError as exc:
+        row_errors.append(ProductImportError(row=index, field="规格JSON", message=str(exc)))
+        specs = None
+
+    import_entry = (
+        index,
+        {
+            "name": name,
+            "category_id": category_id,
+            "category_path": category_path,
+            "description": row.get("description", "").strip() or None,
+            "price": price,
+            "floor_price": floor_price,
+            "stock": stock,
+            "is_sample": is_sample,
+            "specs": specs,
+            "is_active": is_active,
+        },
+        sku,
+        category_id,
+    )
+    return row_errors, import_entry
+
+
 async def import_products_csv(
     db: AsyncSession,
     tenant_id: int,
     content: bytes,
 ) -> ProductImportResponse:
-    """批量导入 CSV 商品。
-
-    支持 UTF-8 BOM 和 GBK 编码。逐行校验：名称必填、SKU 不重复、
-    分类存在、价格/库存合法。全部行通过校验后才批量写入 DB 并索引 Qdrant。
-
-    参数：
-        db: 异步数据库会话。
-        tenant_id: 租户 ID。
-        content: CSV 文件的 bytes 内容。
-
-    返回：
-        ProductImportResponse（成功/失败 + 创建数 + 错误列表）。
-    """
+    """批量导入 CSV 商品。"""
     try:
         text = content.decode("utf-8-sig")
     except UnicodeDecodeError:
@@ -624,106 +658,11 @@ async def import_products_csv(
         if not any(row.values()):
             continue
 
-        name = row.get("name", "").strip()
-        row_errors: list[ProductImportError] = []
-        if not name:
-            row_errors.append(ProductImportError(row=index, field="商品名称", message="商品名称不能为空"))
-        if len(name) > 300:
-            row_errors.append(ProductImportError(row=index, field="商品名称", message="商品名称不能超过300个字符"))
-
-        category_id: int | None = None
-        category_path: str | None = None  # CSV 导入时的完整分类路径，用于向量索引
-        try:
-            category_id = await _resolve_import_category(row, categories_by_id, category_paths)
-        except ValueError as exc:
-            row_errors.append(ProductImportError(row=index, field="分类", message=str(exc)))
-        # 如果 CSV 有"分类路径"列，归一化后保留用于向量索引
-        if not row_errors:
-            raw_path = row.get("category_path", "")
-            if raw_path:
-                category_path = "/".join(part.strip() for part in raw_path.split("/") if part.strip())
-
-        sku = row.get("sku", "").strip() or None
-        if sku and len(sku) > 100:
-            row_errors.append(ProductImportError(row=index, field="SKU", message="SKU不能超过100个字符"))
-        if sku:
-            if sku in seen_skus:
-                row_errors.append(
-                    ProductImportError(
-                        row=index,
-                        field="SKU",
-                        message=f"文件内 SKU 与第 {seen_skus[sku]} 行重复",
-                    )
-                )
-            else:
-                seen_skus[sku] = index
-
-        name_key = (category_id, name)
-        if name:
-            if name_key in seen_names:
-                row_errors.append(
-                    ProductImportError(
-                        row=index,
-                        field="商品名称",
-                        message=f"文件内同一分类商品名称与第 {seen_names[name_key]} 行重复",
-                    )
-                )
-            else:
-                seen_names[name_key] = index
-
-        try:
-            price = _parse_float(row.get("price", ""), "售价")
-        except ValueError as exc:
-            row_errors.append(ProductImportError(row=index, field="售价", message=str(exc)))
-            price = None
-        try:
-            floor_price = _parse_float(row.get("floor_price", ""), "底价")
-        except ValueError as exc:
-            row_errors.append(ProductImportError(row=index, field="底价", message=str(exc)))
-            floor_price = None
-        if price is not None and floor_price is not None and floor_price > price:
-            row_errors.append(ProductImportError(row=index, field="底价", message="底价不能高于售价"))
-        try:
-            stock = _parse_stock(row.get("stock", ""))
-        except ValueError as exc:
-            row_errors.append(ProductImportError(row=index, field="库存", message=str(exc)))
-            stock = 0
-        try:
-            is_sample = _parse_bool(row.get("is_sample", ""), default=False)
-        except ValueError as exc:
-            row_errors.append(ProductImportError(row=index, field="是否样品", message=str(exc)))
-            is_sample = False
-        try:
-            is_active = _parse_bool(row.get("is_active", ""), default=True)
-        except ValueError as exc:
-            row_errors.append(ProductImportError(row=index, field="状态", message=str(exc)))
-            is_active = True
-        try:
-            specs = _parse_specs(row.get("specs", ""))
-        except ValueError as exc:
-            row_errors.append(ProductImportError(row=index, field="规格JSON", message=str(exc)))
-            specs = None
-
-        errors.extend(row_errors)
-        import_rows.append(
-            (
-                index,
-                {
-                    "name": name,
-                    "category_id": category_id,
-                    "category_path": category_path,  # 完整分类路径，用于向量索引
-                    "description": row.get("description", "").strip() or None,
-                    "price": price,
-                    "floor_price": floor_price,
-                    "stock": stock,
-                    "is_sample": is_sample,
-                    "specs": specs,
-                    "is_active": is_active,
-                },
-                sku,
-                category_id,
-            )
+        row_errors, import_entry = await _validate_import_row(
+            index, row, categories_by_id, category_paths, seen_skus, seen_names,
         )
+        errors.extend(row_errors)
+        import_rows.append(import_entry)
 
     if not import_rows:
         return ProductImportResponse(

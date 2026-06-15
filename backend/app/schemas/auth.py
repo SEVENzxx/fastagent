@@ -17,7 +17,6 @@ class LoginRequest(CamelModel):
     password: str
 
 
-
 class RefreshRequest(CamelModel):
     """刷新令牌请求"""
 

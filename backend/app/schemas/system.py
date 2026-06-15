@@ -9,26 +9,27 @@ from app.schemas.base import CamelModel
 
 class SystemSettingItem(BaseModel):
     """单个系统设置项（key-value）。"""
-    key: str
-    value: str
-    description: str | None = None
+
+    key: str = Field(description="设置键")
+    value: str = Field(description="设置值")
+    description: str | None = Field(default=None, description="设置说明")
 
 
 class SystemSettingsResponse(CamelModel):
     """系统设置列表响应。"""
-    settings: list[SystemSettingItem]
+
+    settings: list[SystemSettingItem] = Field(description="系统设置列表")
 
 
 class SystemSettingsUpdate(BaseModel):
-    """批量更新系统设置请求体。
+    """批量更新系统设置请求体。"""
 
-    key 对应的 value，未传的 key 保持不变。
-    """
     settings: dict[str, str] = Field(..., description="键值对，如 {'max_file_upload_mb': '20'}")
 
 
 class DbHealthResponse(CamelModel):
     """数据库健康状态快照。"""
+
     active_connections: int = Field(..., description="当前活跃连接数")
     max_connections: int = Field(..., description="最大连接数上限")
     db_size_mb: int = Field(..., description="数据库占用磁盘大小 (MB)")
@@ -39,11 +40,12 @@ class DbHealthResponse(CamelModel):
 
 class BackupRecordResponse(CamelModel):
     """备份记录响应。"""
-    id: str
-    name: str
-    size_bytes: int
+
+    id: str = Field(description="备份记录 ID")
+    name: str = Field(description="备份名称")
+    size_bytes: int = Field(description="备份文件大小（字节）")
     size_mb: float = Field(..., description="备份文件大小 (MB)，前端展示用")
-    type: str
-    status: str
-    error_message: str | None = None
-    created_at: datetime
+    type: str = Field(description="备份类型")
+    status: str = Field(description="备份状态")
+    error_message: str | None = Field(default=None, description="错误信息")
+    created_at: datetime = Field(description="创建时间")

@@ -13,6 +13,7 @@ from typing import Any
 
 from app.ai.llm import gateway as llm_gateway
 from app.ai.prompts.semantic_recommend import build_semantic_recommend_messages
+from app.common.constants.config import SEMANTIC_RECOMMEND_MAX_TOKENS
 from app.config import settings
 from app.integrations.llm_client import LLMUseCase
 
@@ -46,7 +47,7 @@ class SemanticRecommendExtractor:
                 LLMUseCase.PRODUCT_SEMANTIC_SEARCH,
                 messages,
                 tenant_id=tenant_id,
-                max_tokens=512,
+                max_tokens=SEMANTIC_RECOMMEND_MAX_TOKENS,
                 temperature=0.0,
             )
             data = _parse_json(raw)
@@ -78,7 +79,7 @@ def _parse_json(raw: str) -> dict | None:
                 data = json.loads(match.group())
                 return data if isinstance(data, dict) else None
             except json.JSONDecodeError:
-                pass
+                logger.debug("语义推荐 LLM 返回值 JSON 解析失败: raw=%s", raw[:200])
     return None
 
 
