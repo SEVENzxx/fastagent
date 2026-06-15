@@ -23,7 +23,7 @@ from __future__ import annotations
 import hashlib
 import logging
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 from langchain_core.runnables import RunnableConfig
 
@@ -169,7 +169,7 @@ _CANCELABLE_STATUSES: frozenset[str] = frozenset({
 
 async def resolve_order_node(
     state: OrderCancelState,
-    config: RunnableConfig | None = None,
+    config: Optional[RunnableConfig] = None,
 ) -> dict[str, Any]:
     """解析订单引用。
 
@@ -226,7 +226,7 @@ async def resolve_order_node(
 
 async def validate_cancelable_node(
     state: OrderCancelState,
-    config: RunnableConfig | None = None,
+    config: Optional[RunnableConfig] = None,
 ) -> dict[str, Any]:
     """校验订单是否可取消 + 订单归属。
 
@@ -314,7 +314,7 @@ async def validate_cancelable_node(
 
 async def confirm_cancel_node(
     state: OrderCancelState,
-    config: RunnableConfig | None = None,
+    config: Optional[RunnableConfig] = None,
 ) -> dict[str, Any]:
     """等待用户确认取消。"""
     _ = config
@@ -344,7 +344,7 @@ async def confirm_cancel_node(
 
 async def execute_cancel_node(
     state: OrderCancelState,
-    config: RunnableConfig | None = None,
+    config: Optional[RunnableConfig] = None,
 ) -> dict[str, Any]:
     """执行取消订单（原子幂等控制：setnx 占位 → 执行 → set 完成）。
 
@@ -449,7 +449,7 @@ def _cancel_failed(idempotency_key: str, order_id: str, error: str | None) -> di
 
 async def build_result_node(
     state: OrderCancelState,
-    config: RunnableConfig | None = None,
+    config: Optional[RunnableConfig] = None,
 ) -> dict[str, Any]:
     """最终结果整理。"""
     _ = config

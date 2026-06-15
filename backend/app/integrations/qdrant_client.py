@@ -68,12 +68,12 @@ class QdrantVectorClient(BaseClient):
     async def ensure_collection(self, collection: str) -> None:
         """确保 collection 存在，不存在时自动创建。"""
         if not self.enabled:
-            raise QdrantClientError("Qdrant is disabled")
+            raise QdrantClientError("Qdrant 未启用")
 
         started = time.perf_counter()
         exists = await self._collection_exists(collection)
         if exists:
-            logger.info("Qdrant collection exists: collection=%s", collection)
+            logger.info("Qdrant 集合已存在：collection=%s", collection)
             return
 
         payload = {
@@ -93,7 +93,7 @@ class QdrantVectorClient(BaseClient):
             )
             raise
         logger.info(
-            "Qdrant collection created: collection=%s size=%s distance=%s elapsed_ms=%.0f",
+            "Qdrant 集合已创建：collection=%s size=%s distance=%s elapsed_ms=%.0f",
             collection,
             self.vector_size,
             self.distance,
@@ -125,7 +125,7 @@ class QdrantVectorClient(BaseClient):
         }
         await self._request("PUT", f"/collections/{collection}/points", json=body)
         logger.info(
-            "Qdrant upsert complete: collection=%s point_id=%s elapsed_ms=%.0f",
+            "Qdrant 写入完成：collection=%s point_id=%s elapsed_ms=%.0f",
             collection,
             point_id,
             (time.perf_counter() - started) * 1000,
@@ -172,7 +172,7 @@ class QdrantVectorClient(BaseClient):
             data = await self._request("POST", f"/collections/{collection}/points/search", json=body)
             result = data.get("result", [])
             if not isinstance(result, list):
-                raise QdrantClientError("Qdrant search result must be a list")
+                raise QdrantClientError("Qdrant 搜索结果必须是列表")
 
             hits = [
                 QdrantSearchHit(
@@ -184,7 +184,7 @@ class QdrantVectorClient(BaseClient):
                 if isinstance(item, dict)
             ]
             logger.info(
-                "Qdrant search complete: collection=%s filters=%s top_k=%s hits=%s elapsed_ms=%.0f",
+                "Qdrant 检索完成：collection=%s filters=%s top_k=%s hits=%s elapsed_ms=%.0f",
                 collection,
                 filters or {},
                 top_k,
@@ -218,11 +218,11 @@ class QdrantVectorClient(BaseClient):
         else:
             qdrant_filter = self._to_qdrant_filter(filters)
             if not qdrant_filter:
-                raise QdrantClientError("delete requires point_ids or filters")
+                raise QdrantClientError("删除操作需要 point_ids 或 filters")
             selector = {"filter": qdrant_filter}
         await self._request("POST", f"/collections/{collection}/points/delete", json=selector)
         logger.info(
-            "Qdrant delete complete: collection=%s point_ids=%s filters=%s elapsed_ms=%.0f",
+            "Qdrant 删除完成：collection=%s point_ids=%s filters=%s elapsed_ms=%.0f",
             collection,
             len(point_ids or []),
             filters or {},
@@ -246,7 +246,7 @@ class QdrantVectorClient(BaseClient):
         通过 _send() 发送 GET 请求，按状态码区分 404（不存在）与其他异常。
         """
         if not self.base_url:
-            raise QdrantClientError("QDRANT_URL must not be empty")
+            raise QdrantClientError("QDRANT_URL 不能为空")
 
         url = f"{self.base_url}/collections/{collection}"
         try:
@@ -263,7 +263,7 @@ class QdrantVectorClient(BaseClient):
                 exc.response.status_code,
             )
             raise QdrantClientError(
-                f"Qdrant collection check failed: status={exc.response.status_code}",
+                f"Qdrant 集合检查失败：status={exc.response.status_code}",
             ) from exc
         except httpx.RequestError as exc:
             logger.error(
@@ -271,7 +271,7 @@ class QdrantVectorClient(BaseClient):
                 collection,
                 exc,
             )
-            raise QdrantClientError(f"Qdrant HTTP error: {exc}") from exc
+            raise QdrantClientError(f"Qdrant HTTP 错误：{exc}") from exc
 
     async def _request(self, method: str, path: str, *, json: dict[str, Any] | None = None) -> dict[str, Any]:
         """Qdrant 专用 _request — 使用 _send() 发送，自定义状态码检查和空 body 处理。
@@ -279,30 +279,30 @@ class QdrantVectorClient(BaseClient):
         不调用 super()._request()，因为 Qdrant 需要非标准的状态码处理。
         """
         if not self.enabled:
-            raise QdrantClientError("Qdrant is disabled")
+            raise QdrantClientError("Qdrant 未启用")
         if not self.base_url:
-            raise QdrantClientError("QDRANT_URL must not be empty")
+            raise QdrantClientError("QDRANT_URL 不能为空")
 
         url = f"{self.base_url}{path}"
         try:
             response = await self._send(method, url, json_body=json)
             if response.status_code >= 400:
-                raise QdrantClientError(f"Qdrant HTTP error: status={response.status_code} body={response.text[:300]}")
+                raise QdrantClientError(f"Qdrant HTTP 错误：status={response.status_code} body={response.text[:300]}")
             data = response.json() if response.content else {}
         except httpx.HTTPError as exc:
-            raise QdrantClientError(f"Qdrant HTTP error: {exc}") from exc
+            raise QdrantClientError(f"Qdrant HTTP 错误：{exc}") from exc
         except ValueError as exc:
-            raise QdrantClientError("Qdrant response is not valid JSON") from exc
+            raise QdrantClientError("Qdrant 响应不是有效的 JSON") from exc
 
         if not isinstance(data, dict):
-            raise QdrantClientError("Qdrant response must be a JSON object")
+            raise QdrantClientError("Qdrant 响应必须是 JSON 对象")
         return data
 
     # ── 工具方法 ──────────────────────────────────────────────────────
 
     def _validate_vector(self, vector: list[float]) -> None:
         if len(vector) != self.vector_size:
-            raise QdrantClientError(f"invalid vector dimension: expected={self.vector_size}, actual={len(vector)}")
+            raise QdrantClientError(f"向量维度无效：expected={self.vector_size}, actual={len(vector)}")
 
     def _to_qdrant_filter(self, filters: dict[str, Any] | None) -> dict[str, Any] | None:
         if not filters:

@@ -24,7 +24,7 @@ from __future__ import annotations
 import hashlib
 import logging
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 from langchain_core.runnables import RunnableConfig
 
@@ -190,7 +190,7 @@ async def _search_products_by_name(
 
 async def resolve_product_node(
     state: OrderCreationState,
-    config: RunnableConfig | None = None,
+    config: Optional[RunnableConfig] = None,
 ) -> dict[str, Any]:
     """解析商品引用。
 
@@ -259,7 +259,7 @@ async def resolve_product_node(
 
 async def collect_shipping_node(
     state: OrderCreationState,
-    config: RunnableConfig | None = None,
+    config: Optional[RunnableConfig] = None,
 ) -> dict[str, Any]:
     """收集收货地址。"""
     _ = config
@@ -278,7 +278,7 @@ async def collect_shipping_node(
 
 async def confirm_order_node(
     state: OrderCreationState,
-    config: RunnableConfig | None = None,
+    config: Optional[RunnableConfig] = None,
 ) -> dict[str, Any]:
     """展示订单确认信息，等待用户确认。"""
     _ = config
@@ -317,7 +317,7 @@ async def confirm_order_node(
 
 async def execute_create_node(
     state: OrderCreationState,
-    config: RunnableConfig | None = None,
+    config: Optional[RunnableConfig] = None,
 ) -> dict[str, Any]:
     """执行下单（原子幂等控制：setnx 占位 → 执行 → set 完成）。
 
@@ -436,7 +436,7 @@ def _mock_create_reply(product_name: str, quantity: int, address: str | None, or
 
 async def build_result_node(
     state: OrderCreationState,
-    config: RunnableConfig | None = None,
+    config: Optional[RunnableConfig] = None,
 ) -> dict[str, Any]:
     """最终结果整理。"""
     _ = config

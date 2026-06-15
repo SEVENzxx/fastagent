@@ -84,7 +84,7 @@ class LLMClient(BaseClient):
         self.api_key = api_key if api_key is not None else settings.AI_LLM_API_KEY
         raw_model = model or settings.AI_LLM_MODEL
         self.model = normalize_litellm_model(raw_model, self.provider)
-        logger.info("LLM client configured: provider=%s model=%s raw_model=%s", self.provider, self.model, raw_model)
+        logger.info("LLM 客户端已配置：provider=%s model=%s raw_model=%s", self.provider, self.model, raw_model)
 
     # ═══════════════════════════ 租户配置 ═══════════════════════════
 
@@ -275,7 +275,7 @@ class LLMClient(BaseClient):
         stream: bool,
     ) -> Any:
         if not self.model:
-            raise LLMClientError("model 不能为空")
+            raise LLMClientError("模型名称不能为空")
 
         try:
             from litellm import acompletion
@@ -303,7 +303,7 @@ class LLMClient(BaseClient):
         except TimeoutError as exc:
             elapsed = (time.perf_counter() - t0) * 1000
             logger.warning(
-                "LiteLLM timeout: provider=%s model=%s api_base=%s stream=%s elapsed=%.0fms timeout=%ss",
+                "LiteLLM 超时：provider=%s model=%s api_base=%s stream=%s elapsed=%.0fms timeout=%ss",
                 self.provider,
                 self.model,
                 self.base_url,
@@ -311,11 +311,11 @@ class LLMClient(BaseClient):
                 elapsed,
                 self.timeout_seconds,
             )
-            raise LLMClientError(f"litellm timeout: model={self.model}") from exc
+            raise LLMClientError(f"LiteLLM 超时：model={self.model}") from exc
         except Exception as exc:
             elapsed = (time.perf_counter() - t0) * 1000
             logger.warning(
-                "LiteLLM failed: provider=%s model=%s api_base=%s stream=%s elapsed=%.0fms error_type=%s error=%r",
+                "LiteLLM 调用失败：provider=%s model=%s api_base=%s stream=%s elapsed=%.0fms error_type=%s error=%r",
                 self.provider,
                 self.model,
                 self.base_url,
@@ -324,7 +324,7 @@ class LLMClient(BaseClient):
                 type(exc).__name__,
                 exc,
             )
-            raise LLMClientError(f"litellm: {exc}") from exc
+            raise LLMClientError(f"LiteLLM 错误：{exc}") from exc
 
     async def _http_post(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
         if not self.base_url:
@@ -333,7 +333,7 @@ class LLMClient(BaseClient):
         url = f"{self.base_url.rstrip('/')}{path}"
         t0 = time.perf_counter()
         logger.debug(
-            "HTTP LLM request started: model=%s url=%s timeout=%ss trace_id=%s",
+            "HTTP LLM 请求开始：model=%s url=%s timeout=%ss trace_id=%s",
             self.model,
             url,
             self.timeout_seconds,
@@ -344,16 +344,16 @@ class LLMClient(BaseClient):
         except BaseClientError as exc:
             elapsed = (time.perf_counter() - t0) * 1000
             logger.warning(
-                "HTTP LLM failed: model=%s url=%s elapsed=%.0fms error=%s",
+                "HTTP LLM 请求失败：model=%s url=%s elapsed=%.0fms error=%s",
                 self.model,
                 url,
                 elapsed,
                 exc,
             )
-            raise LLMClientError(f"http llm: {exc}") from exc
+            raise LLMClientError(f"HTTP LLM 错误：{exc}") from exc
 
         if not isinstance(data, dict):
-            raise LLMClientError("http llm response must be a json object")
+            raise LLMClientError("HTTP LLM 响应必须是 JSON 对象")
         return data
 
     # ── 响应解析 ──
@@ -371,7 +371,7 @@ class LLMClient(BaseClient):
             text = self._get(first, "text")
             if text is not None:
                 return str(text).strip()
-        raise LLMClientError("response does not contain assistant content")
+        raise LLMClientError("响应中不包含助手内容")
 
     def _extract_delta(self, chunk: Any) -> str:
         """从流式 chunk 的 choices[0].delta.content 提取增量文本。"""

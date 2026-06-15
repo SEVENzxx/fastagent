@@ -44,7 +44,7 @@ class EmbeddingClient(BaseClient):
         """返回单条文本向量。"""
         embeddings = await self.embed_many([text])
         if not embeddings:
-            raise EmbeddingClientError("embedding response is empty")
+            raise EmbeddingClientError("Embedding 响应为空")
         return embeddings[0]
 
     async def embed_many(self, texts: list[str]) -> list[list[float]]:
@@ -84,7 +84,7 @@ class EmbeddingClient(BaseClient):
 
         logger.warning("Embedding 返回数量不匹配：expected=%s actual=%s", len(clean_texts), len(embeddings))
         raise EmbeddingClientError(
-            f"embedding count mismatch: expected={len(clean_texts)}, actual={len(embeddings)}"
+            f"Embedding 返回数量不匹配：expected={len(clean_texts)}, actual={len(embeddings)}"
         )
 
     async def _post_json(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
@@ -103,10 +103,10 @@ class EmbeddingClient(BaseClient):
                 get_trace_id(),
                 exc,
             )
-            raise EmbeddingClientError(f"embedding http error: {exc}") from exc
+            raise EmbeddingClientError(f"Embedding HTTP 错误：{exc}") from exc
 
         if not isinstance(data, dict):
-            raise EmbeddingClientError("embedding response must be a json object")
+            raise EmbeddingClientError("Embedding 响应必须是 JSON 对象")
         logger.info(
             "Embedding HTTP 请求完成：path=%s elapsed_ms=%.0f trace_id=%s",
             path,
@@ -134,12 +134,12 @@ class EmbeddingClient(BaseClient):
         if isinstance(value, list) and all(self._is_vector(item) for item in value):
             return [self._to_vector(item) for item in value]
 
-        raise EmbeddingClientError("embedding response does not contain embeddings")
+        raise EmbeddingClientError("Embedding 响应中不包含向量")
 
     def _is_vector(self, value: Any) -> bool:
         return isinstance(value, list) and bool(value) and all(isinstance(item, int | float) for item in value)
 
     def _to_vector(self, value: Any) -> list[float]:
         if not self._is_vector(value):
-            raise EmbeddingClientError("invalid embedding vector")
+            raise EmbeddingClientError("无效的 Embedding 向量")
         return [float(item) for item in value]
