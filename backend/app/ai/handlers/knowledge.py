@@ -17,7 +17,7 @@ from typing import Any
 
 from app.common.constants.business import KNOWLEDGE_DEIXIS_KEYWORDS, KNOWLEDGE_SHORT_CONTENT_TOKEN_LIMIT
 from app.ai.context.pending_state import PendingDirective
-from app.ai.handlers.base import BaseHandler, HandlerResult
+from app.ai.handlers.base import BaseHandler, HandlerResult, call_skill_failed
 from app.ai.llm.gateway import LLMUseCase, complete
 from app.ai.prompts.knowledge_summary import build_knowledge_summary_messages
 from app.ai.recognition.types import ScenarioDecision
@@ -283,14 +283,10 @@ class KnowledgeHandler(BaseHandler):
             return await call_skill(self._skill, method, **kwargs)
         except SkillError:
             logger.warning("Skill 调用失败: method=%s", method)
-            return _empty_tool_result(method)
+            return call_skill_failed(method)
 
 
 # ── 工具函数 ──
-
-
-def _empty_tool_result(method: str) -> ToolResult:
-    return ToolResult(ok=False, skill_name=method, error="知识检索服务暂不可用")
 
 
 def _build_knowledge_refs(

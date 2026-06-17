@@ -13,7 +13,7 @@ import logging
 from typing import Any
 
 from app.ai.context.pending_state import PendingDirective
-from app.ai.handlers.base import BaseHandler, HandlerResult
+from app.ai.handlers.base import BaseHandler, HandlerResult, call_skill_failed
 from app.ai.recognition.types import ScenarioDecision
 from app.ai.reply_builders.memory import MemoryReplyBuilder
 from app.ai.context.session_context import SessionContext
@@ -121,4 +121,4 @@ class MemoryHandler(BaseHandler):
             return await call_skill_tx(self._skill, method, **kwargs)
         except SkillError:
             logger.warning("Skill 调用失败: method=%s", method)
-            return ToolResult(ok=False, skill_name=method, error="记忆服务暂不可用")
+            return call_skill_failed(method)

@@ -505,21 +505,20 @@ class TestFallback:
         service: AssistantService,
         mock_deps: dict,
     ) -> None:
-        """Pending 数据损坏 → 返回不可用提示，不走识别。"""
+        """Pending 数据损坏 → 清理后降级为识别。"""
         from app.ai.context.pending_state import PendingStateCorruptedError
 
         mock_deps["pending_service"].get.side_effect = PendingStateCorruptedError("损坏")
+        mock_deps["recognition"].recognize.return_value = ScenarioDecision(
+            scenario_id="template.fallback", confidence=0.0,
+        )
 
         result = await service.process_message(
             tenant_id=1, conversation_id=1, text="你好",
         )
-        # 损坏数据通过 _finalize → apply_directive(CLEAR) 清理
-        mock_deps["pending_service"].apply_directive.assert_awaited_once()
-        call_kwargs = mock_deps["pending_service"].apply_directive.call_args.kwargs
-        assert call_kwargs["directive"] == PendingDirective.CLEAR
-        # 返回不可用提示，不走识别
-        assert "暂时不可用" in result.reply
-        mock_deps["recognition"].recognize.assert_not_called()
+        # 损坏数据在 _get_pending_or_none 内部清理，不走旧的全阻断路径
+        assert result.reply
+        mock_deps["recognition"].recognize.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_pending_corrupted_clear_failure_still_returns_unavailable(
@@ -527,18 +526,20 @@ class TestFallback:
         service: AssistantService,
         mock_deps: dict,
     ) -> None:
-        """Pending 数据损坏 + clear 也失败 → 不抛异常，仍返回不可用提示。"""
+        """Pending 数据损坏 + clear 也失败 → 不抛异常，降级为识别。"""
         from app.ai.context.pending_state import PendingStateCorruptedError
 
         mock_deps["pending_service"].get.side_effect = PendingStateCorruptedError("损坏")
         # apply_directive 也失败
         mock_deps["pending_service"].apply_directive.side_effect = RuntimeError("Redis 写入失败")
+        mock_deps["recognition"].recognize.return_value = ScenarioDecision(
+            scenario_id="template.fallback", confidence=0.0,
+        )
 
         result = await service.process_message(
             tenant_id=1, conversation_id=1, text="你好",
         )
-        # 不抛异常，仍返回不可用提示
-        assert "暂时不可用" in result.reply
+        assert result.reply
         assert result.metadata["pending_directive"] == "clear"
 
     @pytest.mark.asyncio
@@ -547,16 +548,19 @@ class TestFallback:
         service: AssistantService,
         mock_deps: dict,
     ) -> None:
-        """Pending 读取抛通用异常 → 返回不可用提示。"""
+        """Pending 读取抛通用异常 → 降级为新识别，不阻断用户消息。"""
         mock_deps["pending_service"].get.side_effect = RuntimeError("Redis 连接超时")
+        mock_deps["recognition"].recognize.return_value = ScenarioDecision(
+            scenario_id="template.fallback", confidence=0.0,
+        )
 
         result = await service.process_message(
             tenant_id=1, conversation_id=1, text="你好",
         )
-        assert "暂时不可用" in result.reply
+        assert result.reply
         assert result.metadata["pending_directive"] == "clear"
-        # recognition 不应被调用（异常短路）
-        mock_deps["recognition"].recognize.assert_not_called()
+        # 降级为识别（Transient Redis 不应阻断用户消息）
+        mock_deps["recognition"].recognize.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_session_context_read_failure_falls_back(

@@ -137,3 +137,8 @@ class BaseHandler(ABC):
             result.resource_trace.vector_calls = td.get("vector_calls", 0)
             result.resource_trace.skill_calls = td.get("skill_calls", [])
         set_trace(None)
+
+
+def call_skill_failed(method: str) -> ToolResult:
+    """Skill 调用失败时的统一降级 ToolResult。"""
+    return ToolResult(ok=False, skill_name=method, error="服务暂不可用")

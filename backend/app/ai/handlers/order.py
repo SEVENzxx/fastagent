@@ -23,7 +23,7 @@ from app.ai.components.order_reference import (
     _extract_order_number,
 )
 from app.ai.context.pending_state import PendingDirective, PendingState
-from app.ai.handlers.base import BaseHandler, HandlerResult
+from app.ai.handlers.base import BaseHandler, HandlerResult, call_skill_failed
 from app.ai.recognition.types import ScenarioDecision
 from app.ai.reply_builders.order import OrderReplyBuilder
 from app.ai.context.session_context import SessionContext
@@ -710,14 +710,10 @@ class OrderHandler(BaseHandler):
             return await call_skill(self._skill, method, **kwargs)
         except SkillError:
             logger.warning("Skill 调用失败: method=%s", method)
-            return _empty_tool_result()
+            return call_skill_failed(method)
 
 
 # ── 工具函数 ──
-
-
-def _empty_tool_result() -> ToolResult:
-    return ToolResult(ok=False, skill_name="manage_order", error="订单服务暂不可用")
 
 
 def _summarize_orders(orders: list[dict[str, Any]]) -> list[dict[str, Any]]:

@@ -31,7 +31,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 # 样本 schema 版本：变更时 bootstrap 会清理旧版本 point 并重新索引
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 RiskLevelType = Literal["READ_ONLY", "LOW_RISK_WRITE", "HIGH_RISK_WRITE"]
 
@@ -86,6 +86,33 @@ DEFAULT_INTENT_EXAMPLES: tuple[IntentExample, ...] = (
     IntentExample("product.filter_search", "条件筛选", "READ_ONLY", "有没有其他颜色的"),
     IntentExample("product.filter_search", "条件筛选", "READ_ONLY", "价格最低的有哪些"),
     IntentExample("product.filter_search", "条件筛选", "READ_ONLY", "按条件帮我找找"),
+    # 槽位化样本 — 预算/价格/规格/条件泛化
+    IntentExample("product.filter_search", "条件筛选", "READ_ONLY", "有没有预算以内的商品推荐"),
+    IntentExample("product.filter_search", "条件筛选", "READ_ONLY", "推荐一下预算以内的商品"),
+    IntentExample("product.filter_search", "条件筛选", "READ_ONLY", "帮我找价格不超过预算的商品"),
+    IntentExample("product.filter_search", "条件筛选", "READ_ONLY", "有没有指定价格以内的商品"),
+    IntentExample("product.filter_search", "条件筛选", "READ_ONLY", "预算范围内有哪些商品"),
+    IntentExample("product.filter_search", "条件筛选", "READ_ONLY", "这个价位有什么推荐"),
+    IntentExample("product.filter_search", "条件筛选", "READ_ONLY", "有没有便宜一点的商品推荐"),
+    IntentExample("product.filter_search", "条件筛选", "READ_ONLY", "推荐符合预算的商品"),
+    IntentExample("product.filter_search", "条件筛选", "READ_ONLY", "找一下符合条件的商品"),
+    IntentExample("product.filter_search", "条件筛选", "READ_ONLY", "有没有满足要求的商品"),
+    IntentExample("product.filter_search", "条件筛选", "READ_ONLY", "帮我筛选符合需求的商品"),
+    IntentExample("product.filter_search", "条件筛选", "READ_ONLY", "有没有价格合适的商品"),
+    IntentExample("product.filter_search", "条件筛选", "READ_ONLY", "有没有性价比高一点的商品"),
+    IntentExample("product.filter_search", "条件筛选", "READ_ONLY", "价格低一点的有哪些"),
+    IntentExample("product.filter_search", "条件筛选", "READ_ONLY", "有没有符合规格的商品"),
+    IntentExample("product.filter_search", "条件筛选", "READ_ONLY", "有没有指定规格的商品"),
+    IntentExample("product.filter_search", "条件筛选", "READ_ONLY", "有没有某种配置的商品"),
+    IntentExample("product.filter_search", "条件筛选", "READ_ONLY", "按我的要求找一下商品"),
+    IntentExample("product.filter_search", "条件筛选", "READ_ONLY", "有没有符合我要求的商品"),
+    IntentExample("product.filter_search", "条件筛选", "READ_ONLY", "帮我过滤一下商品"),
+    IntentExample("product.filter_search", "条件筛选", "READ_ONLY", "按条件过滤商品"),
+    IntentExample("product.filter_search", "条件筛选", "READ_ONLY", "符合要求的商品有哪些"),
+    IntentExample("product.filter_search", "条件筛选", "READ_ONLY", "有没有满足条件的商品"),
+    IntentExample("product.filter_search", "条件筛选", "READ_ONLY", "找特定条件的商品"),
+    IntentExample("product.filter_search", "条件筛选", "READ_ONLY", "我想要某种规格的商品"),
+    IntentExample("product.filter_search", "条件筛选", "READ_ONLY", "帮我按预算找商品"),
 
     #  product.pagination_sort — 翻页与排序
     IntentExample("product.pagination_sort", "翻页排序", "READ_ONLY", "有没有新品"),
@@ -112,6 +139,17 @@ DEFAULT_INTENT_EXAMPLES: tuple[IntentExample, ...] = (
     IntentExample("product.semantic_recommend", "智能推荐", "READ_ONLY", "有什么推荐款"),
     IntentExample("product.semantic_recommend", "智能推荐", "READ_ONLY", "哪款更适合我"),
     IntentExample("product.semantic_recommend", "智能推荐", "READ_ONLY", "哪个更推荐"),
+    # 槽位化样本 — 选择困难/用途导向/条件推荐
+    IntentExample("product.semantic_recommend", "智能推荐", "READ_ONLY", "不知道选哪个好"),
+    IntentExample("product.semantic_recommend", "智能推荐", "READ_ONLY", "帮我挑一个"),
+    IntentExample("product.semantic_recommend", "智能推荐", "READ_ONLY", "哪款比较适合我"),
+    IntentExample("product.semantic_recommend", "智能推荐", "READ_ONLY", "有什么值得推荐的商品"),
+    IntentExample("product.semantic_recommend", "智能推荐", "READ_ONLY", "帮我推荐适合我的商品"),
+    IntentExample("product.semantic_recommend", "智能推荐", "READ_ONLY", "有没有适合送人的商品"),
+    IntentExample("product.semantic_recommend", "智能推荐", "READ_ONLY", "有没有适合日常使用的商品"),
+    IntentExample("product.semantic_recommend", "智能推荐", "READ_ONLY", "我不知道买哪个"),
+    IntentExample("product.semantic_recommend", "智能推荐", "READ_ONLY", "你帮我看看哪个合适"),
+    IntentExample("product.semantic_recommend", "智能推荐", "READ_ONLY", "有什么适合我的商品"),
 
     #  product.detail — 商品详情
     IntentExample("product.detail", "商品详情", "READ_ONLY", "这个适合什么场景"),

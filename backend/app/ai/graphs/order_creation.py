@@ -28,6 +28,12 @@ from typing import Any, Optional
 
 from langchain_core.runnables import RunnableConfig
 
+from app.ai.graphs.common import (
+    CONFIRM_OR_CANCEL_PROMPT,
+    INVALID_CHOICE_REPLY,
+    graph_exception,
+    graph_failed,
+)
 from app.config import settings
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
@@ -225,7 +231,7 @@ async def resolve_product_node(
                 }
         except (ValueError, IndexError):
             logger.debug("下单：用户序号选择无效")
-        return {"error": "无效的选择，请重新选择。", "reply": "请输入有效的商品编号。"}
+        return {"error": INVALID_CHOICE_REPLY, "reply": "请输入有效的商品编号。"}
 
     # 首次调用：尝试 DB 解析
     text = state.get("input_text", "")
@@ -310,7 +316,7 @@ async def confirm_order_node(
 
     return {
         "confirmed": False,
-        "reply": "请回复「确认」或「取消」。",
+        "reply": CONFIRM_OR_CANCEL_PROMPT,
         "error": "确认输入无效",
     }
 
@@ -370,7 +376,7 @@ async def execute_create_node(
             )
             if not result.ok:
                 logger.warning("下单失败(注入skill): tenant=%s error=%s", tenant_id, result.error)
-                return _creation_failed(idempotency_key, result.error)
+                return graph_failed("下单", idempotency_key, result.error)
             payload = result.result or {}
         elif db is None:
             # 无 DB（测试环境无 skill 注入）→ mock
@@ -392,7 +398,7 @@ async def execute_create_node(
             )
             if not result.ok:
                 logger.warning("下单失败: tenant=%s error=%s", tenant_id, result.error)
-                return _creation_failed(idempotency_key, result.error)
+                return graph_failed("下单", idempotency_key, result.error)
             payload = result.result or {}
             await db.commit()
 
@@ -404,26 +410,7 @@ async def execute_create_node(
 
     except Exception as exc:
         logger.error("下单异常: tenant=%s error=%s", tenant_id, exc)
-        if idempotency_key:
-            await order_idempotency.delete(idempotency_key)
-        return {
-            "error": str(exc),
-            "reply": "下单异常，请稍后再试。",
-            "write_executed": True,
-        }
-
-
-def _creation_failed(idempotency_key: str, error: str | None) -> dict[str, Any]:
-    """下单失败，释放幂等占位。"""
-    import asyncio
-    from app.ai.services.idempotency import order_idempotency
-
-    asyncio.ensure_future(order_idempotency.delete(idempotency_key))
-    return {
-        "error": error or "下单失败，请稍后再试。",
-        "reply": f"下单失败：{error or '请稍后再试。'}",
-        "write_executed": True,
-    }
+        return graph_exception(exc, idempotency_key)
 
 
 def _mock_create_reply(product_name: str, quantity: int, address: str | None, order_id: str) -> str:
