@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.secret_crypto import encrypt_secret
 from app.core.security import hash_password
+from app.services.tenant_template import normalize_template_to_attributes
 
 logger = logging.getLogger(__name__)
 from app.models.contact import Contact
@@ -16,7 +17,7 @@ from app.models.knowledge_doc import KnowledgeDoc
 from app.models.llm_config import LLMConfig
 from app.models.order import Order
 from app.models.plan import Plan
-from app.models.role import EmployeeRole, Permission, PermissionCode, Role, RolePermission
+from app.models.role import EmployeeRole, Permission, Role, RolePermission
 from app.models.tenant import Tenant
 from app.schemas.admin import (
     LLMConfigCreate,
@@ -27,7 +28,6 @@ from app.schemas.admin import (
     TenantUpdate,
 )
 from app.services.role_service import AGENT_PERMISSION_CODES, PLATFORM_ONLY_PERMISSION_CODES
-from app.services.tenant_template import normalize_template_json
 
 
 async def dashboard(db: AsyncSession) -> dict:
@@ -127,7 +127,8 @@ async def create_tenant(db: AsyncSession, body: TenantCreate) -> dict:
     # 1. 创建租户
     tenant_data = body.model_dump(exclude={"admin_email", "admin_password", "admin_display_name"})
     if "template_json" in tenant_data:
-        tenant_data["template_json"] = normalize_template_json(tenant_data["template_json"], strict=True)
+        attrs = normalize_template_to_attributes(tenant_data["template_json"])
+        tenant_data["template_json"] = {"attributes": [ad.model_dump() for ad in attrs]}
     tenant = Tenant(**tenant_data)
     db.add(tenant)
     await db.flush()
@@ -193,7 +194,8 @@ async def update_tenant(db: AsyncSession, item_id: int, body: TenantUpdate) -> T
         return None
     data = body.model_dump(exclude_unset=True)
     if "template_json" in data:
-        data["template_json"] = normalize_template_json(data["template_json"], strict=True)
+        attrs = normalize_template_to_attributes(data["template_json"])
+        data["template_json"] = {"attributes": [ad.model_dump() for ad in attrs]}
     await _validate_refs(db, data.get("plan_id"), data.get("selected_llm_config_id"))
     for key, value in data.items():
         setattr(item, key, value)

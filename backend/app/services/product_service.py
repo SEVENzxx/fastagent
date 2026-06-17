@@ -4,9 +4,11 @@
 SaaS 多租户要点：所有查询强制 tenant_id 隔离，属性写入按租户模板规范化。
 """
 
+import asyncio
 import csv
 import io
 import json
+import logging
 from datetime import datetime, timezone
 
 from sqlalchemy import and_, func, select
@@ -16,7 +18,8 @@ from app.models.category import Category
 from app.models.product import Product
 from app.schemas.product import ProductCreate, ProductImportError, ProductImportResponse, ProductUpdate
 from app.ai.rag.vector_search import VectorDomain, VectorSearchService
-from app.services.tenant_template import get_tenant_template, normalize_attrs_json
+
+logger = logging.getLogger(__name__)
 
 
 PRODUCT_IMPORT_TEMPLATE = (
@@ -277,6 +280,23 @@ async def _index_product(product: Product, category_path: str | None = None) -> 
         product.qdrant_point_id = point_id
 
 
+async def _try_extract_attrs(tenant_id: int, product_id: int) -> None:
+    """后台任务：从商品字段中通过 LLM 抽取属性。用自己的 DB 会话，不阻塞 API 响应。"""
+    try:
+        from app.ai.services.product_attr_extractor import extract_product_attributes
+        from app.integrations.database import AsyncSessionLocal
+
+        async with AsyncSessionLocal() as session:
+            await extract_product_attributes(
+                session,
+                tenant_id=tenant_id,
+                product_id=product_id,
+            )
+            await session.commit()
+    except Exception:
+        logger.warning("商品属性抽取失败（后台任务）: product_id=%s", product_id, exc_info=True)
+
+
 async def get_product(
     db: AsyncSession, product_id: int, tenant_id: int
 ) -> Product | None:
@@ -301,7 +321,6 @@ async def create_product(
         raise ValueError("商品名称不能为空")
 
     await _ensure_category(db, tenant_id, body.category_id)
-    template_fields = await get_tenant_template(db, tenant_id)
     sku = await _ensure_unique_sku(db, tenant_id, body.sku)
     await _ensure_unique_name(db, tenant_id, name, body.category_id)
 
@@ -316,7 +335,7 @@ async def create_product(
         stock=body.stock,
         is_sample=body.is_sample,
         specs=body.specs,
-        attrs_json=normalize_attrs_json(body.attrs_json, template_fields),
+        attrs_json=body.attrs_json,
         feature_tags=body.feature_tags,
         scenario_tags=body.scenario_tags,
         is_active=body.is_active,
@@ -329,6 +348,7 @@ async def create_product(
     await db.commit()
     await db.refresh(product)
     await attach_category_names(db, [product])
+    asyncio.create_task(_try_extract_attrs(product.tenant_id, product.id))
     return product
 
 
@@ -344,9 +364,6 @@ async def update_product(
         return None
 
     data = body.model_dump(exclude_unset=True)
-    template_fields = await get_tenant_template(db, tenant_id)
-    if "attrs_json" in data:
-        data["attrs_json"] = normalize_attrs_json(data["attrs_json"], template_fields)
     if "name" in data and data["name"] is not None:
         data["name"] = data["name"].strip()
         if not data["name"]:
@@ -383,6 +400,7 @@ async def update_product(
     await db.commit()
     await db.refresh(product)
     await attach_category_names(db, [product])
+    asyncio.create_task(_try_extract_attrs(product.tenant_id, product.id))
     return product
 
 

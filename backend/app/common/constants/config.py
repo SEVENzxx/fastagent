@@ -19,3 +19,4 @@ HIGH_CONFIDENCE_GAP: float = 0.15                # 高置信候选差距
 SESSION_TTL: int = 3600                          # SessionContext 过期时间（秒，1 小时）
 IDEMPOTENCY_TTL: int = 86400                     # 幂等 key 默认过期时间（秒，24 小时）
 TENANT_LLM_CONFIG_CACHE_TTL: int = 86400         # 租户 LLM 配置 Redis 缓存过期时间（秒，24 小时）
+TENANT_ATTR_CACHE_TTL: int = 86400               # 租户属性配置 Redis 缓存过期时间（秒，24 小时）

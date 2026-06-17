@@ -127,18 +127,6 @@ class KnowledgeService:
             doc.chunk_count = len(chunks_data)
             doc.status = "ready"
 
-            # 4. 若关联商品，异步抽取结构化属性（失败不阻断文档上传）
-            if product_id is not None and content:
-                try:
-                    await self.doc_processor.extract_product_attributes(
-                        db, tenant_id, product_id, content, doc.title or "",
-                    )
-                except Exception as attr_err:
-                    logger.warning(
-                        "商品属性抽取失败（不影响文档上传）: product_id=%s error=%s",
-                        product_id, attr_err,
-                    )
-
             await db.commit()
             await db.refresh(doc)
             logger.info(
@@ -224,17 +212,6 @@ class KnowledgeService:
             doc.chunk_count = len(chunks_data)
             doc.status = "ready"
 
-            if product_id is not None and content:
-                try:
-                    await self.doc_processor.extract_product_attributes(
-                        db, tenant_id, product_id, content, doc.title or "",
-                    )
-                except Exception as attr_err:
-                    logger.warning(
-                        "商品属性抽取失败（不阻断上传）: product_id=%s error=%s",
-                        product_id,
-                        attr_err,
-                    )
 
             await db.commit()
             await db.refresh(doc)

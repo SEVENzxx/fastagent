@@ -1,48 +1,157 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Plus, RefreshRight } from '@element-plus/icons-vue'
+import { Plus, RefreshRight, Delete, Edit, InfoFilled } from '@element-plus/icons-vue'
 import * as tenantApi from '@/api/tenant'
+import type { AttributeDef } from '@/api/tenant'
 
 const loading = ref(false)
 const saving = ref(false)
-const fields = ref<string[]>([])
-const savedFields = ref<string[]>([])
-const newField = ref('')
+const attributes = ref<AttributeDef[]>([])
+const savedJson = ref('')
+const showEditor = ref(false)
+const editingIndex = ref(-1)
 
-const jsonPreview = computed(() => JSON.stringify(fields.value, null, 2))
-const hasChanges = computed(() => JSON.stringify(fields.value) !== JSON.stringify(savedFields.value))
+const attrTypes = [
+  { label: '布尔值', value: 'boolean' },
+  { label: '数值', value: 'number' },
+  { label: '枚举', value: 'enum' },
+  { label: '文本', value: 'text' },
+] as const
 
-function normalizeField(value: string) {
-  return value.trim()
+const queryStrategies = [
+  { label: '布尔匹配 (jsonb_bool)', value: 'jsonb_bool' },
+  { label: '数值匹配 (jsonb_number)', value: 'jsonb_number' },
+  { label: '模糊文本 (jsonb_text)', value: 'jsonb_text' },
+  { label: '精确匹配 (jsonb_equals)', value: 'jsonb_equals' },
+  { label: '数组包含 (jsonb_contains)', value: 'jsonb_contains' },
+]
+
+const defaultAttr = (): AttributeDef => ({
+  key: '',
+  label: '',
+  type: 'boolean',
+  aliases: [],
+  description: '',
+  queryPath: ['attr', ''],
+  queryStrategy: 'jsonb_bool',
+  unit: null,
+  allowedValues: [],
+})
+
+const form = reactive<AttributeDef>(defaultAttr())
+const aliasInput = ref('')
+const allowedValueInput = ref('')
+
+const hasChanges = computed(() => JSON.stringify(attributes.value) !== savedJson.value)
+const jsonPreview = computed(() =>
+  JSON.stringify({ attributes: attributes.value }, null, 2)
+)
+
+function openEditor(index: number = -1) {
+  editingIndex.value = index
+  if (index >= 0) {
+    Object.assign(form, JSON.parse(JSON.stringify(attributes.value[index])))
+  } else {
+    Object.assign(form, defaultAttr())
+  }
+  aliasInput.value = ''
+  allowedValueInput.value = ''
+  showEditor.value = true
 }
 
-function addField() {
-  const field = normalizeField(newField.value)
-  if (!field) {
-    ElMessage.warning('字段名不能为空')
-    return
-  }
-  if (fields.value.includes(field)) {
-    ElMessage.warning('字段已存在')
-    return
-  }
-  fields.value.push(field)
-  newField.value = ''
+function closeEditor() {
+  showEditor.value = false
+  editingIndex.value = -1
 }
 
-function removeField(index: number) {
-  fields.value.splice(index, 1)
+function saveEditor() {
+  if (!form.key.trim()) {
+    ElMessage.warning('属性 key 不能为空')
+    return
+  }
+  if (!form.label.trim()) {
+    ElMessage.warning('属性 label 不能为空')
+    return
+  }
+  if (form.type === 'enum' && !form.allowedValues?.length) {
+    ElMessage.warning('enum 类型必须配置至少一个可选值')
+    return
+  }
+
+  // 自动填充 queryPath
+  form.queryPath = ['attr', form.key]
+
+  // 自动推荐 queryStrategy
+  if (!form.queryStrategy) {
+    const strategyMap: Record<string, string> = {
+      boolean: 'jsonb_bool',
+      number: 'jsonb_number',
+      enum: 'jsonb_equals',
+      text: 'jsonb_text',
+    }
+    form.queryStrategy = strategyMap[form.type] || 'jsonb_text'
+  }
+
+  const existing = editingIndex.value >= 0 ? editingIndex.value : -1
+  const dupKey = attributes.value.findIndex((a, i) => a.key === form.key && i !== existing)
+  if (dupKey >= 0) {
+    ElMessage.warning(`属性 key "${form.key}" 已存在`)
+    return
+  }
+
+  const saved = JSON.parse(JSON.stringify(form))
+  if (editingIndex.value >= 0) {
+    attributes.value[editingIndex.value] = saved
+  } else {
+    attributes.value.push(saved)
+  }
+  closeEditor()
+}
+
+function addAlias() {
+  const v = aliasInput.value.trim()
+  if (!v) return
+  if (form.aliases.includes(v)) {
+    ElMessage.warning('别名已存在')
+    return
+  }
+  form.aliases.push(v)
+  aliasInput.value = ''
+}
+
+function removeAlias(index: number) {
+  form.aliases.splice(index, 1)
+}
+
+function addAllowedValue() {
+  const v = allowedValueInput.value.trim()
+  if (!v) return
+  if (!form.allowedValues) form.allowedValues = []
+  if (form.allowedValues.includes(v)) {
+    ElMessage.warning('可选值已存在')
+    return
+  }
+  form.allowedValues.push(v)
+  allowedValueInput.value = ''
+}
+
+function removeAllowedValue(index: number) {
+  form.allowedValues?.splice(index, 1)
+}
+
+function removeAttribute(index: number) {
+  attributes.value.splice(index, 1)
 }
 
 async function loadTemplate() {
   loading.value = true
   try {
     const result = await tenantApi.getTenantTemplate()
-    fields.value = [...result.templateJson]
-    savedFields.value = [...result.templateJson]
+    attributes.value = result.attributes || []
+    savedJson.value = JSON.stringify(attributes.value)
   } catch (error: any) {
-    ElMessage.error(error?.response?.data?.detail ?? '加载属性模板失败')
+    ElMessage.error(error?.response?.data?.detail ?? '加载属性配置失败')
   } finally {
     loading.value = false
   }
@@ -51,12 +160,12 @@ async function loadTemplate() {
 async function saveTemplate() {
   saving.value = true
   try {
-    const result = await tenantApi.updateTenantTemplate(fields.value)
-    fields.value = [...result.templateJson]
-    savedFields.value = [...result.templateJson]
-    ElMessage.success('属性模板已保存')
+    const result = await tenantApi.updateTenantTemplate({ attributes: attributes.value })
+    attributes.value = result.attributes || []
+    savedJson.value = JSON.stringify(attributes.value)
+    ElMessage.success('属性配置已保存')
   } catch (error: any) {
-    ElMessage.error(error?.response?.data?.detail ?? '保存属性模板失败')
+    ElMessage.error(error?.response?.data?.detail ?? '保存属性配置失败')
   } finally {
     saving.value = false
   }
@@ -69,8 +178,7 @@ async function resetChanges() {
     confirmButtonText: '重置',
     cancelButtonText: '取消',
   })
-  fields.value = [...savedFields.value]
-  newField.value = ''
+  attributes.value = JSON.parse(savedJson.value || '[]')
 }
 
 onMounted(loadTemplate)
@@ -81,59 +189,186 @@ onMounted(loadTemplate)
     <header class="page-header">
       <div>
         <p>商品配置</p>
-        <h2>自定义属性模板</h2>
+        <h2>商品属性 Schema</h2>
       </div>
-      <el-tag type="info" effect="light">{{ fields.length }} 个字段</el-tag>
+      <el-tag type="info" effect="light">{{ attributes.length }} 个属性</el-tag>
     </header>
 
     <section class="template-grid">
+      <!-- 左侧：属性列表 + 操作 -->
       <div class="editor-panel">
         <div class="panel-heading">
-          <h3>字段列表</h3>
-          <el-button :icon="RefreshRight" :disabled="!hasChanges || saving" plain @click="resetChanges">
-            重置
-          </el-button>
+          <h3>属性列表</h3>
+          <div style="display: flex; gap: 8px">
+            <el-button :icon="RefreshRight" :disabled="!hasChanges || saving" plain @click="resetChanges">
+              重置
+            </el-button>
+            <el-button type="primary" :icon="Plus" @click="openEditor(-1)">新增属性</el-button>
+          </div>
         </div>
 
-        <div class="field-input">
-          <el-input
-            v-model="newField"
-            placeholder="输入字段名"
-            maxlength="50"
-            show-word-limit
-            @keyup.enter="addField"
-          />
-          <el-button type="primary" :icon="Plus" @click="addField">添加</el-button>
+        <div class="attr-table" v-if="attributes.length">
+          <div class="attr-table-header">
+            <span class="col-key">Key</span>
+            <span class="col-label">名称</span>
+            <span class="col-type">类型</span>
+            <span class="col-strategy">查询</span>
+            <span class="col-actions">操作</span>
+          </div>
+          <div class="attr-row" v-for="(attr, index) in attributes" :key="attr.key">
+            <span class="col-key"><code>{{ attr.key }}</code></span>
+            <span class="col-label">{{ attr.label }}</span>
+            <span class="col-type">
+              <el-tag size="small" :type="attr.type === 'boolean' ? 'success' : attr.type === 'number' ? 'warning' : attr.type === 'enum' ? 'danger' : ''">
+                {{ attr.type }}
+              </el-tag>
+            </span>
+            <span class="col-strategy" :title="attr.queryStrategy">{{ attr.queryStrategy?.replace('jsonb_', '') }}</span>
+            <span class="col-actions">
+              <el-button text :icon="Edit" size="small" @click="openEditor(index)">编辑</el-button>
+              <el-button text :icon="Delete" type="danger" size="small" @click="removeAttribute(index)">删除</el-button>
+            </span>
+          </div>
         </div>
+        <el-empty v-else description="暂无属性配置" :image-size="88" />
 
-        <div class="field-list">
-          <el-empty v-if="!fields.length" description="暂无字段" :image-size="88" />
-          <el-tag
-            v-for="(field, index) in fields"
-            v-else
-            :key="field"
-            closable
-            effect="plain"
-            @close="removeField(index)"
-          >
-            {{ field }}
-          </el-tag>
-        </div>
-
-        <div class="actions">
-          <el-button type="primary" :loading="saving" :disabled="!hasChanges" @click="saveTemplate">
-            保存模板
+        <div class="actions" v-if="attributes.length">
+          <el-button type="primary" :loading="saving" :disabled="!hasChanges" @click="saveTemplate" size="large">
+            保存配置
           </el-button>
         </div>
       </div>
 
+      <!-- 右侧：JSON 预览 -->
       <div class="preview-panel">
         <div class="panel-heading">
-          <h3>JSON</h3>
+          <h3>JSON 预览</h3>
         </div>
         <pre>{{ jsonPreview }}</pre>
       </div>
     </section>
+
+    <!-- 属性编辑弹窗 -->
+    <el-dialog
+      v-model="showEditor"
+      :title="editingIndex >= 0 ? '编辑属性' : '新增属性'"
+      width="640px"
+      destroy-on-close
+    >
+      <el-form label-position="top" class="attr-form">
+        <el-row :gutter="16">
+          <el-col :span="12">
+            <el-form-item label="属性 Key" required>
+              <el-input v-model="form.key" placeholder="如 is_waterproof" maxlength="64" />
+            </el-form-item>
+          </el-col>
+          <el-col :span="12">
+            <el-form-item label="显示名称" required>
+              <el-input v-model="form.label" placeholder="如 防水" maxlength="32" />
+            </el-form-item>
+          </el-col>
+        </el-row>
+
+        <el-row :gutter="16">
+          <el-col :span="12">
+            <el-form-item label="值类型" required>
+              <el-select v-model="form.type" style="width: 100%">
+                <el-option
+                  v-for="t in attrTypes"
+                  :key="t.value"
+                  :label="t.label"
+                  :value="t.value"
+                />
+              </el-select>
+            </el-form-item>
+          </el-col>
+          <el-col :span="12">
+            <el-form-item label="SQL 查询策略">
+              <el-select v-model="form.queryStrategy" style="width: 100%">
+                <el-option
+                  v-for="s in queryStrategies"
+                  :key="s.value"
+                  :label="s.label"
+                  :value="s.value"
+                />
+              </el-select>
+            </el-form-item>
+          </el-col>
+        </el-row>
+
+        <el-form-item label="属性说明">
+          <el-input
+            v-model="form.description"
+            type="textarea"
+            :rows="2"
+            placeholder="LLM 抽取时的判断依据，如『商品是否具备防水、防泼水能力』"
+          />
+        </el-form-item>
+
+        <el-form-item v-if="form.type === 'number'" label="数值单位">
+          <el-input v-model="form.unit" placeholder="如 天 / 小时 / mm" maxlength="10" />
+        </el-form-item>
+
+        <el-form-item label="同义别名（帮助 LLM 匹配）">
+          <div class="tag-input">
+            <el-input
+              v-model="aliasInput"
+              placeholder="输入别名后按回车添加"
+              maxlength="20"
+              @keyup.enter="addAlias"
+            />
+            <el-button :icon="Plus" @click="addAlias" :disabled="!aliasInput.trim()">添加</el-button>
+          </div>
+          <div class="tag-list" v-if="form.aliases.length">
+            <el-tag
+              v-for="(a, i) in form.aliases"
+              :key="a"
+              closable
+              @close="removeAlias(i)"
+            >
+              {{ a }}
+            </el-tag>
+          </div>
+        </el-form-item>
+
+        <el-form-item v-if="form.type === 'enum'" label="可选值列表" required>
+          <div class="tag-input">
+            <el-input
+              v-model="allowedValueInput"
+              placeholder="输入可选值后按回车添加"
+              maxlength="20"
+              @keyup.enter="addAllowedValue"
+            />
+            <el-button :icon="Plus" @click="addAllowedValue" :disabled="!allowedValueInput.trim()">添加</el-button>
+          </div>
+          <div class="tag-list" v-if="form.allowedValues?.length">
+            <el-tag
+              v-for="(v, i) in form.allowedValues"
+              :key="v"
+              closable
+              @close="removeAllowedValue(i)"
+            >
+              {{ v }}
+            </el-tag>
+          </div>
+        </el-form-item>
+
+        <el-alert
+          v-if="form.key"
+          :title="`SQL 查询路径：attrs_json -> 'attr' -> '${form.key}'`"
+          type="info"
+          :closable="false"
+          show-icon
+          :icon="InfoFilled"
+          style="margin-top: 8px"
+        />
+      </el-form>
+
+      <template #footer>
+        <el-button @click="closeEditor">取消</el-button>
+        <el-button type="primary" @click="saveEditor">确定</el-button>
+      </template>
+    </el-dialog>
   </section>
 </template>
 
@@ -169,7 +404,7 @@ onMounted(loadTemplate)
 
 .template-grid {
   display: grid;
-  grid-template-columns: minmax(360px, 1fr) minmax(320px, 0.8fr);
+  grid-template-columns: minmax(480px, 1.2fr) minmax(360px, 0.8fr);
   gap: 18px;
 }
 
@@ -184,34 +419,92 @@ onMounted(loadTemplate)
   background: var(--surface);
 }
 
-.panel-heading,
-.field-input,
-.actions {
+.panel-heading {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
 }
 
-.field-input .el-input {
-  flex: 1;
-}
-
-.field-list {
-  min-height: 180px;
-  display: flex;
-  align-content: flex-start;
-  align-items: flex-start;
-  flex-wrap: wrap;
-  gap: 10px;
-  padding: 14px;
+/* 属性列表表格 */
+.attr-table {
   border: 1px solid var(--border);
   border-radius: 8px;
+  overflow: hidden;
+}
+
+.attr-table-header,
+.attr-row {
+  display: grid;
+  grid-template-columns: 140px 100px 70px 90px 1fr;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+}
+
+.attr-table-header {
+  background: var(--surface-soft);
+  font-size: 12px;
+  color: var(--text-muted);
+  font-weight: 600;
+  border-bottom: 1px solid var(--border);
+}
+
+.attr-row {
+  border-bottom: 1px solid var(--border-subtle);
+  font-size: 13px;
+}
+
+.attr-row:last-child {
+  border-bottom: none;
+}
+
+.attr-row:hover {
   background: var(--surface-soft);
 }
 
+.col-key code {
+  font-size: 12px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: var(--surface-soft);
+  color: var(--color-primary);
+}
+
+.col-actions {
+  text-align: right;
+}
+
+/* 标签输入 */
+.tag-input {
+  display: flex;
+  gap: 8px;
+  width: 100%;
+}
+
+.tag-input .el-input {
+  flex: 1;
+}
+
+.tag-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+/* 弹窗表单 */
+.attr-form .el-form-item {
+  margin-bottom: 16px;
+}
+
+.actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
 .preview-panel pre {
-  min-height: 220px;
+  min-height: 300px;
   margin: 0;
   padding: 14px;
   overflow: auto;
@@ -223,15 +516,9 @@ onMounted(loadTemplate)
   line-height: 1.6;
 }
 
-@media (max-width: 980px) {
+@media (max-width: 1024px) {
   .template-grid {
     grid-template-columns: 1fr;
-  }
-
-  .field-input,
-  .actions {
-    align-items: stretch;
-    flex-direction: column;
   }
 }
 </style>

@@ -1,33 +1,114 @@
 """租户设置 Schema。"""
 
-from pydantic import Field, field_validator
+from typing import Literal
+
+from pydantic import Field, field_validator, model_validator
 
 from app.schemas.base import CamelModel
 
 
-class TenantTemplateResponse(CamelModel):
-    """租户属性模板响应"""
+class AttributeDef(CamelModel):
+    """单个属性定义。
 
-    template_json: list[str] = Field(description="属性模板字段名列表")
+    租户配置商品属性的最小单元，平台据此构建 LLM 抽取 prompt 和 SQL 查询。
+    """
+
+    key: str = Field(
+        description="属性唯一标识，对应 attrs_json 中的字段名，如 is_waterproof",
+        min_length=1,
+        max_length=64,
+    )
+    label: str = Field(
+        description="前端展示名，如『防水』",
+        min_length=1,
+        max_length=32,
+    )
+    type: Literal["boolean", "number", "enum", "text"] = Field(
+        description="属性值类型",
+    )
+    aliases: list[str] = Field(
+        default_factory=list,
+        description="同义表达列表，如 ['防水', '防泼水', '可防水']，用于 LLM 语义匹配",
+    )
+    description: str = Field(
+        default="",
+        description="属性说明，LLM 抽取时作为判断依据",
+    )
+    query_path: list[str] = Field(
+        default_factory=list,
+        description="attrs_json 中的 JSON 路径，如 ['attr', 'is_waterproof']",
+    )
+    query_strategy: Literal["jsonb_bool", "jsonb_number", "jsonb_text", "jsonb_equals", "jsonb_contains"] = Field(
+        default="jsonb_text",
+        description="SQL 查询策略：jsonb_bool / jsonb_number / jsonb_text / jsonb_equals / jsonb_contains",
+    )
+    unit: str | None = Field(
+        default=None,
+        description="数值单位，如『天』『小时』，LLM 抽取时用于换算提示",
+    )
+    allowed_values: list[str] = Field(
+        default_factory=list,
+        description="enum 类型的可选值列表",
+    )
+
+    @field_validator("key")
+    @classmethod
+    def key_not_empty(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("属性 key 不能为空")
+        return v
+
+    @field_validator("label")
+    @classmethod
+    def label_not_empty(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("属性 label 不能为空")
+        return v
+
+    @model_validator(mode="after")
+    def enum_requires_allowed_values(self):
+        if self.type == "enum" and not self.allowed_values:
+            raise ValueError(f"enum 类型属性 '{self.key}' 必须配置 allowed_values")
+        return self
+
+
+class TenantAttributeSchema(CamelModel):
+    """租户完整属性配置 Schema。
+
+    存储于 Tenant.template_json 列（JSONB），结构：
+    {
+      "attributes": [
+        { "key": "is_waterproof", "label": "防水", "type": "boolean", ... },
+        ...
+      ]
+    }
+
+    兼容旧格式 list[str]，通过 attribute_keys 字段兼容过渡。
+    """
+
+    attributes: list[AttributeDef] = Field(
+        default_factory=list,
+        description="属性定义列表",
+    )
+
+
+# ── 兼容旧的 API 响应/请求模型 ──
+
+class TenantTemplateResponse(CamelModel):
+    """租户属性模板响应（新格式）。"""
+
+    attributes: list[AttributeDef] = Field(
+        default_factory=list,
+        description="属性定义列表",
+    )
 
 
 class TenantTemplateUpdate(CamelModel):
-    """更新租户属性模板请求"""
+    """更新租户属性模板请求。"""
 
-    template_json: list[str] = Field(description="属性模板字段名列表")
-
-    @field_validator("template_json")
-    @classmethod
-    def validate_template_json(cls, value: list[str]) -> list[str]:
-        result: list[str] = []
-        seen: set[str] = set()
-        for item in value:
-            if not isinstance(item, str):
-                raise ValueError("template_json 只能包含字符串字段名")
-            field = item.strip()
-            if not field:
-                raise ValueError("template_json 不能包含空字段名")
-            if field not in seen:
-                seen.add(field)
-                result.append(field)
-        return result
+    attributes: list[AttributeDef] = Field(
+        default_factory=list,
+        description="属性定义列表",
+    )

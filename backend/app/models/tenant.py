@@ -29,7 +29,7 @@ class Tenant(Base):
     selected_llm_config_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("llm_configs.id"), nullable=True, comment="租户选中的平台模型池配置")
     store_showcase: Mapped[str | None] = mapped_column(Text, comment="品牌/店铺介绍文本")
     ai_greeting_message: Mapped[str | None] = mapped_column(Text, comment="AI 首次问候语")
-    template_json: Mapped[list[str] | None] = mapped_column(JSONB, nullable=True, comment="租户自定义属性模板")
+    template_json: Mapped[dict | None] = mapped_column(JSONB, nullable=True, comment="租户自定义属性模板 {attributes: [...]}")
     maxkb_base_url: Mapped[str | None] = mapped_column(String(500), comment="MaxKB 知识库地址")
     maxkb_api_key_encrypted: Mapped[str | None] = mapped_column(Text, comment="MaxKB API Key")
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default=text("true"), comment="是否启用")
