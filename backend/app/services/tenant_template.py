@@ -171,6 +171,40 @@ def build_schema_for_prompt(attribute_defs: list[AttributeDef]) -> list[dict[str
 async def get_tenant_attributes(db: AsyncSession, tenant_id: int) -> list[AttributeDef]:
     """查询租户配置的商品属性定义列表（Redis 缓存，24h TTL）。"""
     cache_key = f"{_CACHE_PREFIX}:{tenant_id}"
+    # 优先读 Redis
+    attrs = await _read_attributes_from_cache(cache_key)
+    if attrs is not None:
+        return attrs
+
+    # cache miss → 查 DB 并回写
+    value = await db.scalar(select(Tenant.template_json).where(Tenant.id == tenant_id))
+    attrs = normalize_template_to_attributes(value)
+    await _write_attributes_to_cache(cache_key, value)
+    return attrs
+
+
+async def get_tenant_attributes_cached_only(tenant_id: int) -> list[AttributeDef] | None:
+    """读取属性定义：Redis 优先，miss 时自动查 DB 兜底并回写缓存。"""
+    cache_key = f"{_CACHE_PREFIX}:{tenant_id}"
+    attrs = await _read_attributes_from_cache(cache_key)
+    if attrs is not None:
+        return attrs
+
+    # cache miss → 查 DB 兜底
+    from app.integrations.database import AsyncSessionLocal
+    try:
+        async with AsyncSessionLocal() as db:
+            value = await db.scalar(select(Tenant.template_json).where(Tenant.id == tenant_id))
+            attrs = normalize_template_to_attributes(value)
+            await _write_attributes_to_cache(cache_key, value)
+            return attrs
+    except Exception:
+        logger.debug("属性定义 DB 查询失败: tenant_id=%s", tenant_id)
+        return None
+
+
+async def _read_attributes_from_cache(cache_key: str) -> list[AttributeDef] | None:
+    """从 Redis 读取并范化属性定义。"""
     try:
         r = get_redis_client()
         cached = await r.get(cache_key)
@@ -180,22 +214,16 @@ async def get_tenant_attributes(db: AsyncSession, tenant_id: int) -> list[Attrib
             if attrs:
                 return attrs
     except Exception:
-        logger.debug("Redis 读取租户属性缓存失败，回退 DB: tenant_id=%s", tenant_id)
+        logger.debug("Redis 读取租户属性缓存失败: key=%s", cache_key)
+    return None
 
-    value = await db.scalar(select(Tenant.template_json).where(Tenant.id == tenant_id))
-    attrs = normalize_template_to_attributes(value)
 
+async def _write_attributes_to_cache(cache_key: str, value: object) -> None:
     try:
         r = get_redis_client()
-        await r.set(
-            cache_key,
-            json.dumps(value, ensure_ascii=False),
-            ex=TENANT_ATTR_CACHE_TTL,
-        )
+        await r.set(cache_key, json.dumps(value, ensure_ascii=False), ex=TENANT_ATTR_CACHE_TTL)
     except Exception:
-        logger.debug("Redis 写入租户属性缓存失败: tenant_id=%s", tenant_id)
-
-    return attrs
+        logger.debug("Redis 写入租户属性缓存失败: key=%s", cache_key)
 
 
 async def update_tenant_template(

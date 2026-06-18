@@ -55,7 +55,7 @@ class IntentRecognitionConfig:
     """意图识别流水线总配置。"""
 
     vector_top_k: int = 20
-    vector_min_score: float = 0.75
+    vector_min_score: float = 0.65
     high_confidence_score: float = 0.83
     high_confidence_gap: float = 0.10
     ambiguous_gap: float = 0.05

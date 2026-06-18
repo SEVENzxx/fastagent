@@ -97,10 +97,11 @@ class IntentVectorAdapter:
                 source=r.source,
                 matched_text=r.matched_text,
             ))
+        top5 = candidates[:5]
         logger.info(
-            "意图向量召回完成：text=%s candidates=%s skills=%s",
+            "意图向量召回完成：text=%s total=%d top5=%s",
             text[:40], len(candidates),
-            [c.skill.value for c in candidates[:5]],
+            [(c.scenario_id, round(c.score, 4)) for c in top5],
         )
         return candidates
 

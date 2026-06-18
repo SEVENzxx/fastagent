@@ -4,11 +4,20 @@
 所有操作均强制传入 tenant_id 进行多租户隔离。
 """
 
+import json
+import logging
+
 from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.common.constants.config import TENANT_ATTR_CACHE_TTL
+from app.integrations.redis_client import get_redis_client
 from app.models.category import Category
 from app.models.product import Product
+
+logger = logging.getLogger(__name__)
+
+_LEAF_CATEGORIES_CACHE_PREFIX = "tenant:leaf_cats"
 
 
 async def list_categories(db: AsyncSession, tenant_id: int) -> list[Category]:
@@ -180,3 +189,63 @@ def build_category_tree(categories: list[Category]) -> list[dict]:
             roots.append(node)
 
     return roots
+
+
+def _find_leaf_categories(categories: list[Category]) -> list[tuple[int, str]]:
+    """找出所有叶子节点（无子分类的节点）。"""
+    parent_ids = {c.parent_id for c in categories if c.parent_id is not None}
+    return [(c.id, c.name) for c in categories if c.id not in parent_ids]
+
+
+async def get_tenant_leaf_categories(db: AsyncSession, tenant_id: int) -> list[tuple[int, str]]:
+    """获取租户的所有叶子分类 [(id, name), ...]，带 Redis 缓存。"""
+    cache_key = f"{_LEAF_CATEGORIES_CACHE_PREFIX}:{tenant_id}"
+    leaves = await _read_categories_from_cache(cache_key)
+    if leaves is not None:
+        return leaves
+
+    categories = await list_categories(db, tenant_id)
+    leaves = _find_leaf_categories(categories)
+    await _write_categories_to_cache(cache_key, leaves)
+    return leaves
+
+
+async def get_tenant_leaf_categories_cached_only(tenant_id: int) -> list[tuple[int, str]] | None:
+    """读取叶子分类：Redis 优先，miss 时自动查 DB 兜底并回写缓存。"""
+    cache_key = f"{_LEAF_CATEGORIES_CACHE_PREFIX}:{tenant_id}"
+    leaves = await _read_categories_from_cache(cache_key)
+    if leaves is not None:
+        return leaves
+
+    # cache miss → 查 DB 兜底
+    from app.integrations.database import AsyncSessionLocal
+    try:
+        async with AsyncSessionLocal() as db:
+            categories = await list_categories(db, tenant_id)
+            leaves = _find_leaf_categories(categories)
+            await _write_categories_to_cache(cache_key, leaves)
+            return leaves
+    except Exception:
+        logger.debug("叶子分类 DB 查询失败: tenant_id=%s", tenant_id)
+        return None
+
+
+async def _read_categories_from_cache(cache_key: str) -> list[tuple[int, str]] | None:
+    try:
+        r = get_redis_client()
+        cached = await r.get(cache_key)
+        if cached:
+            data = json.loads(cached)
+            if isinstance(data, list):
+                return [(int(item[0]), str(item[1])) for item in data if isinstance(item, list) and len(item) >= 2]
+    except Exception:
+        logger.debug("Redis 读取叶子分类缓存失败: key=%s", cache_key)
+    return None
+
+
+async def _write_categories_to_cache(cache_key: str, leaves: list[tuple[int, str]]) -> None:
+    try:
+        r = get_redis_client()
+        await r.set(cache_key, json.dumps(leaves, ensure_ascii=False), ex=TENANT_ATTR_CACHE_TTL)
+    except Exception:
+        logger.debug("Redis 写入叶子分类缓存失败: key=%s", cache_key)

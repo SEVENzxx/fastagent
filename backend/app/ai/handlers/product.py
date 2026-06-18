@@ -1,21 +1,13 @@
 """ProductHandler — 商品场景 Handler。
 
-支持以下 scenario：
-  - product.catalog
-  - product.filter_search
-  - product.semantic_recommend
-  - product.sku_query
-  - product.detail
-  - product.compare
-  - product.attribute_query
-  - product.pagination_sort
-
 Handler 编排 ProductReferenceResolver → ProductSkill → ProductReplyBuilder。
 不直接调用 LLM 或 Vector Search。
 """
 from __future__ import annotations
 
 import logging
+
+from app.ai.recognition.examples import SCENARIO
 import re
 from typing import Any
 
@@ -25,7 +17,7 @@ from app.ai.recognition.types import ScenarioDecision
 from app.ai.context.session_context import SessionContext
 from app.ai.skills.gateway import SkillError, call_skill
 from app.common.constants.business import DEFAULT_PAGE_SIZE
-from app.ai.skills.products import ProductSkill
+from app.ai.skills.products import ProductSkill, SearchProductParams
 from app.ai.reply_builders.product import ProductReplyBuilder
 from app.ai.components.product_reference_resolver import (
     ProductInfo,
@@ -171,21 +163,15 @@ class ProductHandler(BaseHandler):
 
         self._init_trace_context(scenario)
 
-        if scenario == "product.catalog":
+        if scenario == SCENARIO.PRODUCT_CATALOG:
             result = await self._handle_catalog(text, ctx)
-        elif scenario == "product.filter_search":
+        elif scenario == SCENARIO.PRODUCT_FILTER_SEARCH:
             result = await self._handle_filter_search(decision, ctx)
-        elif scenario == "product.semantic_recommend":
-            result = await self._handle_semantic_recommend(decision, ctx)
-        elif scenario == "product.sku_query":
-            result = await self._handle_sku_query(decision, ctx)
-        elif scenario == "product.detail":
+        elif scenario == SCENARIO.PRODUCT_DETAIL:
             result = await self._handle_detail(text, decision, ctx)
-        elif scenario == "product.compare":
+        elif scenario == SCENARIO.PRODUCT_COMPARE:
             result = await self._handle_compare(text, ctx)
-        elif scenario == "product.attribute_query":
-            result = await self._handle_attribute_query(text, decision, ctx)
-        elif scenario == "product.pagination_sort":
+        elif scenario == SCENARIO.PRODUCT_PAGINATION:
             result = await self._handle_pagination_sort(decision, ctx)
         else:
             logger.warning("未处理的商品场景: %s", scenario)
@@ -210,7 +196,7 @@ class ProductHandler(BaseHandler):
         """
         ctx: SessionContext = context  # type: ignore[assignment]
         psc = pending  # PendingState
-        scenario = getattr(psc, "scenario_id", "product.detail")
+        scenario = getattr(psc, "scenario_id", SCENARIO.PRODUCT_DETAIL)
 
         self._init_trace_context(scenario)
 
@@ -223,13 +209,9 @@ class ProductHandler(BaseHandler):
             tenant_id=ctx.tenant_id,
         )
         if ref_result.resolved:
-            if scenario == "product.detail":
+            if scenario == SCENARIO.PRODUCT_DETAIL:
                 result = await self._detail_by_id(
                     ref_result.product_id, ref_result.product_name, ctx,
-                )
-            elif scenario == "product.attribute_query":
-                result = await self._attribute_by_id(
-                    ref_result.product_id, ref_result.product_name, message, ctx,
                 )
             else:
                 result = None
@@ -273,11 +255,11 @@ class ProductHandler(BaseHandler):
         categories = await self._call_skill("list_categories", tenant_id=ctx.tenant_id)
         reply = ProductReplyBuilder.category_list(categories)
         return HandlerResult(
-            scenario_id="product.catalog",
+            scenario_id=SCENARIO.PRODUCT_CATALOG,
             reply=reply,
             pending_directive=PendingDirective.CLEAR,
             context_update={
-                "last_intent": "product.catalog",
+                "last_intent": SCENARIO.PRODUCT_CATALOG,
             },
         )
 
@@ -291,19 +273,23 @@ class ProductHandler(BaseHandler):
         products = await self._call_skill(
             "search_products",
             tenant_id=ctx.tenant_id,
-            query_text=entities.get("raw_text", ""),
-            category_text=entities.get("raw_category_text", ""),
-            min_price=entities.get("price_min"),
-            max_price=entities.get("price_max"),
+            params=SearchProductParams(
+                query_text=entities.get("raw_text", ""),
+                category_text=entities.get("raw_category_text", ""),
+                category_id=entities.get("category_id", ""),
+                min_price=entities.get("price_min"),
+                max_price=entities.get("price_max"),
+                attr_filters=entities.get("raw_attrs") or {},
+            ),
         )
         if not products:
             return HandlerResult(
-                scenario_id="product.filter_search",
+                scenario_id=SCENARIO.PRODUCT_FILTER_SEARCH,
                 reply=ProductReplyBuilder.no_results(
                     entities.get("raw_category_text", "")
                 ),
                 pending_directive=PendingDirective.CLEAR,
-                context_update={"last_intent": "product.filter_search"},
+                context_update={"last_intent": SCENARIO.PRODUCT_FILTER_SEARCH},
             )
 
         candidates = [
@@ -329,131 +315,17 @@ class ProductHandler(BaseHandler):
                 suffix = "价格实惠"
 
         return HandlerResult(
-            scenario_id="product.filter_search",
+            scenario_id=SCENARIO.PRODUCT_FILTER_SEARCH,
             reply=ProductReplyBuilder.product_list(products, header_suffix=suffix),
             pending_directive=PendingDirective.CLEAR,
             context_update={
                 "product_candidates": candidates,
                 "last_focus_product_id": None,
                 "last_product_id": None,
-                "last_intent": "product.filter_search",
+                "last_intent": SCENARIO.PRODUCT_FILTER_SEARCH,
             },
         )
 
-    async def _handle_semantic_recommend(
-        self,
-        decision: ScenarioDecision,
-        ctx: SessionContext,
-    ) -> HandlerResult:
-        """语义推荐：LLM 语义理解 → ProductSkill.search_products。"""
-        text = decision.entities.get("raw_text", "")
-        if not text:
-            text = ctx.last_user_message or ""
-
-        from app.ai.components.semantic_recommend import SemanticRecommendExtractor
-        params = await SemanticRecommendExtractor.extract(text, ctx.tenant_id)
-
-        query_text = params.get("query_text", text)
-        features = params.get("features", [])
-        if features:
-            feature_text = " ".join(str(f) for f in features if f)
-            if feature_text and feature_text not in query_text:
-                query_text = f"{query_text} {feature_text}".strip()
-        category_text = params.get("category_text", "")
-        min_price = params.get("min_price")
-        max_price = params.get("max_price")
-
-        products = await self._call_skill(
-            "search_products",
-            tenant_id=ctx.tenant_id,
-            query_text=query_text,
-            category_text=category_text,
-            min_price=min_price,
-            max_price=max_price,
-        )
-
-        if not products:
-            return HandlerResult(
-                scenario_id="product.semantic_recommend",
-                reply="暂时没有找到符合您需求的推荐商品，请尝试其他描述。",
-                pending_directive=PendingDirective.CLEAR,
-                context_update={"last_intent": "product.semantic_recommend"},
-            )
-
-        candidates = [
-            {"id": p["id"], "name": p["name"]} for p in products
-        ]
-
-        # 构建语义推荐提示（特征 + 价格 + 搜索词）
-        suffix_parts: list[str] = []
-        if features:
-            suffix_parts.extend(str(f) for f in features if f)
-        if max_price is not None and min_price is not None:
-            suffix_parts.append(f"¥{min_price}-¥{max_price}")
-        elif max_price is not None:
-            suffix_parts.append(f"¥{max_price}元以下")
-        elif min_price is not None:
-            suffix_parts.append(f"¥{min_price}元以上")
-        # 用户表达了价格意图（如"便宜""实惠"）但无明确价格范围时补充价格标签
-        if not any([min_price, max_price]):
-            _price_keywords = ("便宜", "实惠", "性价比", "预算", "优惠", "低价", "经济")
-            _all_terms = " ".join(str(f) for f in features) + " " + (query_text or "")
-            if any(kw in _all_terms for kw in _price_keywords):
-                suffix_parts.append("价格实惠")
-        # 无任何上下文时用搜索词兜底
-        if not suffix_parts and query_text:
-            suffix_parts.append(query_text[:40])
-        suffix = "、".join(suffix_parts) if suffix_parts else None
-
-        return HandlerResult(
-            scenario_id="product.semantic_recommend",
-            reply=ProductReplyBuilder.product_list(products, header_suffix=suffix),
-            pending_directive=PendingDirective.CLEAR,
-            context_update={
-                "product_candidates": candidates,
-                "last_focus_product_id": None,
-                "last_intent": "product.semantic_recommend",
-            },
-        )
-
-    async def _handle_sku_query(
-        self,
-        decision: ScenarioDecision,
-        ctx: SessionContext,
-    ) -> HandlerResult:
-        """SKU 查询。"""
-        sku = decision.entities.get("sku", "")
-        if not sku:
-            return HandlerResult(
-                scenario_id="product.sku_query",
-                reply="请提供商品 SKU 编号。",
-                pending_directive=PendingDirective.CLEAR,
-            )
-
-        product = await self._call_skill(
-            "search_by_sku",
-            tenant_id=ctx.tenant_id,
-            sku=sku,
-        )
-
-        if product is None:
-            return HandlerResult(
-                scenario_id="product.sku_query",
-                reply=f"未找到 SKU 为「{sku}」的商品。",
-                pending_directive=PendingDirective.CLEAR,
-            )
-
-        return HandlerResult(
-            scenario_id="product.sku_query",
-            reply=ProductReplyBuilder.product_detail(product),
-            pending_directive=PendingDirective.CLEAR,
-            context_update={
-                "last_product_id": str(product["id"]),
-                "last_product_name": product.get("name", ""),
-                "last_focus_product_id": str(product["id"]),
-                "last_intent": "product.sku_query",
-            },
-        )
 
     async def _handle_detail(
         self,
@@ -472,7 +344,7 @@ class ProductHandler(BaseHandler):
 
         if ref_result.need_clarification:
             return self._clarify_result(
-                "product.detail", ref_result, ctx,
+                SCENARIO.PRODUCT_DETAIL, ref_result, ctx,
             )
 
         if ref_result.resolved:
@@ -481,7 +353,7 @@ class ProductHandler(BaseHandler):
             )
 
         return HandlerResult(
-            scenario_id="product.detail",
+            scenario_id=SCENARIO.PRODUCT_DETAIL,
             reply="抱歉，我没有找到您提到的商品，请提供更完整的名称。",
             pending_directive=PendingDirective.CLEAR,
         )
@@ -505,7 +377,7 @@ class ProductHandler(BaseHandler):
             candidates = self._get_candidates(ctx)
             if not candidates or ids[0] > len(candidates) or ids[1] > len(candidates):
                 return HandlerResult(
-                    scenario_id="product.compare",
+                    scenario_id=SCENARIO.PRODUCT_COMPARE,
                     reply="序号超出商品列表范围，请重新选择。",
                     pending_directive=PendingDirective.CLEAR,
                 )
@@ -517,18 +389,18 @@ class ProductHandler(BaseHandler):
             )
             if len(products) < 2:
                 return HandlerResult(
-                    scenario_id="product.compare",
+                    scenario_id=SCENARIO.PRODUCT_COMPARE,
                     reply="对比的商品已下架或不可见，请重新选择。",
                     pending_directive=PendingDirective.CLEAR,
                 )
             return HandlerResult(
-                scenario_id="product.compare",
+                scenario_id=SCENARIO.PRODUCT_COMPARE,
                 reply=ProductReplyBuilder.compare_result(products),
                 pending_directive=PendingDirective.CLEAR,
                 context_update={
                     "compare_base_product_id": str(products[0]["id"]),
                     "last_focus_product_id": str(products[0]["id"]),
-                    "last_intent": "product.compare",
+                    "last_intent": SCENARIO.PRODUCT_COMPARE,
                 },
             )
 
@@ -542,12 +414,12 @@ class ProductHandler(BaseHandler):
 
         if ref_result.need_clarification:
             return self._clarify_result(
-                "product.compare", ref_result, ctx,
+                SCENARIO.PRODUCT_COMPARE, ref_result, ctx,
             )
 
         if not ref_result.resolved:
             return HandlerResult(
-                scenario_id="product.compare",
+                scenario_id=SCENARIO.PRODUCT_COMPARE,
                 reply="请先查看商品列表，再选择要对比的商品。",
                 pending_directive=PendingDirective.CLEAR,
             )
@@ -556,7 +428,7 @@ class ProductHandler(BaseHandler):
         base_id = ctx.compare_base_product_id or ctx.last_focus_product_id
         if not base_id:
             return HandlerResult(
-                scenario_id="product.compare",
+                scenario_id=SCENARIO.PRODUCT_COMPARE,
                 reply="请先选择一款基准商品，再选择要对比的商品。",
                 pending_directive=PendingDirective.CLEAR,
             )
@@ -568,52 +440,19 @@ class ProductHandler(BaseHandler):
         )
         if len(products) < 2:
             return HandlerResult(
-                scenario_id="product.compare",
+                scenario_id=SCENARIO.PRODUCT_COMPARE,
                 reply="对比的商品已下架或不可见，请重新选择。",
                 pending_directive=PendingDirective.CLEAR,
             )
         return HandlerResult(
-            scenario_id="product.compare",
+            scenario_id=SCENARIO.PRODUCT_COMPARE,
             reply=ProductReplyBuilder.compare_result(products),
             pending_directive=PendingDirective.CLEAR,
             context_update={
                 "compare_base_product_id": str(products[0]["id"]),
                 "last_focus_product_id": str(products[0]["id"]),
-                "last_intent": "product.compare",
+                "last_intent": SCENARIO.PRODUCT_COMPARE,
             },
-        )
-
-    async def _handle_attribute_query(
-        self,
-        text: str,
-        decision: ScenarioDecision,
-        ctx: SessionContext,
-    ) -> HandlerResult:
-        """商品属性查询。"""
-        resolver = self._get_resolver(ctx)
-        ref_result = await resolver.resolve(
-            text=text,
-            entities=decision.entities,
-            context=ctx,
-            tenant_id=ctx.tenant_id,
-        )
-
-        if ref_result.need_clarification:
-            return self._clarify_result(
-                "product.attribute_query", ref_result, ctx,
-            )
-
-        if ref_result.resolved:
-            attribute_code = decision.entities.get("attribute_code")
-            return await self._attribute_by_id(
-                ref_result.product_id, ref_result.product_name, text, ctx,
-                attribute_code=attribute_code,
-            )
-
-        return HandlerResult(
-            scenario_id="product.attribute_query",
-            reply="请先告诉我您想了解哪款商品的信息。",
-            pending_directive=PendingDirective.CLEAR,
         )
 
     async def _handle_pagination_sort(
@@ -636,7 +475,7 @@ class ProductHandler(BaseHandler):
         raw_candidates = self._get_candidates(ctx)
         if not raw_candidates:
             return HandlerResult(
-                scenario_id="product.pagination_sort",
+                scenario_id=SCENARIO.PRODUCT_PAGINATION,
                 reply="请先搜索或浏览商品，再进行排序或翻页。",
                 pending_directive=PendingDirective.CLEAR,
             )
@@ -668,7 +507,7 @@ class ProductHandler(BaseHandler):
 
         reply = ProductReplyBuilder.product_list(page_products, show_pagination=total > page_size)
         return HandlerResult(
-            scenario_id="product.pagination_sort",
+            scenario_id=SCENARIO.PRODUCT_PAGINATION,
             reply=reply,
             pending_directive=PendingDirective.CLEAR,
             context_update={
@@ -676,7 +515,7 @@ class ProductHandler(BaseHandler):
                     {"id": p["id"], "name": p["name"]} for p in products
                 ],
                 "product_page": page,
-                "last_intent": "product.pagination_sort",
+                "last_intent": SCENARIO.PRODUCT_PAGINATION,
             },
         )
 
@@ -708,87 +547,22 @@ class ProductHandler(BaseHandler):
         )
         if product is None:
             return HandlerResult(
-                scenario_id="product.detail",
+                scenario_id=SCENARIO.PRODUCT_DETAIL,
                 reply=f"商品「{product_name or product_id}」已下架或不存在。",
                 pending_directive=PendingDirective.CLEAR,
             )
         return HandlerResult(
-            scenario_id="product.detail",
+            scenario_id=SCENARIO.PRODUCT_DETAIL,
             reply=ProductReplyBuilder.product_detail(product),
             pending_directive=PendingDirective.CLEAR,
             context_update={
                 "last_product_id": str(product["id"]),
                 "last_product_name": product.get("name", ""),
                 "last_focus_product_id": str(product["id"]),
-                "last_intent": "product.detail",
+                "last_intent": SCENARIO.PRODUCT_DETAIL,
             },
         )
 
-    async def _attribute_by_id(
-        self,
-        product_id: int,
-        product_name: str | None,
-        text: str,
-        ctx: SessionContext,
-        attribute_code: str | None = None,
-    ) -> HandlerResult:
-        """按 product_id 查询属性。
-
-        有明确属性代码（attribute_code）时调用 ProductSkill.get_attribute，
-        否则返回商品所有结构化属性。
-        """
-        if attribute_code:
-            attr_result = await self._call_skill(
-                "get_attribute",
-                tenant_id=ctx.tenant_id,
-                product_id=product_id,
-                attribute_code=attribute_code,
-            )
-            value = attr_result.get("value") if attr_result else None
-            if value is not None:
-                reply = f"{product_name} 的「{attribute_code}」属性：{value}"
-            else:
-                reply = f"{product_name} 暂无「{attribute_code}」属性信息。"
-            return HandlerResult(
-                scenario_id="product.attribute_query",
-                reply=reply,
-                pending_directive=PendingDirective.CLEAR,
-                context_update={
-                    "last_product_id": str(product_id),
-                    "last_product_name": product_name or "",
-                    "last_focus_product_id": str(product_id),
-                    "last_intent": "product.attribute_query",
-                },
-            )
-
-        product = await self._call_skill(
-            "get_detail",
-            tenant_id=ctx.tenant_id,
-            product_id=product_id,
-        )
-
-        if product is None:
-            return HandlerResult(
-                scenario_id="product.attribute_query",
-                reply=f"商品「{product_name or product_id}」已下架或不存在。",
-                pending_directive=PendingDirective.CLEAR,
-            )
-
-        attrs = product.get("attrs_json") or {}
-        inner = attrs.get("attr") if isinstance(attrs.get("attr"), dict) else attrs
-
-        reply = ProductReplyBuilder.product_attributes(product, inner)
-        return HandlerResult(
-            scenario_id="product.attribute_query",
-            reply=reply,
-            pending_directive=PendingDirective.CLEAR,
-            context_update={
-                "last_product_id": str(product["id"]),
-                "last_product_name": product.get("name", ""),
-                "last_focus_product_id": str(product["id"]),
-                "last_intent": "product.attribute_query",
-            },
-        )
 
     def _clarify_result(
         self,

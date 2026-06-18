@@ -12,7 +12,7 @@ PENDING_MAX_ATTEMPTS: int = 3                    # Pending 最大追问轮次
 GRAPH_PENDING_TTL_SECONDS: int = 7200            # 图 Pending TTL（2 小时）
 
 # ── 场景识别 ──
-HIGH_CONFIDENCE_SCORE: float = 0.85              # 高置信意图阈值
+HIGH_CONFIDENCE_SCORE: float = 0.75              # 高置信意图阈值
 HIGH_CONFIDENCE_GAP: float = 0.15                # 高置信候选差距
 
 # ── Redis / 缓存 ──

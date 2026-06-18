@@ -4,13 +4,12 @@
   1. 文本归一化
   2. 上下文优先：短确认 + 草稿订单 → order.confirm
   3. 强规则匹配 → HUMAN / SILENT 直接返回
-  4. 粗实体抽取
-  5. 向量召回候选
-  6. LLM 判决（有候选或从零判断）
+  4. 基线实体抽取（正则：价格/数量/订单号）
+  5. 场景识别（向量 + LLM）
+  6. 按场景补充实体（产品/订单等专属提取）
   7. 兜底
 
 输出：ScenarioDecision(scenario_id, confidence, entities)
-旧 GlobalIntentEngine 不受影响，两者并存。
 """
 
 from __future__ import annotations
@@ -27,7 +26,7 @@ from app.ai.prompts.scene_recognition import (
     RECOGNITION_DIRECT_PROMPT,
     RECOGNITION_SYSTEM_PROMPT,
 )
-from app.ai.recognition.entity_extractors import extract_all
+from app.ai.recognition.entity_extractors import extract_baseline, extract_product_entities
 from app.ai.recognition.rule_matcher import RuleMatcher
 from app.ai.recognition.types import ScenarioDecision
 from app.common.constants.config import HIGH_CONFIDENCE_GAP, HIGH_CONFIDENCE_SCORE, SCENE_RECOGNITION_MAX_TOKENS
@@ -69,6 +68,7 @@ class RecognitionPipeline:
         """识别用户消息的场景。"""
         started = time.perf_counter()
         normalized = self._normalizer.normalize(str(message or ""))
+        tenant_id = self._ctx_get(context, "tenant_id", 0)
 
         # ── 1: 上下文优先（短确认 + 草稿订单 → order.confirm）──
         priority = self._check_scene_priority(normalized, context, started)
@@ -80,15 +80,29 @@ class RecognitionPipeline:
         if rule_hit is not None:
             return rule_hit
 
-        # ── 3: 粗实体抽取 + 向量召回 ──
-        entities = extract_all(normalized)
-        candidates = await self._vector.retrieve(normalized, tenant_id=self._ctx_get(context, "tenant_id", 0))
+        # ── 3: 基线实体抽取（正则：价格/数量/订单号，所有场景都跑，毫秒级）──
+        entities = extract_baseline(normalized)
 
-        # ── 4: 根据候选情况决策 ──
+        # ── 4: 场景识别（向量 + LLM）──
+        candidates = await self._vector.retrieve(normalized, tenant_id=tenant_id)
+
         if not candidates:
-            return await self._decide_without_candidates(normalized, entities, started)
+            decision = await self._decide_without_candidates(normalized, entities, started)
+        else:
+            decision = await self._decide_with_candidates(normalized, candidates, entities, started)
 
-        return await self._decide_with_candidates(normalized, candidates, entities, started)
+        # ── 5: 按场景补充实体 ──
+        if decision.scenario_id.startswith("product."):
+            from app.services.tenant_template import get_tenant_attributes_cached_only
+            from app.services.category_service import get_tenant_leaf_categories_cached_only
+            product_entities = extract_product_entities(
+                normalized,
+                await get_tenant_leaf_categories_cached_only(tenant_id),
+                await get_tenant_attributes_cached_only(tenant_id),
+            )
+            decision.entities.update(product_entities)
+
+        return decision
 
     # ──────────────────────────────────────
     # 决策子步骤
@@ -263,39 +277,4 @@ class RecognitionPipeline:
             logger.warning("LLM 场景判决失败（服务错误）：%s", exc)
             return None
 
-    @staticmethod
-    def _map_intent_to_scenario(intent: str, skill: str) -> str:
-        """旧 intent 名 → 新 scenario_id 映射。
 
-        歧义 intent（product_search, product_inquiry 等）不在这里映射，
-        由 LLM 判决步骤处理。
-        """
-        _INTENT_TO_SCENARIO: dict[str, str] = {
-            # HUMAN
-            "transfer_request": "human.transfer",
-            "complaint": "human.transfer",
-            "abuse": "human.transfer",
-            "return_refund": "order.refund",
-            # PRODUCT （只映射无歧义的）
-            "product_price": "product.filter_search",
-            "product_stock": "product.sku_query",
-            # ORDER
-            "place_order": "order.create",
-            "confirm_order": "order.confirm",
-            "order_status": "order.list",
-            "logistics_status": "order.shipping_status",
-            # RAG / KNOWLEDGE
-            "delivery_time": "knowledge.policy",
-            "promotion_inquiry": "knowledge.policy",
-            "discount_request": "knowledge.policy",
-            "invoice": "knowledge.qa",
-            "payment_inquiry": "knowledge.qa",
-            # MEMORY
-            "save_preference": "memory.save",
-            # TEMPLATE
-            "silent_empty": "template.silent",
-            "silent_noise": "template.silent",
-            "silent_ack": "template.confirmation",
-            "silent_thanks": "template.farewell",
-        }
-        return _INTENT_TO_SCENARIO.get(intent, "template.fallback")

@@ -8,7 +8,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from sqlalchemy import and_, or_, select
+from pydantic import BaseModel, Field
+from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.rag.vector_search import VectorDomain, VectorSearchService
@@ -18,6 +19,18 @@ from app.models.product import Product
 
 MAX_RESULTS = 20
 _vector_search = VectorSearchService()
+
+
+class SearchProductParams(BaseModel):
+    """商品搜索参数模型。"""
+    query_text: str = ""
+    product_name: str = ""
+    category_text: str = ""
+    category_id: int | None = None
+    min_price: float | None = None
+    max_price: float | None = None
+    attr_filters: dict[str, Any] = Field(default_factory=dict)
+    limit: int = MAX_RESULTS
 
 
 class ProductSkill:
@@ -74,34 +87,27 @@ class ProductSkill:
         *,
         db: AsyncSession,
         tenant_id: int,
-        query_text: str = "",
-        product_name: str = "",
-        category_text: str = "",
-        category_id: int | None = None,
-        min_price: float | None = None,
-        max_price: float | None = None,
-        template_filters: dict[str, str] | None = None,
-        attribute_filters: list[dict[str, Any]] | None = None,
-        limit: int = MAX_RESULTS,
+        params: SearchProductParams,
     ) -> list[dict[str, Any]]:
         """综合搜索商品。"""
-        filters = template_filters or {}
         conditions = [Product.tenant_id == tenant_id, Product.is_active.is_(True)]
-        if category_id is not None:
-            conditions.append(Product.category_id == category_id)
-        if min_price is not None:
-            conditions.append(Product.price >= min_price)
-        if max_price is not None:
-            conditions.append(Product.price <= max_price)
+        if params.category_id is not None:
+            conditions.append(Product.category_id == params.category_id)
+        if params.min_price is not None:
+            conditions.append(Product.price >= params.min_price)
+        if params.max_price is not None:
+            conditions.append(Product.price <= params.max_price)
 
-        for field, value in filters.items():
-            field_expr = Product.attrs_json["attr"][field].astext
-            conditions.append(or_(field_expr.is_(None), field_expr == value))
+        # 属性过滤：通过 JSONB containment 匹配 attrs_json.attr.{key} = value
+        if params.attr_filters:
+            attr_obj = {"attr": params.attr_filters}
+            conditions.append(Product.attrs_json.op("@>")(attr_obj))
 
-        clean_name = product_name.strip()
+        clean_name = params.product_name.strip()
         if clean_name:
             conditions.append(Product.name.ilike(f"%{clean_name}%"))
 
+        limit = params.limit
         products = list((
             await db.execute(
                 select(Product)
@@ -114,12 +120,8 @@ class ProductSkill:
         if not products:
             return []
 
-        # 属性条件后过滤（attribute_filters 中的非模板字段）
-        if attribute_filters:
-            products = _apply_attribute_filters(products, attribute_filters)
-
         vector_query = " ".join(
-            part for part in [query_text, category_text, product_name] if part
+            part for part in [params.query_text, params.category_text, params.product_name] if part
         ).strip()
         if not vector_query:
             return [_product_to_dict(p) for p in products[:limit]]
@@ -272,41 +274,5 @@ def _build_category_tree(
         return result
 
     return _build(None)
-
-
-def _apply_attribute_filters(
-    products: list[Product],
-    filters: list[dict[str, Any]],
-) -> list[Product]:
-    for cond in filters:
-        field = cond.get("field", "")
-        value = cond.get("value")
-        operator = cond.get("operator", "eq")
-        if not field:
-            continue
-        products = [
-            p for p in products
-            if _check_attribute(p.attrs_json, field, value, operator)
-        ]
-    return products
-
-
-def _check_attribute(
-    attrs: dict | None,
-    field: str,
-    value: Any,
-    operator: str,
-) -> bool:
-    if not attrs:
-        return False
-    inner = attrs.get("attr") if isinstance(attrs.get("attr"), dict) else attrs
-    actual = inner.get(field)
-    if actual is None:
-        return False
-    if operator == "eq":
-        return str(actual) == str(value)
-    if operator == "exists":
-        return bool(actual)
-    return True
 
 
