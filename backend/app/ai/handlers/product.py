@@ -163,23 +163,24 @@ class ProductHandler(BaseHandler):
 
         self._init_trace_context(scenario)
 
-        if scenario == SCENARIO.PRODUCT_CATALOG:
-            result = await self._handle_catalog(text, ctx)
-        elif scenario == SCENARIO.PRODUCT_FILTER_SEARCH:
-            result = await self._handle_filter_search(decision, ctx)
-        elif scenario == SCENARIO.PRODUCT_DETAIL:
-            result = await self._handle_detail(text, decision, ctx)
-        elif scenario == SCENARIO.PRODUCT_COMPARE:
-            result = await self._handle_compare(text, ctx)
-        elif scenario == SCENARIO.PRODUCT_PAGINATION:
-            result = await self._handle_pagination_sort(decision, ctx)
-        else:
-            logger.warning("未处理的商品场景: %s", scenario)
-            result = HandlerResult(
-                scenario_id=scenario,
-                reply="该功能正在开发中，请稍后再试。",
-                pending_directive=PendingDirective.CLEAR,
-            )
+        match scenario:
+            case SCENARIO.PRODUCT_CATALOG:
+                result = await self._handle_catalog(text, ctx)
+            case SCENARIO.PRODUCT_FILTER_SEARCH:
+                result = await self._handle_filter_search(decision, ctx)
+            case SCENARIO.PRODUCT_DETAIL:
+                result = await self._handle_detail(text, decision, ctx)
+            case SCENARIO.PRODUCT_COMPARE:
+                result = await self._handle_compare(text, ctx)
+            case SCENARIO.PRODUCT_PAGINATION:
+                result = await self._handle_pagination_sort(decision, ctx)
+            case _:
+                logger.warning("未处理的商品场景: %s", scenario)
+                result = HandlerResult(
+                    scenario_id=scenario,
+                    reply="该功能正在开发中，请稍后再试。",
+                    pending_directive=PendingDirective.CLEAR,
+                )
 
         self._merge_trace_context(result)
         return result

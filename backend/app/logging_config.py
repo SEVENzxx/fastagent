@@ -45,9 +45,10 @@ def setup_logging() -> None:
     logging.getLogger("httpcore").setLevel(logging.WARNING)
     logging.getLogger("httpx").setLevel(logging.WARNING)
 
-    # SQL 日志：通过 settings.SQL_ECHO 控制，避免 echo=True 导致双份输出
-    if settings.SQL_ECHO:
-        logging.getLogger("sqlalchemy.engine").setLevel(logging.INFO)
+    # SQL 日志：默认关闭，通过 settings.SQL_ECHO 显式开启
+    logging.getLogger("sqlalchemy.engine").setLevel(
+        logging.INFO if settings.SQL_ECHO else logging.WARNING
+    )
 
 
 def _resolve_log_level() -> int:

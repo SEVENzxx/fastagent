@@ -107,43 +107,47 @@ class ProductReplyBuilder:
         if len(products) < 2:
             return "需要至少两款商品才能进行对比。"
 
-        lines: list[str] = [f"{products[0].get('name', '?')} vs {products[1].get('name', '?')}"]
-        lines.append("=" * 30)
+        p0 = products[0]
+        p1 = products[1]
+        lines: list[str] = [
+            "【商品对比】",
+            "",
+            f"{p0.get('name', '?')}  vs  {p1.get('name', '?')}",
+            "━" * 36,
+        ]
 
-        # 价格对比
-        p0_price = products[0].get("price")
-        p1_price = products[1].get("price")
+        # 价格
+        p0_price = p0.get("price")
+        p1_price = p1.get("price")
         if p0_price is not None or p1_price is not None:
             p0_str = f"¥{float(p0_price):.2f}" if p0_price is not None else "-"
             p1_str = f"¥{float(p1_price):.2f}" if p1_price is not None else "-"
-            lines.append(f"价格：{p0_str} vs {p1_str}")
+            lines.append(f"💰 价格  {p0_str}  |  {p1_str}")
 
-        # 库存对比
-        s0 = products[0].get("stock")
-        s1 = products[1].get("stock")
+        # 库存
+        s0 = p0.get("stock")
+        s1 = p1.get("stock")
         if s0 is not None or s1 is not None:
-            lines.append(f"库存：{s0 or '-'} 件 vs {s1 or '-'} 件")
+            lines.append(f"📦 库存  {s0 or '-'}件  |  {s1 or '-'}件")
 
-        # 描述对比
-        d0 = products[0].get("description", "")
-        d1 = products[1].get("description", "")
+        # 描述
+        d0 = (p0.get("description") or "").strip()
+        d1 = (p1.get("description") or "").strip()
         if d0 or d1:
-            lines.append(f"描述：{d0[:60] if d0 else '-'}")
-            lines.append(f"      vs {d1[:60] if d1 else '-'}")
+            lines.append(f"📝 描述  {d0[:50]}  |  {d1[:50]}")
 
-        # 标签对比
-        t0 = products[0].get("feature_tags") or []
-        t1 = products[1].get("feature_tags") or []
+        # 标签
+        t0 = p0.get("feature_tags") or []
+        t1 = p1.get("feature_tags") or []
         if t0 or t1:
-            lines.append(f"标签：{'、'.join(t0[:3]) or '-'}")
-            lines.append(f"      vs {'、'.join(t1[:3]) or '-'}")
+            lines.append(f"🏷️  标签  {'、'.join(t0[:3]) or '-'}  |  {'、'.join(t1[:3]) or '-'}")
 
         if comparison_text:
             lines.append("")
-            lines.append(comparison_text)
+            lines.append(f"📋 {comparison_text}")
 
         lines.append("")
-        lines.append("如需了解其他区别，请继续提问。")
+        lines.append("如需了解更多差异，请继续提问。")
         return "\n".join(lines)
 
     @staticmethod
