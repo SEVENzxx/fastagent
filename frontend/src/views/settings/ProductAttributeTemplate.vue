@@ -3,7 +3,8 @@ import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus, RefreshRight, Delete, Edit, InfoFilled } from '@element-plus/icons-vue'
 import * as tenantApi from '@/api/tenant'
-import type { AttributeDef } from '@/api/tenant'
+import * as categoriesApi from '@/api/categories'
+import type { AttributeDef, CategoryAttrOption } from '@/api/tenant'
 
 const loading = ref(false)
 const saving = ref(false)
@@ -11,6 +12,11 @@ const attributes = ref<AttributeDef[]>([])
 const savedJson = ref('')
 const showEditor = ref(false)
 const editingIndex = ref(-1)
+
+// ── 分类选择 ──
+const categories = ref<CategoryAttrOption[]>([])
+const selectedCategoryId = ref('')
+const selectedCategoryName = ref('全部分类')
 
 const attrTypes = [
   { label: '布尔值', value: 'boolean' },
@@ -48,6 +54,36 @@ const jsonPreview = computed(() =>
   JSON.stringify({ attributes: attributes.value }, null, 2)
 )
 
+// ── 加载分类列表（仅叶子节点分类）──
+async function loadCategories() {
+  try {
+    const cats = await categoriesApi.getCategories()
+    const parentIds = new Set(cats.map((c) => c.parentId).filter(Boolean))
+    const leafCats = cats.filter((c) => !parentIds.has(c.id))
+    const configured = await tenantApi.getTemplateCategories().catch(() => [])
+    const countMap: Record<string, number> = {}
+    for (const c of configured) {
+      countMap[c.categoryId] = c.attrCount
+    }
+    categories.value = leafCats.map((c) => ({
+      categoryId: c.id,
+      categoryName: c.name,
+      attrCount: countMap[c.id] || 0,
+    }))
+    categories.value.unshift({ categoryId: '', categoryName: '全部分类', attrCount: 0 })
+  } catch {
+    categories.value = [{ categoryId: '', categoryName: '全部分类', attrCount: 0 }]
+  }
+}
+
+// ── 切换分类：从 template 的 @change 显式触发，避免 watch 异步竞态 ──
+async function handleCategoryChange(categoryId: string) {
+  selectedCategoryId.value = categoryId
+  const cat = categories.value.find((c) => c.categoryId === categoryId)
+  selectedCategoryName.value = cat?.categoryName || '全部分类'
+  await loadTemplate()
+}
+
 function openEditor(index: number = -1) {
   editingIndex.value = index
   if (index >= 0) {
@@ -79,10 +115,8 @@ function saveEditor() {
     return
   }
 
-  // 自动填充 queryPath
   form.queryPath = ['attr', form.key]
 
-  // 自动推荐 queryStrategy
   if (!form.queryStrategy) {
     const strategyMap: Record<string, string> = {
       boolean: 'jsonb_bool',
@@ -147,7 +181,9 @@ function removeAttribute(index: number) {
 async function loadTemplate() {
   loading.value = true
   try {
-    const result = await tenantApi.getTenantTemplate()
+    const result = await tenantApi.getTenantTemplate(
+      selectedCategoryId.value || undefined
+    )
     attributes.value = result.attributes || []
     savedJson.value = JSON.stringify(attributes.value)
   } catch (error: any) {
@@ -158,12 +194,27 @@ async function loadTemplate() {
 }
 
 async function saveTemplate() {
+  if (!selectedCategoryId.value) {
+    ElMessage.warning('请先选择一个分类')
+    return
+  }
   saving.value = true
   try {
-    const result = await tenantApi.updateTenantTemplate({ attributes: attributes.value })
+    const result = await tenantApi.updateTenantTemplate({
+      categoryId: selectedCategoryId.value,
+      attributes: attributes.value,
+    })
     attributes.value = result.attributes || []
     savedJson.value = JSON.stringify(attributes.value)
-    ElMessage.success('属性配置已保存')
+    // 本地更新分类列表的配置计数，不再重新拉取全部分类
+    const idx = categories.value.findIndex((c) => c.categoryId === selectedCategoryId.value)
+    if (idx >= 0) {
+      categories.value[idx] = {
+        ...categories.value[idx],
+        attrCount: attributes.value.length,
+      }
+    }
+    ElMessage.success(`「${selectedCategoryName.value}」属性配置已保存`)
   } catch (error: any) {
     ElMessage.error(error?.response?.data?.detail ?? '保存属性配置失败')
   } finally {
@@ -181,7 +232,17 @@ async function resetChanges() {
   attributes.value = JSON.parse(savedJson.value || '[]')
 }
 
-onMounted(loadTemplate)
+onMounted(async () => {
+  await loadCategories()
+  // 默认选中第一个有配置的分类
+  const configured = categories.value.find((c) => c.attrCount > 0)
+  if (configured && configured.categoryId) {
+    selectedCategoryId.value = configured.categoryId
+    const cat = categories.value.find((c) => c.categoryId === configured.categoryId)
+    selectedCategoryName.value = cat?.categoryName || '全部分类'
+  }
+  await loadTemplate()
+})
 </script>
 
 <template>
@@ -194,6 +255,31 @@ onMounted(loadTemplate)
       <el-tag type="info" effect="light">{{ attributes.length }} 个属性</el-tag>
     </header>
 
+    <!-- 分类选择器 -->
+    <section class="category-bar">
+      <span class="category-label">配置分类：</span>
+      <el-select
+        v-model="selectedCategoryId"
+        placeholder="请选择分类"
+        filterable
+        style="width: 300px"
+        @change="handleCategoryChange"
+      >
+        <el-option
+          v-for="cat in categories"
+          :key="cat.categoryId"
+          :label="`${cat.categoryName}${cat.attrCount > 0 ? `（${cat.attrCount} 个属性）` : '（未配置）'}`"
+          :value="cat.categoryId"
+        />
+      </el-select>
+      <span v-if="selectedCategoryId" class="category-hint">
+        当前配置：<strong>{{ selectedCategoryName }}</strong>
+      </span>
+      <span v-else class="category-hint-warning">
+        请先选择分类后再配置属性
+      </span>
+    </section>
+
     <section class="template-grid">
       <!-- 左侧：属性列表 + 操作 -->
       <div class="editor-panel">
@@ -203,7 +289,14 @@ onMounted(loadTemplate)
             <el-button :icon="RefreshRight" :disabled="!hasChanges || saving" plain @click="resetChanges">
               重置
             </el-button>
-            <el-button type="primary" :icon="Plus" @click="openEditor(-1)">新增属性</el-button>
+            <el-button
+              type="primary"
+              :icon="Plus"
+              :disabled="!selectedCategoryId"
+              @click="openEditor(-1)"
+            >
+              新增属性
+            </el-button>
           </div>
         </div>
 
@@ -233,7 +326,13 @@ onMounted(loadTemplate)
         <el-empty v-else description="暂无属性配置" :image-size="88" />
 
         <div class="actions" v-if="attributes.length">
-          <el-button type="primary" :loading="saving" :disabled="!hasChanges" @click="saveTemplate" size="large">
+          <el-button
+            type="primary"
+            :loading="saving"
+            :disabled="!hasChanges || !selectedCategoryId"
+            @click="saveTemplate"
+            size="large"
+          >
             保存配置
           </el-button>
         </div>
@@ -402,6 +501,33 @@ onMounted(loadTemplate)
   color: var(--text-strong);
 }
 
+.category-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 20px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.category-label {
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--text-strong);
+  white-space: nowrap;
+}
+
+.category-hint {
+  font-size: 13px;
+  color: var(--color-primary);
+}
+
+.category-hint-warning {
+  font-size: 13px;
+  color: var(--color-warning);
+}
+
 .template-grid {
   display: grid;
   grid-template-columns: minmax(480px, 1.2fr) minmax(360px, 0.8fr);
@@ -426,7 +552,6 @@ onMounted(loadTemplate)
   gap: 12px;
 }
 
-/* 属性列表表格 */
 .attr-table {
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -475,7 +600,6 @@ onMounted(loadTemplate)
   text-align: right;
 }
 
-/* 标签输入 */
 .tag-input {
   display: flex;
   gap: 8px;
@@ -493,7 +617,6 @@ onMounted(loadTemplate)
   margin-top: 8px;
 }
 
-/* 弹窗表单 */
 .attr-form .el-form-item {
   margin-bottom: 16px;
 }

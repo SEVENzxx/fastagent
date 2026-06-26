@@ -9,6 +9,7 @@ import type {
   IntentSampleCreate,
   IntentSampleUpdate,
   IntentSampleTestHit,
+  ScenarioOption,
 } from '@/api/intentSamples'
 
 // ── Data ──
@@ -42,6 +43,9 @@ const batchForm = ref({
   examples: '',
   enabled: true,
 })
+
+// ── Scenario Options ──
+const scenarioOptions = ref<ScenarioOption[]>([])
 
 // ── Test Search ──
 const searchQuery = ref('')
@@ -202,8 +206,17 @@ const sourceLabelMap: Record<string, string> = {
   tenant_custom: '自定义',
 }
 
+async function loadScenarioOptions() {
+  try {
+    scenarioOptions.value = await api.listScenarioOptions()
+  } catch {
+    scenarioOptions.value = []
+  }
+}
+
 onMounted(() => {
   loadData()
+  loadScenarioOptions()
 })
 </script>
 
@@ -311,7 +324,14 @@ onMounted(() => {
         <el-row :gutter="16">
           <el-col :span="12">
             <el-form-item label="场景标识 (scenarioId)">
-              <el-input v-model="form.scenarioId" placeholder="例如：product.catalog" />
+              <el-select v-model="form.scenarioId" placeholder="请选择场景" filterable clearable style="width: 100%">
+                <el-option
+                  v-for="opt in scenarioOptions"
+                  :key="opt.value"
+                  :label="`${opt.value}（${opt.label}）`"
+                  :value="opt.value"
+                />
+              </el-select>
             </el-form-item>
           </el-col>
           <el-col :span="12">
@@ -343,7 +363,14 @@ onMounted(() => {
         <el-row :gutter="16">
           <el-col :span="12">
             <el-form-item label="场景标识 (scenarioId)">
-              <el-input v-model="batchForm.scenarioId" placeholder="例如：product.catalog" />
+              <el-select v-model="batchForm.scenarioId" placeholder="请选择场景" filterable clearable style="width: 100%">
+                <el-option
+                  v-for="opt in scenarioOptions"
+                  :key="opt.value"
+                  :label="`${opt.value}（${opt.label}）`"
+                  :value="opt.value"
+                />
+              </el-select>
             </el-form-item>
           </el-col>
           <el-col :span="12">

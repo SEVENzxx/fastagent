@@ -58,6 +58,11 @@ export interface IntentSampleTestSearchResponse {
   results: IntentSampleTestHit[]
 }
 
+export interface ScenarioOption {
+  value: string
+  label: string
+}
+
 export interface SkillOption {
   value: string
   label: string
@@ -113,4 +118,8 @@ export function listSkillOptions() {
 
 export function listRiskLevelOptions() {
   return request.get<RiskLevelOption[]>('/ai/intent-samples/risk-level-options').then((res) => res.data)
+}
+
+export function listScenarioOptions() {
+  return request.get<ScenarioOption[]>('/ai/intent-samples/scenario-options').then((res) => res.data)
 }
