@@ -454,6 +454,160 @@ async def create_refund(
     )
 
 
+async def simulate_payment(
+    *,
+    tenant_id: int,
+    contact_id: int | None = None,
+    db: AsyncSession,
+    **kwargs,
+) -> ToolResult:
+    """模拟支付 — pending_customer_confirm → paid。
+
+    下单图自动流程的一部分，将订单标记为已支付。
+    """
+    order_id = kwargs.get("order_id")
+    if order_id is None:
+        return ToolResult(ok=False, skill_name="simulate_payment", error="缺少订单号。")
+    try:
+        order_id = int(order_id)
+    except (TypeError, ValueError):
+        return ToolResult(ok=False, skill_name="simulate_payment", error=f"无效订单号：{order_id}")
+
+    order = await order_service.get_order(db, order_id, tenant_id)
+    if order is None:
+        return ToolResult(ok=False, skill_name="simulate_payment", error=f"未找到订单 #{order_id}。")
+
+    if order.status == "paid":
+        return ToolResult(
+            ok=True,
+            skill_name="simulate_payment",
+            result={"order_id": str(order.id), "status": "paid", "message": "订单已支付。"},
+        )
+
+    try:
+        order = await order_service.transition_order_status(db, order_id, tenant_id, "paid")
+    except ValueError as exc:
+        return ToolResult(ok=False, skill_name="simulate_payment", error=str(exc))
+
+    logger.info(
+        "Skill simulate_payment 成功：order_id=%s tenant_id=%s",
+        order_id, tenant_id,
+    )
+    return ToolResult(
+        ok=True,
+        skill_name="simulate_payment",
+        result={
+            "order_id": str(order.id),
+            "status": order.status,
+            "status_label": _status_label(order.status),
+            "message": "模拟支付成功。",
+        },
+    )
+
+
+async def agent_approve(
+    *,
+    tenant_id: int,
+    contact_id: int | None = None,
+    db: AsyncSession,
+    **kwargs,
+) -> ToolResult:
+    """坐席审批通过 — paid → agent_confirmed。
+
+    下单图自动流程的一部分（auto_approve=True 时自动调用）。
+    """
+    order_id = kwargs.get("order_id")
+    if order_id is None:
+        return ToolResult(ok=False, skill_name="agent_approve", error="缺少订单号。")
+    try:
+        order_id = int(order_id)
+    except (TypeError, ValueError):
+        return ToolResult(ok=False, skill_name="agent_approve", error=f"无效订单号：{order_id}")
+
+    order = await order_service.get_order(db, order_id, tenant_id)
+    if order is None:
+        return ToolResult(ok=False, skill_name="agent_approve", error=f"未找到订单 #{order_id}。")
+
+    if order.status == "agent_confirmed":
+        return ToolResult(
+            ok=True,
+            skill_name="agent_approve",
+            result={"order_id": str(order.id), "status": "agent_confirmed", "message": "订单已审批通过。"},
+        )
+
+    try:
+        order = await order_service.transition_order_status(db, order_id, tenant_id, "agent_confirmed")
+    except ValueError as exc:
+        return ToolResult(ok=False, skill_name="agent_approve", error=str(exc))
+
+    logger.info(
+        "Skill agent_approve 成功：order_id=%s tenant_id=%s",
+        order_id, tenant_id,
+    )
+    return ToolResult(
+        ok=True,
+        skill_name="agent_approve",
+        result={
+            "order_id": str(order.id),
+            "status": order.status,
+            "status_label": _status_label(order.status),
+            "message": "坐席审批通过。",
+        },
+    )
+
+
+async def arrange_shipping(
+    *,
+    tenant_id: int,
+    contact_id: int | None = None,
+    db: AsyncSession,
+    **kwargs,
+) -> ToolResult:
+    """安排发货 — agent_confirmed → shipped。
+
+    下单图自动流程的一部分，将订单标记为已发货并记录发货时间。
+    """
+    order_id = kwargs.get("order_id")
+    if order_id is None:
+        return ToolResult(ok=False, skill_name="arrange_shipping", error="缺少订单号。")
+    try:
+        order_id = int(order_id)
+    except (TypeError, ValueError):
+        return ToolResult(ok=False, skill_name="arrange_shipping", error=f"无效订单号：{order_id}")
+
+    order = await order_service.get_order(db, order_id, tenant_id)
+    if order is None:
+        return ToolResult(ok=False, skill_name="arrange_shipping", error=f"未找到订单 #{order_id}。")
+
+    if order.status == "shipped":
+        return ToolResult(
+            ok=True,
+            skill_name="arrange_shipping",
+            result={"order_id": str(order.id), "status": "shipped", "message": "订单已发货。"},
+        )
+
+    try:
+        order = await order_service.transition_order_status(db, order_id, tenant_id, "shipped")
+    except ValueError as exc:
+        return ToolResult(ok=False, skill_name="arrange_shipping", error=str(exc))
+
+    logger.info(
+        "Skill arrange_shipping 成功：order_id=%s tenant_id=%s shipped_at=%s",
+        order_id, tenant_id, order.shipped_at,
+    )
+    return ToolResult(
+        ok=True,
+        skill_name="arrange_shipping",
+        result={
+            "order_id": str(order.id),
+            "status": order.status,
+            "status_label": _status_label(order.status),
+            "shipped_at": order.shipped_at.isoformat() if order.shipped_at else None,
+            "message": "订单已安排发货。",
+        },
+    )
+
+
 async def manage_order(
     *,
     tenant_id: int,

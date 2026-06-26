@@ -56,6 +56,7 @@ class LLMUseCase(LabeledEnum):
     AGENT = "agent"
     PRODUCT_ATTR_EXTRACT = "product_attr_extract"
     PRODUCT_SEMANTIC_SEARCH = "product_semantic_search"
+    PRODUCT_EXTRACT = "product_extract"
 
     @property
     def uses_tenant_config(self) -> bool:
@@ -73,6 +74,7 @@ class LLMUseCase(LabeledEnum):
             LLMUseCase.AGENT: "Agent 推理",
             LLMUseCase.PRODUCT_ATTR_EXTRACT: "商品属性抽取",
             LLMUseCase.PRODUCT_SEMANTIC_SEARCH: "商品语义搜索",
+            LLMUseCase.PRODUCT_EXTRACT: "商品参数抽取",
         }
         return labels[self]
 

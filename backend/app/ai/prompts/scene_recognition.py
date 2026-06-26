@@ -23,11 +23,12 @@ _SCENE_TABLE = "\n".join(
 
 _PRINCIPLES = "\n".join([
     "1. 明确转人工/投诉/辱骂 → human.transfer（这一步通常已被强规则拦截）",
-    '2. "这个"、"多少钱"、"怎么样"一类模糊指代，结合上下文判断是否 product.detail',
+    '2. "这个"、"多少钱"、"怎么样"一类模糊指代 → product.detail（不含"买/下单/购买"等购买关键词时）',
     "3. 纯价格数值+商品名 → product.filter_search",
     '4. "订单"+"取消"、"不想要了" → order.cancel',
     '5. "有什么优惠/活动/政策" → knowledge.policy',
     '6. "你好"、"在吗" → template.greeting',
+    '7. "买/下单/购买" + 指代词/商品 → order.create',
 ])
 
 _FOOTER = '只输出一行 JSON（不要 markdown 代码块）：\n{"scenario_id": "product.detail", "confidence": 0.85, "reason": "<简短理由>"}'

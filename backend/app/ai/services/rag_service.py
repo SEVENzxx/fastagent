@@ -56,28 +56,29 @@ class RAGService:
         if not candidates:
             return []
 
-        if settings.AI_RERANKER_ENABLED and len(candidates) > 1:
-            try:
-                doc_texts = [item["content"] for item in candidates]
-                reranked = await self.reranker_client.rerank(normalized_query, doc_texts, self.rerank_top_k)
-                if reranked:
-                    results = []
-                    for item in reranked:
-                        idx = item.get("index", 0)
-                        if 0 <= idx < len(candidates):
-                            candidate = candidates[idx]
-                            candidate["score"] = round(float(item.get("score", candidate.get("score", 0))), 4)
-                            results.append(candidate)
-                    logger.info(
-                        "RAG chunk rerank 完成：tenant_id=%s query=%s hits=%s rerank_scores=%s",
-                        tenant_id,
-                        normalized_query[:80],
-                        len(results),
-                        [item.get("score") for item in reranked[: self.rerank_top_k]],
-                    )
-                    return results[: self.rerank_top_k]
-            except Exception as exc:
-                logger.warning("RAG 重排序失败，降级使用 Qdrant 分数: %s", exc)
+        # TODO: rerank 服务 8002 暂未启用，注释掉
+        # if settings.AI_RERANKER_ENABLED and len(candidates) > 1:
+        #     try:
+        #         doc_texts = [item["content"] for item in candidates]
+        #         reranked = await self.reranker_client.rerank(normalized_query, doc_texts, self.rerank_top_k)
+        #         if reranked:
+        #             results = []
+        #             for item in reranked:
+        #                 idx = item.get("index", 0)
+        #                 if 0 <= idx < len(candidates):
+        #                     candidate = candidates[idx]
+        #                     candidate["score"] = round(float(item.get("score", candidate.get("score", 0))), 4)
+        #                     results.append(candidate)
+        #             logger.info(
+        #                 "RAG chunk rerank 完成：tenant_id=%s query=%s hits=%s rerank_scores=%s",
+        #                 tenant_id,
+        #                 normalized_query[:80],
+        #                 len(results),
+        #                 [item.get("score") for item in reranked[: self.rerank_top_k]],
+        #             )
+        #             return results[: self.rerank_top_k]
+        #     except Exception as exc:
+        #         logger.warning("RAG 重排序失败，降级使用 Qdrant 分数: %s", exc)
 
         return candidates[: self.rerank_top_k]
 

@@ -23,6 +23,7 @@ from app.ai.context.pending_state import (
 )
 from app.ai.handlers.base import HandlerResult
 from app.ai.handlers.registry import HandlerRegistry, register_default_handlers
+from app.ai.context.context_resolver import ContextResolver, ContextResolution
 from app.ai.recognition.pipeline import RecognitionPipeline
 from app.ai.recognition.types import ScenarioDecision
 from app.ai.context.session_context import SessionContext
@@ -56,6 +57,7 @@ class AssistantService:
         self.pending_service = pending_service or PendingService()
         self.pending_guard = pending_guard or PendingGuard()
         self.recognition = recognition or RecognitionPipeline()
+        self.context_resolver = ContextResolver()
         self.session_store = session_store or ConversationStateStore()
 
     async def process_message(
@@ -89,7 +91,7 @@ class AssistantService:
                     pending, text, context, tenant_id, conversation_id,
                 )
             else:
-                result = await self._recognize_and_execute(text, context)
+                result = await self._try_context_or_recognize(text, context)
         except Exception:
             logger.error("编排执行失败", exc_info=True)
             result = self._fallback_result()
@@ -154,7 +156,7 @@ class AssistantService:
         conversation_id: int,
     ) -> HandlerResult:
         """处理 Pending 流程。返回 HandlerResult（内部异常不抛到外层）。"""
-        action = await self.pending_guard.check(text, context, pending)
+        action = await self.pending_guard.check(text, context, pending, self.recognition)
         logger.info(
             "PendingGuard=%s scenario=%s step=%s",
             action.value, pending.scenario_id, pending.step,
@@ -218,7 +220,7 @@ class AssistantService:
         )
         if not clear_ok:
             return self._fallback_result(severity="unavailable")
-        return await self._recognize_and_execute(text, context)
+        return await self._try_context_or_recognize(text, context)
 
     async def _handle_pending_resume(
         self,
@@ -245,6 +247,46 @@ class AssistantService:
     # ──────────────────────────────────────
     # 场景识别 + Handler 执行
     # ──────────────────────────────────────
+
+    async def _try_context_or_recognize(
+        self,
+        text: str,
+        context: SessionContext,
+    ) -> HandlerResult:
+        """上下文解析优先 → 兜底场景识别。
+
+        ContextResolver 处理序号/指代/省略型三种上下文依赖，
+        解析成功则跳过 RecognitionPipeline 直接路由 Handler。
+        """
+        try:
+            resolution = await self.context_resolver.resolve(text, context)
+        except Exception as exc:
+            logger.error("ContextResolver 失败: %s", exc, exc_info=True)
+            resolution = None
+
+        if resolution is not None:
+            decision = ScenarioDecision(
+                scenario_id=resolution.scenario_id,
+                confidence=resolution.confidence,
+                entities=resolution.entities,
+            )
+            handler = self.registry.get(resolution.scenario_id)
+            if handler is not None:
+                logger.info(
+                    "【ContextResolver】命中 scenario=%s product_id=%s",
+                    resolution.scenario_id,
+                    resolution.entities.get("product_id"),
+                )
+                try:
+                    return await handler.execute(decision, context)
+                except Exception as exc:
+                    logger.error(
+                        "ContextResolver Handler 执行失败 scenario=%s: %s",
+                        resolution.scenario_id, exc, exc_info=True,
+                    )
+                    return self._fallback_result()
+
+        return await self._recognize_and_execute(text, context)
 
     async def _recognize_and_execute(
         self,

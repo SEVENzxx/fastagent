@@ -543,7 +543,10 @@ class TestProductDetailResume:
 
         assert result.scenario_id == "product.detail"
         assert "Tab 11 平板电脑" in result.reply
-        assert result.pending_directive == PendingDirective.CLEAR
+        assert result.pending_directive == PendingDirective.SET
+        assert result.pending_state is not None
+        assert result.pending_state.step == "choose_product_candidate"
+        assert "Tab 11 Pro 平板电脑" in str(result.pending_state.data.get("candidates", []))
         assert result.context_update.get("last_product_id") == "101"
 
     @pytest.mark.asyncio

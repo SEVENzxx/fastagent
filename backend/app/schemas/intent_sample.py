@@ -141,6 +141,13 @@ class IntentSampleTestSearchResponse(CamelModel):
     results: list[IntentSampleTestHit] = Field(description="召回结果列表")
 
 
+class ScenarioOption(CamelModel):
+    """场景标识枚举选项"""
+
+    value: str = Field(description="场景标识")
+    label: str = Field(description="场景中文名称")
+
+
 class SkillOption(CamelModel):
     """Skill 枚举选项"""
 

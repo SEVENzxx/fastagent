@@ -44,6 +44,10 @@ class SessionContext(BaseModel):
     product_page: int = Field(1, description="商品列表当前页码")
     product_candidates: list[dict[str, Any]] = Field(default_factory=list, description="搜索/推荐的商品候选列表")
     disambiguation_candidates: list[dict[str, Any]] = Field(default_factory=list, description="需用户澄清的消歧候选")
+    last_visible_products: list[dict[str, Any]] = Field(default_factory=list, description="最近可见商品列表（序号解析用），格式：[{\"index\": int, \"product_id\": str, \"name\": str}]")
+    compare_product_ids: list[str] = Field(default_factory=list, description="最近对比涉及的商品 ID 列表")
+    last_product_query: str | None = Field(None, description="用户最近一次商品搜索/筛选的关键词")
+    recent_products: list[dict[str, Any]] = Field(default_factory=list, description="最近交互过的商品摘要列表（最多 5 条）")
     product_context_round: int = Field(0, description="商品上下文已持续轮数（超阈值可清理）")
     product_search_history: list[dict[str, Any]] = Field(default_factory=list, description="近5轮商品搜索结果滑动窗口")
 

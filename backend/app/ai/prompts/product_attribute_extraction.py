@@ -19,6 +19,7 @@ PRODUCT_ATTR_EXTRACT_SYSTEM_PROMPT = """你是一个 SaaS 商品属性抽取器�
 
 严格规则：
 1. 只能输出 schema 中存在的 key，禁止新增 key；不要根据常识或品牌印象推测。
+   必须逐个检查 schema 中的每一个 key，为每个 key 给出抽取结果（即使无法判断也要返回 null，不能跳过或遗漏任何 key）。
 2. boolean 类型：
    - 明确支持、具备、带有、可用、内置、拥有 → true
    - 明确不支持、没有、不具备、无、不带 → false
@@ -38,7 +39,8 @@ PRODUCT_ATTR_EXTRACT_SYSTEM_PROMPT = """你是一个 SaaS 商品属性抽取器�
    - 明确直接表达：0.9-1.0
    - 间接但比较确定：0.7-0.89
    - 模糊或无法判断：0.0-0.5
-8. 输出必须是合法 JSON，不要输出 Markdown，不要解释。"""
+8. 输出必须是合法 JSON 对象（不是数组），不要输出 Markdown，不要解释。
+   顶层格式：{"attr": {"key1": value1, ...}, "evidence": {"key1": "原文", ...}, "confidence": {"key1": 0.9, ...}, "feature_tags": ["标签1", ...]}"""
 
 
 def build_product_attr_extract_messages(
@@ -46,16 +48,7 @@ def build_product_attr_extract_messages(
     product_name: str = "",
     attribute_defs: list[AttributeDef] | None = None,
 ) -> Messages:
-    """构建属性抽取 prompt。
-
-    Args:
-        content: 商品基本信息拼接文本（名称 + 描述 + 规格参数）
-        product_name: 商品名称
-        attribute_defs: 租户配置的属性定义列表
-
-    Returns:
-        Messages 列表
-    """
+    """构建属性抽取 prompt。"""
     schema_json = build_schema_for_prompt(attribute_defs or [])
     schema_text = json.dumps(schema_json, ensure_ascii=False, indent=2)
 
@@ -68,7 +61,11 @@ def build_product_attr_extract_messages(
         "【商品信息（截取前 4000 字符）】\n"
         f"{content[:4000] if content else '（无信息）'}\n"
         "\n"
-        "请按属性配置 schema 抽取，输出 JSON（结构：attr / evidence / confidence / feature_tags / scenario_tags / warnings）。"
+        "请按属性配置 schema 抽取，输出 JSON 对象（不要数组），格式：\n"
+        '{"attr": {"key1": value1, "key2": value2, ...}, '
+        '"evidence": {"key1": "判断依据原文", ...}, '
+        '"confidence": {"key1": 0.9, ...}, '
+        '"feature_tags": ["标签1", "标签2"]}'
     )
 
     return [

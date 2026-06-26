@@ -77,28 +77,31 @@ class AttributeDef(CamelModel):
 class TenantAttributeSchema(CamelModel):
     """租户完整属性配置 Schema。
 
-    存储于 Tenant.template_json 列（JSONB），结构：
+    存储于 Tenant.template_json 列（JSONB），按产品分类组织：
     {
-      "attributes": [
-        { "key": "is_waterproof", "label": "防水", "type": "boolean", ... },
-        ...
-      ]
+      "category_attributes": {
+        "123": [
+          { "key": "is_waterproof", "label": "防水", "type": "boolean", ... },
+          ...
+        ],
+        "456": [...]
+      }
     }
-
-    兼容旧格式 list[str]，通过 attribute_keys 字段兼容过渡。
     """
 
-    attributes: list[AttributeDef] = Field(
-        default_factory=list,
-        description="属性定义列表",
+    category_attributes: dict[str, list[AttributeDef]] = Field(
+        default_factory=dict,
+        description="按分类 ID 组织的属性定义映射",
     )
 
 
-# ── 兼容旧的 API 响应/请求模型 ──
+# ── API 响应/请求模型 ──
 
 class TenantTemplateResponse(CamelModel):
-    """租户属性模板响应（新格式）。"""
+    """租户属性模板响应（按分类）。"""
 
+    category_id: str = Field(default="", description="分类 ID，空表示未分类")
+    category_name: str = Field(default="", description="分类名称")
     attributes: list[AttributeDef] = Field(
         default_factory=list,
         description="属性定义列表",
@@ -108,7 +111,16 @@ class TenantTemplateResponse(CamelModel):
 class TenantTemplateUpdate(CamelModel):
     """更新租户属性模板请求。"""
 
+    category_id: str = Field(default="", description="分类 ID")
     attributes: list[AttributeDef] = Field(
         default_factory=list,
         description="属性定义列表",
     )
+
+
+class CategoryAttrOption(CamelModel):
+    """分类属性配置选项（下拉列表用）。"""
+
+    category_id: str = Field(description="分类 ID")
+    category_name: str = Field(description="分类名称")
+    attr_count: int = Field(default=0, description="已配置属性数")

@@ -99,8 +99,10 @@ class ProductSkill:
             conditions.append(Product.price <= params.max_price)
 
         # 属性过滤：通过 JSONB containment 匹配 attrs_json.attr.{key} = value
-        if params.attr_filters:
-            attr_obj = {"attr": params.attr_filters}
+        # 过滤 null 值，避免 @> 要求数据中也必须是 null
+        active_filters = {k: v for k, v in params.attr_filters.items() if v is not None}
+        if active_filters:
+            attr_obj = {"attr": active_filters}
             conditions.append(Product.attrs_json.op("@>")(attr_obj))
 
         clean_name = params.product_name.strip()

@@ -151,6 +151,13 @@ SCENARIO_SPECS: dict[str, ScenarioSpec] = {
         allow_pending=True,
         risk_level="read_only",
     ),
+    "product.usage": ScenarioSpec(
+        scenario_id="product.usage",
+        allowed_skills=["get_detail", "get_attribute"],
+        allow_llm_reply_generation=True,
+        allow_vector_search=True,
+        risk_level="read_only",
+    ),
     "product.pagination_sort": ScenarioSpec(
         scenario_id="product.pagination_sort",
         allowed_skills=["batch_get_detail"],

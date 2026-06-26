@@ -35,6 +35,7 @@ def register_default_handlers(registry: HandlerRegistry) -> None:
     registry.register("product.detail", ProductHandler())
     registry.register("product.compare", ProductHandler())
     registry.register("product.attribute_query", ProductHandler())
+    registry.register("product.usage", ProductHandler())
     registry.register("product.pagination_sort", ProductHandler())
 
     # Order

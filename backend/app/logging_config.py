@@ -50,6 +50,9 @@ def setup_logging() -> None:
         logging.INFO if settings.SQL_ECHO else logging.WARNING
     )
 
+    # Langfuse：非 trace 上下文的 "No active span" 是预期行为，抑制为 ERROR
+    logging.getLogger("langfuse").setLevel(logging.ERROR)
+
 
 def _resolve_log_level() -> int:
     """根据配置解析日志级别，默认开发环境输出 INFO。"""

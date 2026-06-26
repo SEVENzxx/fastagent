@@ -128,13 +128,21 @@ class OrderHandler(BaseHandler):
         text: str,
         ctx: SessionContext,
     ) -> HandlerResult:
-        """下单入口：创建图线程并首次调用。"""
+        """下单入口：创建图线程并首次调用。
+
+        优先使用会话焦点商品（用户刚看过详情后下单），
+        无焦点商品时尝试从文本解析。
+        """
         if not text.strip():
             return HandlerResult(
                 scenario_id="order.create",
                 reply="请描述您要购买的商品。",
                 pending_directive=PendingDirective.CLEAR,
             )
+
+        # 从会话上下文取焦点商品
+        product_id = str(ctx.last_focus_product_id) if ctx.last_focus_product_id else None
+        product_name = ctx.last_product_name or text
 
         from app.ai.graphs.order_creation import get_creation_graph, _build_idempotency_key
 
@@ -146,7 +154,7 @@ class OrderHandler(BaseHandler):
             contact_id=ctx.contact_id,
             graph_thread_id=graph_thread_id,
             input_text=text,
-            product_name=text,
+            product_name=product_name,
             quantity=1,
         )
 
@@ -155,11 +163,18 @@ class OrderHandler(BaseHandler):
             "conversation_id": ctx.conversation_id,
             "contact_id": ctx.contact_id,
             "input_text": text,
+            "selected_product_id": product_id,
+            "product_name": product_name,
             "quantity": 1,
             "idempotency_key": idempotency_key,
         }
 
-        config = {"configurable": {"thread_id": graph_thread_id}}
+        config = {
+            "configurable": {
+                "thread_id": graph_thread_id,
+                "auto_approve": settings.ORDER_AUTO_APPROVE,
+            },
+        }
 
         return await self._run_graph(
             scenario_id="order.create",

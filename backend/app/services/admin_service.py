@@ -128,7 +128,9 @@ async def create_tenant(db: AsyncSession, body: TenantCreate) -> dict:
     tenant_data = body.model_dump(exclude={"admin_email", "admin_password", "admin_display_name"})
     if "template_json" in tenant_data:
         attrs = normalize_template_to_attributes(tenant_data["template_json"])
-        tenant_data["template_json"] = {"attributes": [ad.model_dump() for ad in attrs]}
+        tenant_data["template_json"] = {
+            "category_attributes": {"": [ad.model_dump() for ad in attrs]}
+        }
     tenant = Tenant(**tenant_data)
     db.add(tenant)
     await db.flush()
@@ -195,7 +197,9 @@ async def update_tenant(db: AsyncSession, item_id: int, body: TenantUpdate) -> T
     data = body.model_dump(exclude_unset=True)
     if "template_json" in data:
         attrs = normalize_template_to_attributes(data["template_json"])
-        data["template_json"] = {"attributes": [ad.model_dump() for ad in attrs]}
+        data["template_json"] = {
+            "category_attributes": {"": [ad.model_dump() for ad in attrs]}
+        }
     await _validate_refs(db, data.get("plan_id"), data.get("selected_llm_config_id"))
     for key, value in data.items():
         setattr(item, key, value)

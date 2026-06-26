@@ -12,7 +12,8 @@ from app.schemas.base import CamelModel
 
 STATUS_TRANSITIONS: dict[str, set[str]] = {
     "draft": {"pending_customer_confirm", "cancelled"},
-    "pending_customer_confirm": {"customer_confirmed", "cancelled"},
+    "pending_customer_confirm": {"customer_confirmed", "paid", "cancelled"},
+    "paid": {"agent_confirmed", "cancelled"},
     "customer_confirmed": {"agent_confirmed", "cancelled"},
     "agent_confirmed": {"shipped", "cancelled"},
     "shipped": {"signed", "refunding"},

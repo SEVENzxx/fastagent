@@ -44,6 +44,7 @@ class SCENARIO:
     PRODUCT_FILTER_SEARCH = "product.filter_search"
     PRODUCT_DETAIL = "product.detail"
     PRODUCT_COMPARE = "product.compare"
+    PRODUCT_USAGE = "product.usage"
     PRODUCT_PAGINATION = "product.pagination_sort"
     ORDER_LIST = "order.list"
     ORDER_FILTER = "order.filter"
@@ -231,6 +232,28 @@ DEFAULT_INTENT_EXAMPLES: tuple[IntentExample, ...] = (
     IntentExample(SCENARIO.PRODUCT_COMPARE, "商品对比", "READ_ONLY", "哪个性价比高"),
     IntentExample(SCENARIO.PRODUCT_COMPARE, "商品对比", "READ_ONLY", "这款和那款区别大吗"),
 
+    #  product.usage — 商品适用性咨询
+    IntentExample(SCENARIO.PRODUCT_USAGE, "商品适用性", "READ_ONLY", "适合跑步吗"),
+    IntentExample(SCENARIO.PRODUCT_USAGE, "商品适用性", "READ_ONLY", "适合户外运动吗"),
+    IntentExample(SCENARIO.PRODUCT_USAGE, "商品适用性", "READ_ONLY", "适合日常使用吗"),
+    IntentExample(SCENARIO.PRODUCT_USAGE, "商品适用性", "READ_ONLY", "适合什么场合用"),
+    IntentExample(SCENARIO.PRODUCT_USAGE, "商品适用性", "READ_ONLY", "适合什么人群"),
+    IntentExample(SCENARIO.PRODUCT_USAGE, "商品适用性", "READ_ONLY", "适合在家里用吗"),
+    IntentExample(SCENARIO.PRODUCT_USAGE, "商品适用性", "READ_ONLY", "适合上班用吗"),
+    IntentExample(SCENARIO.PRODUCT_USAGE, "商品适用性", "READ_ONLY", "适合送人吗"),
+    IntentExample(SCENARIO.PRODUCT_USAGE, "商品适用性", "READ_ONLY", "可以戴着跑步吗"),
+    IntentExample(SCENARIO.PRODUCT_USAGE, "商品适用性", "READ_ONLY", "可以户外使用吗"),
+    IntentExample(SCENARIO.PRODUCT_USAGE, "商品适用性", "READ_ONLY", "可以在雨天用吗"),
+    IntentExample(SCENARIO.PRODUCT_USAGE, "商品适用性", "READ_ONLY", "可以戴着睡觉吗"),
+    IntentExample(SCENARIO.PRODUCT_USAGE, "商品适用性", "READ_ONLY", "能用来健身吗"),
+    IntentExample(SCENARIO.PRODUCT_USAGE, "商品适用性", "READ_ONLY", "能戴着游泳吗"),
+    IntentExample(SCENARIO.PRODUCT_USAGE, "商品适用性", "READ_ONLY", "能不能在运动时佩戴"),
+    IntentExample(SCENARIO.PRODUCT_USAGE, "商品适用性", "READ_ONLY", "能不能日常用"),
+    IntentExample(SCENARIO.PRODUCT_USAGE, "商品适用性", "READ_ONLY", "主要用来做什么"),
+    IntentExample(SCENARIO.PRODUCT_USAGE, "商品适用性", "READ_ONLY", "适用于哪些场景"),
+    IntentExample(SCENARIO.PRODUCT_USAGE, "商品适用性", "READ_ONLY", "平时可以用在什么地方"),
+    IntentExample(SCENARIO.PRODUCT_USAGE, "商品适用性", "READ_ONLY", "这款适合什么情况下用"),
+
     #  order.list — 订单列表
     IntentExample(SCENARIO.ORDER_LIST, "订单列表", "READ_ONLY", "查订单"),
     IntentExample(SCENARIO.ORDER_LIST, "订单列表", "READ_ONLY", "订单查一下"),
@@ -308,6 +331,15 @@ DEFAULT_INTENT_EXAMPLES: tuple[IntentExample, ...] = (
     IntentExample(SCENARIO.ORDER_CREATE, "下单", "HIGH_RISK_WRITE", "我要下单"),
     IntentExample(SCENARIO.ORDER_CREATE, "下单", "HIGH_RISK_WRITE", "可以购买吗"),
     IntentExample(SCENARIO.ORDER_CREATE, "下单", "HIGH_RISK_WRITE", "帮我下单"),
+    IntentExample(SCENARIO.ORDER_CREATE, "下单", "HIGH_RISK_WRITE", "下单这款耳机"),
+    IntentExample(SCENARIO.ORDER_CREATE, "下单", "HIGH_RISK_WRITE", "下单第一个"),
+    IntentExample(SCENARIO.ORDER_CREATE, "下单", "HIGH_RISK_WRITE", "下单第一款"),
+    IntentExample(SCENARIO.ORDER_CREATE, "下单", "HIGH_RISK_WRITE", "给我下单第一个"),
+    IntentExample(SCENARIO.ORDER_CREATE, "下单", "HIGH_RISK_WRITE", "给我下单第一款"),
+    IntentExample(SCENARIO.ORDER_CREATE, "下单", "HIGH_RISK_WRITE", "我想买这款耳机"),
+    IntentExample(SCENARIO.ORDER_CREATE, "下单", "HIGH_RISK_WRITE", "这个怎么下单"),
+    IntentExample(SCENARIO.ORDER_CREATE, "下单", "HIGH_RISK_WRITE", "帮我订这款"),
+    IntentExample(SCENARIO.ORDER_CREATE, "下单", "HIGH_RISK_WRITE", "我想买第一个"),
 
     #  order.cancel — 取消订单
     IntentExample(SCENARIO.ORDER_CANCEL, "取消订单", "HIGH_RISK_WRITE", "取消订单"),
@@ -453,6 +485,7 @@ SCENARIO_DESCRIPTIONS: dict[str, str] = {
     SCENARIO.PRODUCT_FILTER_SEARCH: "按条件筛选商品，例如：500-1000的防水耳机",
     SCENARIO.PRODUCT_DETAIL: "商品详情咨询，例如：这个怎么样、多少钱、有货吗",
     SCENARIO.PRODUCT_COMPARE: "商品对比，例如：第一款和第二款有什么区别",
+    SCENARIO.PRODUCT_USAGE: "商品适用性咨询，例如：这款适合跑步吗、可以用来游泳吗",
     SCENARIO.PRODUCT_PAGINATION: "翻页/排序，例如：下一页、按价格排序",
     SCENARIO.ORDER_LIST: "查看订单列表，例如：我的订单",
     SCENARIO.ORDER_FILTER: "筛选订单，例如：未发货的订单有哪些",

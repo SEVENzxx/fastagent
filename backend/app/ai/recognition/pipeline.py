@@ -4,10 +4,7 @@
   1. 文本归一化
   2. 上下文优先：短确认 + 草稿订单 → order.confirm
   3. 强规则匹配 → HUMAN / SILENT 直接返回
-  4. 基线实体抽取（正则：价格/数量/订单号）
-  5. 场景识别（向量 + LLM）
-  6. 按场景补充实体（产品/订单等专属提取）
-  7. 兜底
+  4. 场景识别（向量 + LLM）
 
 输出：ScenarioDecision(scenario_id, confidence, entities)
 """
@@ -26,7 +23,6 @@ from app.ai.prompts.scene_recognition import (
     RECOGNITION_DIRECT_PROMPT,
     RECOGNITION_SYSTEM_PROMPT,
 )
-from app.ai.recognition.entity_extractors import extract_baseline, extract_product_entities
 from app.ai.recognition.rule_matcher import RuleMatcher
 from app.ai.recognition.types import ScenarioDecision
 from app.common.constants.config import HIGH_CONFIDENCE_GAP, HIGH_CONFIDENCE_SCORE, SCENE_RECOGNITION_MAX_TOKENS
@@ -80,27 +76,13 @@ class RecognitionPipeline:
         if rule_hit is not None:
             return rule_hit
 
-        # ── 3: 基线实体抽取（正则：价格/数量/订单号，所有场景都跑，毫秒级）──
-        entities = extract_baseline(normalized)
-
-        # ── 4: 场景识别（向量 + LLM）──
+        # ── 3: 场景识别（向量 + LLM）──
         candidates = await self._vector.retrieve(normalized, tenant_id=tenant_id)
 
         if not candidates:
-            decision = await self._decide_without_candidates(normalized, entities, started)
+            decision = await self._decide_without_candidates(normalized, {}, started)
         else:
-            decision = await self._decide_with_candidates(normalized, candidates, entities, started)
-
-        # ── 5: 按场景补充实体 ──
-        if decision.scenario_id.startswith("product."):
-            from app.services.tenant_template import get_tenant_attributes_cached_only
-            from app.services.category_service import get_tenant_leaf_categories_cached_only
-            product_entities = extract_product_entities(
-                normalized,
-                await get_tenant_leaf_categories_cached_only(tenant_id),
-                await get_tenant_attributes_cached_only(tenant_id),
-            )
-            decision.entities.update(product_entities)
+            decision = await self._decide_with_candidates(normalized, candidates, {}, started)
 
         return decision
 

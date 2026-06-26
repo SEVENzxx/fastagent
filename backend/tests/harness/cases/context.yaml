@@ -44,3 +44,29 @@ cases:
       status_code: 200
       reply_not_empty: true
       max_latency_ms: 20000
+
+  - name: "上下文-商品多轮连贯P0"
+    description: "6步P0链路：搜索→选1→详情→问适合跑步→问适合健身，验证全程上下文不丢失"
+    risk_level: "p0"
+    business_constraints:
+      - "搜索后展示商品列表含序号"
+      - "输入'1'进入对应商品详情"
+      - "'这款适合跑步吗'基于已确定商品回答"
+      - "'它适合跑步健身吗'继续基于同一商品回答"
+      - "全程不出现'未找到''暂未找到'等无结果提示"
+    tags: ["context", "p0", "product"]
+    messages:
+      - description: "用户搜索商品"
+        content: "有什么耳机"
+      - description: "用户选择第一个商品"
+        content: "1"
+      - description: "用户询问是否适合跑步"
+        content: "这款适合跑步的时候使用吗"
+      - description: "用户追问是否适合健身"
+        content: "它适合跑步健身时使用吗"
+    expected:
+      status_code: 200
+      reply_not_empty: true
+      reply_not_contains: ["未找到", "暂未找到", "不存在", "已下架"]
+      reply_regex: "(跑步|健身|运动)"
+      max_latency_ms: 30000

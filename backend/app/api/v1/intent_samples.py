@@ -10,6 +10,7 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.ai.recognition.examples import SCENARIO_DESCRIPTIONS
 from app.ai.recognition.types import RiskLevel, SkillName
 from app.integrations.database import get_db
 from app.dependencies import require_permission
@@ -24,6 +25,7 @@ from app.schemas.intent_sample import (
     IntentSampleTestSearchResponse,
     IntentSampleTestHit,
     IntentSampleUpdate,
+    ScenarioOption,
     SkillOption,
     RiskLevelOption,
 )
@@ -170,6 +172,15 @@ async def list_risk_level_options():
     return [
         RiskLevelOption(value=r.value, label=_risk_label(r))
         for r in RiskLevel
+    ]
+
+
+@router.get("/scenario-options", response_model=list[ScenarioOption])
+async def list_scenario_options():
+    """获取场景标识枚举选项（前端下拉列表用）"""
+    return [
+        ScenarioOption(value=sid, label=SCENARIO_DESCRIPTIONS.get(sid, sid))
+        for sid in sorted(SCENARIO_DESCRIPTIONS)
     ]
 
 
