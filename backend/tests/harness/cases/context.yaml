@@ -26,6 +26,12 @@ cases:
       status_code: 200
       reply_not_empty: true
       max_latency_ms: 20000
+      # 多轮场景应避免写操作
+      disallowed_skill_calls:
+        - create_order_draft
+        - confirm_order
+        - cancel_order_draft
+        - remember_info
 
   - name: "上下文-订单缺槽后补充订单号"
     description: "用户先请求查单（缺订单号），再补充订单号，验证 AI 能否跨轮拼接信息"
@@ -44,9 +50,11 @@ cases:
       status_code: 200
       reply_not_empty: true
       max_latency_ms: 20000
+      # 订单查询规则优先，不依赖 LLM
+      max_llm_calls: 0
 
   - name: "上下文-商品多轮连贯P0"
-    description: "6步P0链路：搜索→选1→详情→问适合跑步→问适合健身，验证全程上下文不丢失"
+    description: "4步链路：搜索→选1→问适合跑步→问适合健身，验证全程上下文不丢失"
     risk_level: "p0"
     business_constraints:
       - "搜索后展示商品列表含序号"
@@ -70,3 +78,9 @@ cases:
       reply_not_contains: ["未找到", "暂未找到", "不存在", "已下架"]
       reply_regex: "(跑步|健身|运动)"
       max_latency_ms: 30000
+      # 多轮场景应避免写操作
+      disallowed_skill_calls:
+        - create_order_draft
+        - confirm_order
+        - cancel_order_draft
+        - remember_info

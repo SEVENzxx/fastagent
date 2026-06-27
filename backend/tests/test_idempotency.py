@@ -121,6 +121,15 @@ class TestIdempotencyServiceFallback:
         await svc.delete("k")
         assert await svc.get("k") is None
 
+    async def test_fallback_ttl_expires_key(self) -> None:
+        """Redis 降级后，内存 key 也应遵守 TTL。"""
+        svc = IdempotencyService(prefix="test_fb", default_ttl=3600)
+        svc._in_memory = True
+
+        with patch("app.ai.services.idempotency.time.monotonic", side_effect=[100.0, 101.1]):
+            await svc.set("ttl_key", {"status": "processing"}, ttl=1)
+            assert await svc.get("ttl_key") is None
+
     async def test_fallback_clear(self) -> None:
         """clear_fallback 类方法应清空内存存储。"""
         svc = IdempotencyService(prefix="test_fb", default_ttl=3600)

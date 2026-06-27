@@ -20,6 +20,13 @@ cases:
       status_code: 200
       reply_not_empty: true
       max_latency_ms: 10000
+      # product.catalog: 按分类展示，不调 LLM
+      max_llm_calls: 0
+      disallowed_skill_calls:
+        - create_order_draft
+        - confirm_order
+        - cancel_order_draft
+        - remember_info
 
   - name: "商品-按品类筛选"
     description: "用户按品类筛选商品，验证 AI 能否正确识别品类并筛选"
@@ -34,6 +41,8 @@ cases:
       status_code: 200
       reply_not_empty: true
       max_latency_ms: 10000
+      # product.filter_search: 允许 LLM 实体抽取，但不应调向量
+      max_vector_calls: 0
 
   - name: "商品-查价格"
     description: "用户询问价格，验证 AI 能否提供具体价格信息"

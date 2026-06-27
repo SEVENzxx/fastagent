@@ -104,6 +104,7 @@ class HarnessMessageResponse(BaseModel):
     run_id: str
     reply: str
     status: str
+    resource_trace: dict = Field(default_factory=dict, description="资源调用轨迹（LLM 次数、向量检索次数、Skill 调用列表）")
 
 
 class HarnessCleanupResponse(BaseModel):
@@ -241,11 +242,16 @@ async def harness_send_message(
         ).order_by(Message.created_at.desc()).limit(1)
     )
 
+    resource_trace = {}
+    if ai_message and ai_message.metadata_:
+        resource_trace = ai_message.metadata_.get("resource_trace", {})
+
     return HarnessMessageResponse(
         conversation_id=str(conversation.id),
         run_id=body.run_id,
         reply=ai_message.content if ai_message else "",
         status=conversation.status,
+        resource_trace=resource_trace,
     )
 
 

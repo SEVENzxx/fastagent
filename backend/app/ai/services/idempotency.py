@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from typing import Any
 
 from app.common.constants.config import IDEMPOTENCY_TTL
@@ -21,6 +22,7 @@ from app.common.constants.config import IDEMPOTENCY_TTL
 logger = logging.getLogger(__name__)
 
 _fallback_store: dict[str, dict[str, Any]] = {}
+_fallback_expiry: dict[str, float] = {}
 _fallback_locks: set[str] = set()
 
 # 内存占位值（setnx 用）
@@ -50,6 +52,20 @@ class IdempotencyService:
     def _make_key(self, key: str) -> str:
         return f"{self._prefix}:{key}"
 
+    @staticmethod
+    def _cleanup_fallback_key(key: str) -> None:
+        """清理已过期的内存降级 key。"""
+        expires_at = _fallback_expiry.get(key)
+        if expires_at is not None and expires_at <= time.monotonic():
+            _fallback_store.pop(key, None)
+            _fallback_expiry.pop(key, None)
+
+    def _fallback_set(self, key: str, value: dict[str, Any], ttl: int | None = None) -> None:
+        """写入内存降级存储，并保留 TTL 语义。"""
+        mk = self._make_key(key)
+        _fallback_store[mk] = value
+        _fallback_expiry[mk] = time.monotonic() + float(ttl or self._default_ttl)
+
     async def get(self, key: str) -> dict[str, Any] | None:
         redis = await self._get_redis()
         if redis is not None:
@@ -61,7 +77,9 @@ class IdempotencyService:
             except Exception:
                 logger.warning("Idempotency: Redis get 失败，降级到内存: key=%s", key[:16])
                 self._in_memory = True
-        return _fallback_store.get(self._make_key(key))
+        mk = self._make_key(key)
+        self._cleanup_fallback_key(mk)
+        return _fallback_store.get(mk)
 
     async def set(
         self,
@@ -81,7 +99,7 @@ class IdempotencyService:
             except Exception:
                 logger.warning("Idempotency: Redis set 失败，降级到内存: key=%s", key[:16])
                 self._in_memory = True
-        _fallback_store[self._make_key(key)] = value
+        self._fallback_set(key, value, ttl)
 
     async def setnx(
         self,
@@ -104,11 +122,12 @@ class IdempotencyService:
                 logger.warning("Idempotency: Redis setnx 失败，降级到内存: key=%s", key[:16])
                 self._in_memory = True
 
-        # 内存降级：无锁 setdefault 语义
+        # 内存降级：保留 set-if-absent 语义，并清理过期 key。
         mk = self._make_key(key)
+        self._cleanup_fallback_key(mk)
         if mk in _fallback_store:
             return False
-        _fallback_store[mk] = value
+        self._fallback_set(key, value, ttl)
         return True
 
     async def delete(self, key: str) -> None:
@@ -119,11 +138,14 @@ class IdempotencyService:
                 return
             except Exception:
                 logger.warning("Idempotency: Redis delete 失败: key=%s", key[:16])
-        _fallback_store.pop(self._make_key(key), None)
+        mk = self._make_key(key)
+        _fallback_store.pop(mk, None)
+        _fallback_expiry.pop(mk, None)
 
     @classmethod
     def clear_fallback(cls) -> None:
         _fallback_store.clear()
+        _fallback_expiry.clear()
 
 
 # 模块级单例

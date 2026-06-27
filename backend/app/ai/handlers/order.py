@@ -17,6 +17,7 @@ import uuid
 from datetime import datetime, timezone, timedelta
 from typing import Any
 
+from app.ai.components.order_create_guard import OrderCreateGuard
 from app.ai.components.order_reference import (
     OrderReferenceResolver,
     OrderReferenceResult,
@@ -28,6 +29,10 @@ from app.ai.recognition.types import ScenarioDecision
 from app.ai.reply_builders.order import OrderReplyBuilder
 from app.ai.context.session_context import SessionContext
 from app.ai.handlers.base import ToolResult
+from app.ai.services.order_create_start_lock import (
+    OrderCreateStartLock,
+    order_create_start_lock,
+)
 from app.ai.skills.gateway import SkillError, call_skill
 from app.config import settings
 
@@ -45,9 +50,13 @@ class OrderHandler(BaseHandler):
         self,
         resolver: OrderReferenceResolver | None = None,
         skill: object = None,
+        create_guard: OrderCreateGuard | None = None,
+        start_lock: OrderCreateStartLock | None = None,
     ) -> None:
         self._resolver = resolver
         self._skill = skill  # None = lazy import real module on first _call_skill
+        self._create_guard = create_guard or OrderCreateGuard()
+        self._start_lock = start_lock or order_create_start_lock
 
     async def execute(
         self,
@@ -109,6 +118,12 @@ class OrderHandler(BaseHandler):
             )
 
         if ps.scenario_id == "order.create":
+            if self._create_guard.looks_like_new_order_start(message):
+                return HandlerResult(
+                    scenario_id=ps.scenario_id,
+                    reply=OrderReplyBuilder.order_create_pending_exists(),
+                    pending_directive=PendingDirective.KEEP,
+                )
             return await self._resume_create_graph(ps, message, ctx)
         if ps.scenario_id == "order.cancel":
             return await self._resume_cancel_graph(ps, message, ctx)
@@ -140,23 +155,21 @@ class OrderHandler(BaseHandler):
                 pending_directive=PendingDirective.CLEAR,
             )
 
+        if not await self._start_lock.acquire(ctx, text):
+            return HandlerResult(
+                scenario_id="order.create",
+                reply=OrderReplyBuilder.order_create_start_in_progress(),
+                pending_directive=PendingDirective.CLEAR,
+            )
+
         # 从会话上下文取焦点商品
         product_id = str(ctx.last_focus_product_id) if ctx.last_focus_product_id else None
         product_name = ctx.last_product_name or text
 
-        from app.ai.graphs.order_creation import get_creation_graph, _build_idempotency_key
+        from app.ai.graphs.order_creation import get_creation_graph
 
         graph = await get_creation_graph()
         graph_thread_id = str(uuid.uuid4())
-        idempotency_key = _build_idempotency_key(
-            tenant_id=ctx.tenant_id,
-            conversation_id=ctx.conversation_id,
-            contact_id=ctx.contact_id,
-            graph_thread_id=graph_thread_id,
-            input_text=text,
-            product_name=product_name,
-            quantity=1,
-        )
 
         initial_state: dict[str, Any] = {
             "tenant_id": ctx.tenant_id,
@@ -166,7 +179,6 @@ class OrderHandler(BaseHandler):
             "selected_product_id": product_id,
             "product_name": product_name,
             "quantity": 1,
-            "idempotency_key": idempotency_key,
         }
 
         config = {

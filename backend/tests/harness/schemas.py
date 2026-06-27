@@ -18,6 +18,12 @@ class AssertionDef:
     reply_not_regex: str | None = None
     max_latency_ms: int | None = None
 
+    # ── ResourceTrace 断言 ────────────────────────────────────────────
+    max_llm_calls: int | None = None           # LLM 调用次数上限
+    max_vector_calls: int | None = None         # 向量检索次数上限
+    allowed_skill_calls: list[str] | None = None   # 允许调用的 Skill 列表
+    disallowed_skill_calls: list[str] | None = None  # 禁止调用的 Skill 列表
+
 
 @dataclass
 class TurnResult:
@@ -27,6 +33,7 @@ class TurnResult:
     reply: str = ""
     latency_ms: float = 0.0
     error: str | None = None
+    resource_trace: dict | None = None  # 资源调用轨迹
 
 
 @dataclass

@@ -15,6 +15,7 @@
 写入约束（P1）：
   - SQLite 持久化 checkpointer（非 MemorySaver），重启后图状态可恢复
   - Redis 持久化幂等 key（非内存 dict），跨 worker/重启有效
+  - 汇总确认后按最终业务参数生成提交幂等 key
   - execute_create 前必须从 IdempotencyService 查重，相同 key 只执行一次写操作
   - simulate_payment / arrange_shipping 各自独立幂等
 
@@ -149,28 +150,35 @@ class OrderCreationState(TypedDict, total=False):
 # Idempotency 常量
 # ══════════════════════════════════════════════
 
-_IDEMPOTENCY_SALT = "order_creation_v1"
+_IDEMPOTENCY_SALT = "order_creation_submit_v2"
+_ORDER_SUBMIT_IDEMPOTENCY_TTL_SECONDS = 300
 
 
-def _build_idempotency_key(
+def _normalize_idempotency_value(value: Any) -> str:
+    """归一化幂等 key 字段，减少空白差异造成的误判。"""
+    return re.sub(r"\s+", "", str(value or "")).lower()
+
+
+def _build_submission_idempotency_key(
+    *,
     tenant_id: int,
-    conversation_id: int,
     contact_id: int | None,
-    graph_thread_id: str,
-    input_text: str,
-    product_name: str,
+    product_id: str | None,
+    product_name: str | None,
     quantity: int,
+    receiver_phone: str | None,
+    shipping_address: str | None,
 ) -> str:
-    """生成稳定的幂等 key。"""
+    """按最终订单业务参数生成提交幂等 key。"""
     raw = "|".join([
         _IDEMPOTENCY_SALT,
         str(tenant_id),
-        str(conversation_id),
         str(contact_id or ""),
-        graph_thread_id,
-        input_text,
-        product_name,
+        _normalize_idempotency_value(product_id or product_name),
+        _normalize_idempotency_value(product_name),
         str(quantity),
+        _normalize_idempotency_value(receiver_phone),
+        _normalize_idempotency_value(shipping_address),
     ])
     return hashlib.sha256(raw.encode()).hexdigest()
 
@@ -464,7 +472,21 @@ async def show_summary_node(
     choice_stripped = choice.strip().lower()
 
     if choice_stripped in ("确认", "确认下单", "是", "yes", "y", "确定"):
-        return {"confirmed": True, "total_amount": total, "reply": ""}
+        idempotency_key = _build_submission_idempotency_key(
+            tenant_id=state.get("tenant_id", 0),
+            contact_id=state.get("contact_id"),
+            product_id=state.get("selected_product_id"),
+            product_name=product_name,
+            quantity=quantity,
+            receiver_phone=phone,
+            shipping_address=address,
+        )
+        return {
+            "confirmed": True,
+            "total_amount": total,
+            "idempotency_key": idempotency_key,
+            "reply": "",
+        }
 
     if choice_stripped in ("取消", "取消下单", "算了", "不要了", "no", "n"):
         return {
@@ -493,11 +515,29 @@ async def execute_create_node(
 
     from app.ai.services.idempotency import order_idempotency
 
-    idempotency_key = state.get("idempotency_key") or ""
+    tenant_id = state.get("tenant_id", 0)
+    contact_id = state.get("contact_id")
+    product_name = state.get("product_name", "")
+    quantity = state.get("quantity", 1)
+    address = state.get("shipping_address")
+    phone = state.get("receiver_phone")
+    idempotency_key = state.get("idempotency_key") or _build_submission_idempotency_key(
+        tenant_id=tenant_id,
+        contact_id=contact_id,
+        product_id=state.get("selected_product_id"),
+        product_name=product_name,
+        quantity=quantity,
+        receiver_phone=phone,
+        shipping_address=address,
+    )
 
     # 原子幂等检查：setnx 占位，成功则当前请求获得执行权
     if idempotency_key:
-        claimed = await order_idempotency.setnx(idempotency_key, {"status": "processing"})
+        claimed = await order_idempotency.setnx(
+            idempotency_key,
+            {"status": "processing"},
+            ttl=_ORDER_SUBMIT_IDEMPOTENCY_TTL_SECONDS,
+        )
         if not claimed:
             prev = await order_idempotency.get(idempotency_key)
             if prev and prev.get("status") == "completed":
@@ -512,12 +552,6 @@ async def execute_create_node(
                 "reply": "订单正在处理中，请稍候。",
                 "write_executed": True,
             }
-
-    tenant_id = state.get("tenant_id", 0)
-    contact_id = state.get("contact_id")
-    product_name = state.get("product_name", "")
-    quantity = state.get("quantity", 1)
-    address = state.get("shipping_address")
 
     # 优先使用注入的 skill
     order_skill = config.get("configurable", {}).get("order_skill") if config else None
@@ -541,7 +575,11 @@ async def execute_create_node(
             mock_id = f"mock_{tenant_id}_{contact_id}"
             reply = _mock_create_reply(product_name, quantity, address, mock_id)
             if idempotency_key:
-                await order_idempotency.set(idempotency_key, {"status": "completed", "order_id": mock_id, "reply": reply})
+                await order_idempotency.set(
+                    idempotency_key,
+                    {"status": "completed", "order_id": mock_id, "reply": reply},
+                    ttl=_ORDER_SUBMIT_IDEMPOTENCY_TTL_SECONDS,
+                )
             return {"order_id": mock_id, "reply": reply, "write_executed": True}
         else:
             # 真实执行
@@ -563,7 +601,11 @@ async def execute_create_node(
         order_id = payload.get("order_id", "")
         message = payload.get("message", f"订单已创建（#{order_id}）。")
         if idempotency_key:
-            await order_idempotency.set(idempotency_key, {"status": "completed", "order_id": order_id, "reply": message})
+            await order_idempotency.set(
+                idempotency_key,
+                {"status": "completed", "order_id": order_id, "reply": message},
+                ttl=_ORDER_SUBMIT_IDEMPOTENCY_TTL_SECONDS,
+            )
         return {"order_id": order_id, "reply": message, "write_executed": True}
 
     except Exception as exc:

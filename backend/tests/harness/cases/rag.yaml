@@ -20,6 +20,12 @@ cases:
       status_code: 200
       reply_not_empty: true
       max_latency_ms: 12000
+      # knowledge.policy: 依赖向量检索和 LLM 摘要，不应调写 Skill
+      disallowed_skill_calls:
+        - create_order_draft
+        - confirm_order
+        - cancel_order_draft
+        - remember_info
 
   - name: "RAG-退货流程"
     description: "用户询问退货流程，验证 AI 能否从知识库检索退货步骤"

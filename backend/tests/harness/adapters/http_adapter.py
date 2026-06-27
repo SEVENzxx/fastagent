@@ -204,6 +204,7 @@ class HttpAdapter:
             try:
                 data = resp.json()
                 result.reply = data.get("reply", "")
+                result.resource_trace = data.get("resource_trace")
                 if not result.reply:
                     result.error = "响应中 reply 为空"
             except Exception as exc:

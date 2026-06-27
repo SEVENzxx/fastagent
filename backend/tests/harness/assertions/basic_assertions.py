@@ -139,4 +139,66 @@ def check_assertions(
             ),
         ))
 
+    # ── ResourceTrace: max_llm_calls ─────────────────────────────────────
+    if expected.max_llm_calls is not None:
+        rt = turn.resource_trace or {}
+        actual_calls = rt.get("llm_calls", 0)
+        passed = actual_calls <= expected.max_llm_calls
+        results.append(AssertionResult(
+            name="max_llm_calls",
+            expected=f"≤{expected.max_llm_calls}",
+            actual=actual_calls,
+            passed=passed,
+            message="" if passed else (
+                f"LLM 调用 {actual_calls} 次，超出上限 {expected.max_llm_calls}"
+            ),
+        ))
+
+    # ── ResourceTrace: max_vector_calls ──────────────────────────────────
+    if expected.max_vector_calls is not None:
+        rt = turn.resource_trace or {}
+        actual_calls = rt.get("vector_calls", 0)
+        passed = actual_calls <= expected.max_vector_calls
+        results.append(AssertionResult(
+            name="max_vector_calls",
+            expected=f"≤{expected.max_vector_calls}",
+            actual=actual_calls,
+            passed=passed,
+            message="" if passed else (
+                f"向量检索 {actual_calls} 次，超出上限 {expected.max_vector_calls}"
+            ),
+        ))
+
+    # ── ResourceTrace: allowed_skill_calls ────────────────────────────────
+    if expected.allowed_skill_calls is not None:
+        rt = turn.resource_trace or {}
+        actual_skills = set(rt.get("skill_calls", []))
+        allowed_set = set(expected.allowed_skill_calls)
+        unexpected = actual_skills - allowed_set
+        passed = len(unexpected) == 0
+        results.append(AssertionResult(
+            name="allowed_skill_calls",
+            expected=expected.allowed_skill_calls,
+            actual=list(actual_skills),
+            passed=passed,
+            message="" if passed else (
+                f"调用了未授权的 Skill: {unexpected}"
+            ),
+        ))
+
+    # ── ResourceTrace: disallowed_skill_calls ─────────────────────────────
+    if expected.disallowed_skill_calls is not None:
+        rt = turn.resource_trace or {}
+        actual_skills = set(rt.get("skill_calls", []))
+        forbidden_set = set(expected.disallowed_skill_calls)
+        violated = actual_skills & forbidden_set
+        passed = len(violated) == 0
+        results.append(AssertionResult(
+            name="disallowed_skill_calls",
+            expected=f"禁止调用: {expected.disallowed_skill_calls}",
+            actual=list(actual_skills),
+            passed=passed,
+            message="" if passed else f"调用了禁止的 Skill: {violated}",
+        ))
+
     return results

@@ -21,6 +21,14 @@ cases:
       status_code: 200
       reply_not_empty: true
       max_latency_ms: 10000
+      # template.greeting: 纯模板回复，不调用 LLM 和向量
+      max_llm_calls: 0
+      max_vector_calls: 0
+      disallowed_skill_calls:
+        - create_order_draft
+        - confirm_order
+        - cancel_order_draft
+        - remember_info
 
   # ── 商品咨询 ─────────────────────────────────────────
   - name: "商品咨询-通用"
@@ -36,6 +44,13 @@ cases:
       status_code: 200
       reply_not_empty: true
       max_latency_ms: 10000
+      # product.catalog: 按分类展示，不调 LLM
+      max_llm_calls: 0
+      disallowed_skill_calls:
+        - create_order_draft
+        - confirm_order
+        - cancel_order_draft
+        - remember_info
 
   # ── 订单咨询 ─────────────────────────────────────────
   - name: "订单咨询-通用"
@@ -51,6 +66,14 @@ cases:
       status_code: 200
       reply_not_empty: true
       max_latency_ms: 12000
+      # order.list: 规则解析，不调 LLM 和向量
+      max_llm_calls: 0
+      max_vector_calls: 0
+      disallowed_skill_calls:
+        - create_order_draft
+        - confirm_order
+        - cancel_order_draft
+        - remember_info
 
   # ── 转人工 ───────────────────────────────────────────
   - name: "转人工"
@@ -66,6 +89,9 @@ cases:
       status_code: 200
       reply_not_empty: true
       max_latency_ms: 10000
+      # human.transfer: 规则匹配，不调 LLM
+      max_llm_calls: 0
+      max_vector_calls: 0
 
   # ── 未知问题 ─────────────────────────────────────────
   - name: "未知问题-兜底"
@@ -81,3 +107,6 @@ cases:
       status_code: 200
       reply_not_empty: true
       max_latency_ms: 12000
+      # template.fallback: 兜底模板回复
+      max_llm_calls: 0
+      max_vector_calls: 0

@@ -117,6 +117,16 @@ class OrderReplyBuilder:
         return "该客户暂无订单记录。"
 
     @staticmethod
+    def order_create_pending_exists() -> str:
+        """已有下单流程时的提示。"""
+        return "您当前已有一个下单流程未完成，请继续按上一步提示补充信息，或回复“取消”后重新下单。"
+
+    @staticmethod
+    def order_create_start_in_progress() -> str:
+        """下单入口短锁命中时的提示。"""
+        return "我已经在处理这笔下单了，请稍等或继续按提示操作。"
+
+    @staticmethod
     def clarify(message: str = "") -> str:
         """追问提示。"""
         return message or "请提供更具体的订单信息，如订单号或订单状态。"

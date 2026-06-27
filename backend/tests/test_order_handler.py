@@ -17,6 +17,7 @@ import os
 # 在 graph 模块 import 前设置测试模式（持久化 checkpointer 降级）
 os.environ.setdefault("FASTAGENT_TEST_MODE", "1")
 
+from collections.abc import Generator
 from datetime import datetime, timezone, timedelta
 from typing import Any
 
@@ -37,8 +38,23 @@ from app.ai.recognition.types import ScenarioDecision
 from app.ai.reply_builders.order import OrderReplyBuilder
 from app.ai.context.session_context import SessionContext
 from app.ai.handlers.base import ToolResult
+from app.ai.services.idempotency import IdempotencyService, order_idempotency
 from app.common.trace.context import ensure_trace_id, get_trace_id, reset_trace_id
 from unittest.mock import patch
+
+
+@pytest.fixture(autouse=True)
+def clear_idempotency_fallback() -> Generator[None, None, None]:
+    """隔离 Redis 不可用时的内存幂等降级状态。"""
+    old_redis = order_idempotency._redis
+    old_in_memory = order_idempotency._in_memory
+    order_idempotency._redis = None
+    order_idempotency._in_memory = True
+    IdempotencyService.clear_fallback()
+    yield
+    IdempotencyService.clear_fallback()
+    order_idempotency._redis = old_redis
+    order_idempotency._in_memory = old_in_memory
 
 
 # ══════════════════════════════════════════════
@@ -93,8 +109,14 @@ class FakeOrderSkill:
         **kwargs: Any,
     ) -> ToolResult:
         """模拟创建订单草稿。"""
-        _ = tenant_id, db
+        _ = db
         items = kwargs.get("items") or []
+        FakeOrderSkill.call_log.append({
+            "method": "create_order_draft",
+            "tenant_id": tenant_id,
+            "contact_id": contact_id,
+            **{k: v for k, v in kwargs.items() if k != "db"},
+        })
         if not items:
             return ToolResult(
                 ok=False,
@@ -138,6 +160,79 @@ class FakeOrderSkill:
                 "order_id": order_id,
                 "message": f"订单 #{order_id} 已取消。",
             },
+        )
+
+    @staticmethod
+    async def simulate_payment(
+        *,
+        tenant_id: int,
+        contact_id: int | None = None,
+        db: Any = None,
+        **kwargs: Any,
+    ) -> ToolResult:
+        """模拟支付成功。"""
+        _ = db
+        order_id = kwargs.get("order_id", "")
+        FakeOrderSkill.call_log.append({
+            "method": "simulate_payment",
+            "tenant_id": tenant_id,
+            "contact_id": contact_id,
+            "order_id": order_id,
+        })
+        return ToolResult(
+            ok=True,
+            skill_name="simulate_payment",
+            result={"order_id": order_id, "status": "paid", "message": "订单已支付。"},
+        )
+
+    @staticmethod
+    async def agent_approve(
+        *,
+        tenant_id: int,
+        contact_id: int | None = None,
+        db: Any = None,
+        **kwargs: Any,
+    ) -> ToolResult:
+        """模拟坐席审批通过。"""
+        _ = db
+        order_id = kwargs.get("order_id", "")
+        FakeOrderSkill.call_log.append({
+            "method": "agent_approve",
+            "tenant_id": tenant_id,
+            "contact_id": contact_id,
+            "order_id": order_id,
+        })
+        return ToolResult(
+            ok=True,
+            skill_name="agent_approve",
+            result={
+                "order_id": order_id,
+                "status": "agent_confirmed",
+                "message": "订单已审批通过。",
+            },
+        )
+
+    @staticmethod
+    async def arrange_shipping(
+        *,
+        tenant_id: int,
+        contact_id: int | None = None,
+        db: Any = None,
+        **kwargs: Any,
+    ) -> ToolResult:
+        """模拟安排发货。"""
+        _ = db
+        order_id = kwargs.get("order_id", "")
+        FakeOrderSkill.call_log.append({
+            "method": "arrange_shipping",
+            "tenant_id": tenant_id,
+            "contact_id": contact_id,
+            "order_id": order_id,
+        })
+        return ToolResult(
+            ok=True,
+            skill_name="arrange_shipping",
+            result={"order_id": order_id, "status": "shipped", "message": "订单已发货。"},
         )
 
     @staticmethod
@@ -808,8 +903,41 @@ class TestOrderCreationGraph:
         assert result.pending_state is not None
         assert result.pending_state.mode == "graph"
         assert result.pending_state.scenario_id == "order.create"
-        # 应中断在 collect_shipping 节点
-        assert "地址" in result.reply or "收货" in result.reply
+        # 首轮应中断在商品确认节点
+        assert "确认" in result.reply and "商品" in result.reply
+
+    @pytest.mark.asyncio
+    async def test_create_resume_duplicate_order_start_keeps_pending(self) -> None:
+        """已有下单 Pending 时重复发起下单 → KEEP 当前流程，不喂给图。"""
+        FakeOrderSkill.reset()
+        handler = OrderHandler(skill=FakeOrderSkill)
+        ctx = make_context()
+        decision = make_decision("order.create", text="买耳机")
+
+        result1 = await handler.execute(decision, ctx)
+        assert result1.pending_state is not None
+
+        result2 = await handler.resume(result1.pending_state, "下单键盘", ctx)
+
+        assert result2.pending_directive == PendingDirective.KEEP
+        assert "未完成" in result2.reply
+        assert not [
+            call for call in FakeOrderSkill.call_log
+            if call.get("method") == "create_order_draft"
+        ]
+
+    @pytest.mark.asyncio
+    async def test_create_start_short_lock_blocks_duplicate_graph_start(self) -> None:
+        """入口短锁命中时，第二次新下单不会再创建新的图线程。"""
+        handler = OrderHandler(skill=FakeOrderSkill)
+        ctx = make_context()
+
+        result1 = await handler.execute(make_decision("order.create", text="买耳机"), ctx)
+        result2 = await handler.execute(make_decision("order.create", text="下单键盘"), ctx)
+
+        assert result1.pending_directive == PendingDirective.SET
+        assert result2.pending_directive == PendingDirective.CLEAR
+        assert "已经在处理" in result2.reply
 
     @pytest.mark.asyncio
     async def test_create_full_flow(self) -> None:
@@ -822,16 +950,21 @@ class TestOrderCreationGraph:
         assert result1.pending_directive == PendingDirective.SET
         assert result1.pending_state is not None
 
-        # 补地址
-        result2 = await handler.resume(result1.pending_state, "北京市朝阳区", ctx)
+        # 确认商品
+        result2 = await handler.resume(result1.pending_state, "确认", ctx)
         assert result2.pending_directive == PendingDirective.SET
         assert result2.pending_state is not None
 
-        # 确认下单
-        result3 = await handler.resume(result2.pending_state, "确认", ctx)
-        assert result3.pending_directive == PendingDirective.CLEAR
-        assert result3.pending_state is None
-        assert "订单" in result3.reply or "耳机" in result3.reply
+        # 补地址和电话
+        result3 = await handler.resume(result2.pending_state, "北京市朝阳区 13800138000", ctx)
+        assert result3.pending_directive == PendingDirective.SET
+        assert result3.pending_state is not None
+
+        # 汇总确认下单
+        result4 = await handler.resume(result3.pending_state, "确认", ctx)
+        assert result4.pending_directive == PendingDirective.CLEAR
+        assert result4.pending_state is None
+        assert "订单" in result4.reply or "耳机" in result4.reply
 
     @pytest.mark.asyncio
     async def test_create_cancel_during_confirm(self) -> None:
@@ -874,21 +1007,26 @@ class TestOrderCreationGraph:
         assert result1.pending_state is not None
         ps = result1.pending_state
 
-        # 补地址
-        result2 = await handler.resume(ps, "北京市朝阳区", ctx)
+        # 确认商品
+        result2 = await handler.resume(ps, "确认", ctx)
         assert result2.pending_state is not None
         ps = result2.pending_state
 
-        # 确认 → 完成
-        result3 = await handler.resume(ps, "确认", ctx)
-        assert result3.pending_directive == PendingDirective.CLEAR
-        assert "订单" in result3.reply
+        # 补地址和电话
+        result3 = await handler.resume(ps, "北京市朝阳区 13800138000", ctx)
+        assert result3.pending_state is not None
+        ps = result3.pending_state
 
-        # 用相同 pending_state 再次 resume → 不重复执行
+        # 汇总确认 → 完成
         result4 = await handler.resume(ps, "确认", ctx)
         assert result4.pending_directive == PendingDirective.CLEAR
-        assert result4.pending_state is None
-        assert "请勿重复" in result4.reply
+        assert "订单" in result4.reply
+
+        # 用相同 pending_state 再次 resume → 不重复执行
+        result5 = await handler.resume(ps, "确认", ctx)
+        assert result5.pending_directive == PendingDirective.CLEAR
+        assert result5.pending_state is None
+        assert "请勿重复" in result5.reply
 
 
 # ══════════════════════════════════════════════
