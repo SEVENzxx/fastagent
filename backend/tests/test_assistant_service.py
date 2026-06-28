@@ -1,19 +1,17 @@
 """AssistantService 主编排单元测试。
 
-覆盖 6 个核心场景 + 2 个降级边界：
+覆盖 5 个核心场景 + 2 个降级边界：
   1. 无 Pending 正常识别并执行 Handler
   2. Pending CANCEL 清理并 finalize
   3. Pending HUMAN 清理并转人工
   4. Pending RESUME 调用原 handler.resume
-  5. Pending NEW_INTENT 清理后重新识别
-  6. _finalize 写入 pending/session/resource_trace
-  7. 边界：Handler 未找到降级兜底
-  8. 边界：recognition 异常降级兜底
+  5. _finalize 写入 pending/session/resource_trace
+  6. 边界：Handler 未找到降级兜底
+  7. 边界：recognition 异常降级兜底
 """
 
 from __future__ import annotations
 
-from datetime import datetime, timezone, timedelta
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -44,11 +42,10 @@ def session_context() -> SessionContext:
 @pytest.fixture
 def pending_state() -> PendingState:
     return PendingState(
-        scenario_id="product.detail",
-        step="choose_product_candidate",
-        expected_response_type="ordinal_or_text",
-        created_at=datetime.now(timezone.utc),
-        expires_at=datetime.now(timezone.utc) + timedelta(minutes=30),
+        scenario_id="order.create",
+        step="collect_missing_info",
+        graph_thread_id="thread-1",
+        interrupt_id="interrupt-1",
     )
 
 
@@ -243,10 +240,10 @@ class TestPendingResume:
         mock_deps["pending_guard"].check.return_value = PendingAction.RESUME
 
         with patch.object(
-            service.registry.get("product.detail"), "resume",
+            service.registry.get("order.create"), "resume",
             new=AsyncMock(return_value=HandlerResult(
-                scenario_id="product.detail",
-                reply="这是您要的商品详情",
+                scenario_id="order.create",
+                reply="已恢复订单流程",
                 pending_directive=PendingDirective.CLEAR,
             )),
         ) as mock_resume:
@@ -254,7 +251,7 @@ class TestPendingResume:
                 tenant_id=1, conversation_id=1, text="第一个",
             )
             mock_resume.assert_awaited_once()
-            assert result.reply == "这是您要的商品详情"
+            assert result.reply == "已恢复订单流程"
 
     @pytest.mark.asyncio
     async def test_resume_no_handler_falls_back(
@@ -267,9 +264,7 @@ class TestPendingResume:
         unknown_pending = PendingState(
             scenario_id="unknown.scenario",
             step="some_step",
-            expected_response_type="text",
-            created_at=datetime.now(timezone.utc),
-            expires_at=datetime.now(timezone.utc) + timedelta(minutes=30),
+            graph_thread_id="thread-unknown",
         )
         mock_deps["pending_service"].get.return_value = unknown_pending
         mock_deps["pending_guard"].check.return_value = PendingAction.RESUME
@@ -282,60 +277,7 @@ class TestPendingResume:
 
 
 # ══════════════════════════════════════════════
-# 5. Pending NEW_INTENT
-# ══════════════════════════════════════════════
-
-
-class TestPendingNewIntent:
-    """Pending 状态下用户发起新意图。"""
-
-    @pytest.mark.asyncio
-    async def test_new_intent_clears_then_recognizes(
-        self,
-        service: AssistantService,
-        mock_deps: dict,
-        pending_state: PendingState,
-    ) -> None:
-        """NEW_INTENT → 清理 Pending → 重新场景识别。"""
-        mock_deps["pending_service"].get.return_value = pending_state
-        mock_deps["pending_guard"].check.return_value = PendingAction.NEW_INTENT
-        mock_deps["recognition"].recognize.return_value = ScenarioDecision(
-            scenario_id="template.greeting", confidence=0.9,
-        )
-
-        result = await service.process_message(
-            tenant_id=1, conversation_id=1, text="你好",
-        )
-        # Pending 通过 _apply_pending_with_retry → apply_directive(CLEAR) 清理
-        mock_deps["pending_service"].apply_directive.assert_awaited()
-        # 然后走了场景识别
-        mock_deps["recognition"].recognize.assert_awaited_once()
-        assert result.reply == "您好！有什么可以帮您的吗？"
-
-    @pytest.mark.asyncio
-    async def test_new_intent_clear_failure_returns_unavailable(
-        self,
-        service: AssistantService,
-        mock_deps: dict,
-        pending_state: PendingState,
-    ) -> None:
-        """NEW_INTENT + 清理失败 → 返回不可用提示，不走识别。"""
-        mock_deps["pending_service"].get.return_value = pending_state
-        mock_deps["pending_guard"].check.return_value = PendingAction.NEW_INTENT
-        # apply_directive 始终失败
-        mock_deps["pending_service"].apply_directive.side_effect = RuntimeError("Redis 写入失败")
-
-        result = await service.process_message(
-            tenant_id=1, conversation_id=1, text="你好",
-        )
-        assert "暂时不可用" in result.reply
-        assert result.metadata["pending_directive"] == "clear"
-        # recognition 不应被调用（清理失败短路）
-        mock_deps["recognition"].recognize.assert_not_called()
-
-
-# ══════════════════════════════════════════════
-# 6. _finalize 收口
+# 5. _finalize 收口
 # ══════════════════════════════════════════════
 
 
@@ -432,9 +374,7 @@ class TestFinalize:
                     pending_state=PendingState(
                         scenario_id="test.set",
                         step="confirm",
-                        expected_response_type="text",
-                        created_at=datetime.now(timezone.utc),
-                        expires_at=datetime.now(timezone.utc) + timedelta(minutes=30),
+                        graph_thread_id="thread-set",
                     ),
                 )
 

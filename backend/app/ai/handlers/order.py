@@ -24,7 +24,13 @@ from app.ai.components.order_reference import (
     _extract_order_number,
 )
 from app.ai.context.pending_state import PendingDirective, PendingState
+from app.ai.graphs.observability import (
+    graph_run_input_summary,
+    graph_run_output_summary,
+    graph_snapshot_metadata,
+)
 from app.ai.handlers.base import BaseHandler, HandlerResult, call_skill_failed
+from app.ai.observability import observe_span, set_observation_io
 from app.ai.recognition.types import ScenarioDecision
 from app.ai.reply_builders.order import OrderReplyBuilder
 from app.ai.context.session_context import SessionContext
@@ -109,13 +115,6 @@ class OrderHandler(BaseHandler):
         """
         ps: PendingState = pending  # type: ignore[assignment]
         ctx: SessionContext = context  # type: ignore[assignment]
-
-        if ps.mode != "graph":
-            return HandlerResult(
-                scenario_id=ps.scenario_id,
-                reply="订单功能开发中，请稍后再试。",
-                pending_directive=PendingDirective.CLEAR,
-            )
 
         if ps.scenario_id == "order.create":
             if self._create_guard.looks_like_new_order_start(message):
@@ -364,35 +363,71 @@ class OrderHandler(BaseHandler):
                 logger.warning("创建 DB 会话失败，降级为无 DB 模式")
 
         try:
-            # 恢复调用时检查图是否已完成（防御：重复 resume）
-            if resume_message is not None:
-                state_result = await graph.aget_state(config)
-                if not state_result.next:
-                    reply = {
-                        "order.create": "订单已提交，请勿重复操作。",
-                        "order.cancel": "该订单已处理，请勿重复操作。",
-                        "order.refund": "该售后申请已处理，请勿重复操作。",
-                    }.get(scenario_id, "操作已完成，请勿重复操作。")
-                    return HandlerResult(
-                        scenario_id=scenario_id,
-                        reply=reply,
-                        pending_directive=PendingDirective.CLEAR,
-                    )
+            async with observe_span(
+                f"langgraph.{scenario_id}.run",
+                input_data=graph_run_input_summary(
+                    scenario_id=scenario_id,
+                    graph_thread_id=graph_thread_id,
+                    initial_state=initial_state,
+                    resume_message=resume_message,
+                ),
+                scenario_id=scenario_id,
+                graph_thread_id=graph_thread_id,
+                resume=resume_message is not None,
+            ) as observation:
+                # 恢复调用时检查图是否已完成（防御：重复 resume）
+                if resume_message is not None:
+                    state_result = await graph.aget_state(config)
+                    if not state_result.next:
+                        reply = {
+                            "order.create": "订单已提交，请勿重复操作。",
+                            "order.cancel": "该订单已处理，请勿重复操作。",
+                            "order.refund": "该售后申请已处理，请勿重复操作。",
+                        }.get(scenario_id, "操作已完成，请勿重复操作。")
+                        set_observation_io(
+                            observation,
+                            output_data={
+                                "status": "already_completed",
+                                **graph_run_output_summary({}, state_result),
+                            },
+                            metadata={
+                                "status": "already_completed",
+                                **graph_snapshot_metadata(state_result),
+                            },
+                        )
+                        return HandlerResult(
+                            scenario_id=scenario_id,
+                            reply=reply,
+                            pending_directive=PendingDirective.CLEAR,
+                        )
 
-            # 注入 skill 供图节点使用（测试时可注入 FakeOrderSkill）
-            if self._skill is not None:
-                config["configurable"]["order_skill"] = self._skill
+                # 注入 skill 供图节点使用（测试时可注入 FakeOrderSkill）
+                if self._skill is not None:
+                    config["configurable"]["order_skill"] = self._skill
 
-            if db is not None:
-                async with db as session:
-                    config["configurable"]["db"] = session
+                if db is not None:
+                    async with db as session:
+                        config["configurable"]["db"] = session
+                        result = await self._invoke_graph(
+                            graph, initial_state, config, resume_message,
+                        )
+                else:
+                    config["configurable"]["db"] = None
                     result = await self._invoke_graph(
                         graph, initial_state, config, resume_message,
                     )
-            else:
-                config["configurable"]["db"] = None
-                result = await self._invoke_graph(
-                    graph, initial_state, config, resume_message,
+
+                current = await graph.aget_state(config)
+                set_observation_io(
+                    observation,
+                    output_data={
+                        "status": "completed",
+                        **graph_run_output_summary(result, current),
+                    },
+                    metadata={
+                        "status": "completed",
+                        **graph_snapshot_metadata(current),
+                    },
                 )
         except Exception as exc:
             logger.warning("图执行异常: scenario=%s error=%s", scenario_id, exc)
@@ -403,9 +438,8 @@ class OrderHandler(BaseHandler):
             )
 
         # 检查是否中断
-        current = await graph.aget_state(config)
         if current.next:
-            # 图中断 → 设置 PendingState（graph mode）
+            # 图中断 → 设置 LangGraph PendingState
             interrupt_value = ""
             if current.interrupts:
                 interrupt_value = current.interrupts[0].value or ""
@@ -413,12 +447,8 @@ class OrderHandler(BaseHandler):
             pending_state = PendingState(
                 scenario_id=scenario_id,
                 step=",".join(current.next),
-                expected_response_type="text",
-                mode="graph",
                 graph_thread_id=graph_thread_id,
-                interrupt_id=str(current.interrupts[0].id) if current.interrupts else "",
-                created_at=datetime.now(timezone.utc),
-                expires_at=datetime.now(timezone.utc) + timedelta(hours=2),
+                interrupt_id=str(current.interrupts[0].id) if current.interrupts else None,
             )
 
             return HandlerResult(

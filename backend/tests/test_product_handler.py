@@ -1,21 +1,18 @@
 """ProductHandler 单元测试。
 
-覆盖 9 个核心场景 + resume + 边界：
+覆盖 9 个核心场景 + 边界：
   1. product.catalog 返回分类列表回复
   2. product.filter_search 搜索并更新 product_candidates
   3. product.detail 精确匹配 → ProductReferenceResolver → get_detail
-  4. product.detail 多候选 → PendingDirective.SET + clarify 追问
-  5. product.detail resume 用户序号选择 → _detail_by_id
+  4. product.detail 多候选 → SessionContext 候选 + clarify 追问
   6. product.compare 第一款和第二款 → batch_get_detail
   7. product.compare 和第三款又有什么区别 → compare_base_product_id 延续
   8. product.attribute_query 这个是否防水 → last_focus_product_id
   9. 下架/跨租户商品返回已下架提示
-     + resume 无法解析保持 KEEP
      + 边界：未实现场景返回"开发中"
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone, timedelta
 from typing import Any
 
 import pytest
@@ -25,7 +22,7 @@ from app.ai.components.product_reference_resolver import (
     ProductReferenceResolver,
     ProductReferenceResult,
 )
-from app.ai.context.pending_state import PendingDirective, PendingState
+from app.ai.context.pending_state import PendingDirective
 from app.ai.handlers.base import HandlerResult
 from app.ai.handlers.product import ProductHandler
 from app.ai.recognition.types import ScenarioDecision
@@ -270,21 +267,6 @@ def make_context(**overrides: Any) -> SessionContext:
     return SessionContext(**defaults)
 
 
-def make_pending(
-    scenario_id: str = "product.detail",
-    candidates: list[dict[str, Any]] | None = None,
-) -> PendingState:
-    """构造测试用 PendingState。"""
-    now = datetime.now(timezone.utc)
-    return PendingState(
-        scenario_id=scenario_id,
-        step="choose_product_candidate",
-        expected_response_type="ordinal_or_text",
-        data={"candidates": candidates or []},
-        created_at=now,
-        expires_at=now + timedelta(minutes=30),
-    )
-
 
 # ══════════════════════════════════════════════
 # 1. product.catalog
@@ -441,8 +423,8 @@ class TestProductDetail:
         assert result.context_update.get("last_intent") == "product.detail"
 
     @pytest.mark.asyncio
-    async def test_detail_multi_candidate_sets_pending(self) -> None:
-        """多候选 → PendingDirective.SET + clarify 追问。"""
+    async def test_detail_multi_candidate_updates_context(self) -> None:
+        """多候选 → CLEAR + 写入 SessionContext 候选。"""
         FakeProductSkill.reset()
         FakeProductSkill.add_product(101, name="Tab 11 平板电脑")
         FakeProductSkill.add_product(102, name="Tab 11 Pro 平板电脑")
@@ -467,10 +449,11 @@ class TestProductDetail:
         result = await handler.execute(decision, ctx)
 
         assert result.scenario_id == "product.detail"
-        assert result.pending_directive == PendingDirective.SET
-        assert result.pending_state is not None
-        assert result.pending_state.step == "choose_product_candidate"
-        assert "找到多款相近商品" in result.reply
+        assert result.pending_directive == PendingDirective.CLEAR
+        assert result.pending_state is None
+        assert len(result.context_update.get("product_candidates", [])) == 2
+        assert len(result.context_update.get("last_visible_products", [])) == 2
+        assert "以下是为您找到的商品" in result.reply
         assert "1." in result.reply
         assert "Tab 11 平板电脑" in result.reply or "Tab 11 Pro 平板电脑" in result.reply
 
@@ -496,113 +479,6 @@ class TestProductDetail:
         assert result.scenario_id == "product.detail"
         assert result.reply  # 返回了 reason 文本
         assert result.pending_directive == PendingDirective.CLEAR
-
-
-# ══════════════════════════════════════════════
-# 4. product.detail resume
-# ══════════════════════════════════════════════
-
-
-class TestProductDetailResume:
-    """product.detail 通过 resume 恢复。"""
-
-    @pytest.mark.asyncio
-    async def test_resume_ordinal_selects_product(self) -> None:
-        """用户回复序号 → resolver 解析 → _detail_by_id。"""
-        FakeProductSkill.reset()
-        FakeProductSkill.add_product(101, name="Tab 11 平板电脑", price=1999.0)
-
-        resolver = FakeResolver()
-        resolver.set_result(
-            "1",
-            ProductReferenceResult(
-                resolved=True,
-                product_id=101,
-                product_name="Tab 11 平板电脑",
-                candidates=[
-                    ProductCandidate(index=1, product_id=101, product_name="Tab 11 平板电脑"),
-                ],
-                reason="序号解析",
-            ),
-        )
-        handler = ProductHandler(skill=FakeProductSkill, resolver=resolver)
-        ctx = make_context(
-            product_candidates=[
-                {"id": 101, "name": "Tab 11 平板电脑"},
-                {"id": 102, "name": "Tab 11 Pro 平板电脑"},
-            ],
-        )
-        pending = make_pending(
-            candidates=[
-                {"id": 101, "name": "Tab 11 平板电脑"},
-                {"id": 102, "name": "Tab 11 Pro 平板电脑"},
-            ],
-        )
-
-        result = await handler.resume(pending, "1", ctx)
-
-        assert result.scenario_id == "product.detail"
-        assert "Tab 11 平板电脑" in result.reply
-        assert result.pending_directive == PendingDirective.SET
-        assert result.pending_state is not None
-        assert result.pending_state.step == "choose_product_candidate"
-        assert "Tab 11 Pro 平板电脑" in str(result.pending_state.data.get("candidates", []))
-        assert result.context_update.get("last_product_id") == "101"
-
-    @pytest.mark.asyncio
-    async def test_resume_no_resolution_keeps_pending(self) -> None:
-        """resolver 无法解析 → KEEP 追问。"""
-        FakeProductSkill.reset()
-
-        resolver = FakeResolver()
-        resolver.set_default(
-            ProductReferenceResult(
-                resolved=False,
-                need_clarification=True,
-                reason="未找到匹配",
-            ),
-        )
-        handler = ProductHandler(skill=FakeProductSkill, resolver=resolver)
-        ctx = make_context(
-            product_candidates=[
-                {"id": 101, "name": "产品1"},
-            ],
-        )
-        pending = make_pending(
-            candidates=[
-                {"id": 101, "name": "产品1"},
-            ],
-        )
-
-        result = await handler.resume(pending, "不明确回答", ctx)
-
-        assert result.scenario_id == "product.detail"
-        assert result.pending_directive == PendingDirective.KEEP
-        # 应包含追问提示
-        assert "序号" in result.reply or "请提供" in result.reply
-
-    @pytest.mark.asyncio
-    async def test_resume_no_candidates_fallback_message(self) -> None:
-        """resolver 和 pending 均无候选 → 通用追问。"""
-        FakeProductSkill.reset()
-
-        resolver = FakeResolver()
-        resolver.set_default(
-            ProductReferenceResult(
-                resolved=False,
-                need_clarification=True,
-                reason="未找到匹配",
-            ),
-        )
-        handler = ProductHandler(skill=FakeProductSkill, resolver=resolver)
-        ctx = make_context()
-        pending = make_pending()  # no candidates
-
-        result = await handler.resume(pending, "不明确回答", ctx)
-
-        assert result.scenario_id == "product.detail"
-        assert result.pending_directive == PendingDirective.KEEP
-        assert "请提供更完整的商品名称" in result.reply
 
 
 # ══════════════════════════════════════════════
@@ -828,8 +704,8 @@ class TestProductAttributeQuery:
         assert result.pending_directive == PendingDirective.CLEAR
 
     @pytest.mark.asyncio
-    async def test_attribute_query_multi_candidate_sets_pending(self) -> None:
-        """多候选 → PendingDirective.SET。"""
+    async def test_attribute_query_multi_candidate_updates_context(self) -> None:
+        """多候选 → CLEAR + 写入 SessionContext 候选。"""
         FakeProductSkill.reset()
 
         resolver = FakeResolver()
@@ -852,8 +728,9 @@ class TestProductAttributeQuery:
         result = await handler.execute(decision, ctx)
 
         assert result.scenario_id == "product.attribute_query"
-        assert result.pending_directive == PendingDirective.SET
-        assert result.pending_state is not None
+        assert result.pending_directive == PendingDirective.CLEAR
+        assert result.pending_state is None
+        assert len(result.context_update.get("product_candidates", [])) == 2
 
 
 # ══════════════════════════════════════════════
@@ -890,7 +767,7 @@ class TestInactiveProduct:
         result = await handler.execute(decision, ctx)
 
         assert result.scenario_id == "product.detail"
-        assert "下架" in result.reply or "不存在" in result.reply
+        assert "下架" in result.reply or "不存在" in result.reply or "未找到" in result.reply
         assert result.pending_directive == PendingDirective.CLEAR
 
     @pytest.mark.asyncio
@@ -921,7 +798,7 @@ class TestInactiveProduct:
         result = await handler.execute(decision, ctx)
 
         assert result.scenario_id == "product.detail"
-        assert "下架" in result.reply or "不存在" in result.reply
+        assert "下架" in result.reply or "不存在" in result.reply or "未找到" in result.reply
         assert result.pending_directive == PendingDirective.CLEAR
 
     @pytest.mark.asyncio
@@ -1127,35 +1004,6 @@ class TestProductHandlerEdgeCases:
         assert result.reply
         assert result.pending_directive == PendingDirective.CLEAR
 
-    @pytest.mark.asyncio
-    async def test_resume_scenario_from_compare(self) -> None:
-        """resume 从对比场景恢复也能正确处理。"""
-        FakeProductSkill.reset()
-        FakeProductSkill.add_product(101, name="产品1")
-
-        resolver = FakeResolver()
-        resolver.set_result(
-            "1",
-            ProductReferenceResult(
-                resolved=True,
-                product_id=101,
-                product_name="产品1",
-                candidates=[
-                    ProductCandidate(index=1, product_id=101, product_name="产品1"),
-                ],
-                reason="序号解析",
-            ),
-        )
-        handler = ProductHandler(skill=FakeProductSkill, resolver=resolver)
-        ctx = make_context()
-        # scenario_id 为 product.compare 的 pending
-        pending = make_pending(scenario_id="product.compare")
-
-        result = await handler.resume(pending, "1", ctx)
-
-        # resume 中 if resolved 分支会检查 scenario，product.compare 未处理
-        # 所以会落到 candidates 追问逻辑
-        assert result.pending_directive == PendingDirective.KEEP
 
 
 # ══════════════════════════════════════════════

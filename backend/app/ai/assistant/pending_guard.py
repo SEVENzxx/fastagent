@@ -1,10 +1,9 @@
-"""PendingGuard — Pending 状态守卫。
+"""PendingGuard — LangGraph Pending 状态守卫。
 
 检查顺序（优先级降序）：
   1. HUMAN: 转人工请求
   2. CANCEL: 退出信号（"算了""取消""不要了"）
-  3. NEW_INTENT: 通过场景识别判断意图转换
-  4. RESUME: 都不是，恢复 Pending Handler
+  3. RESUME: 恢复 Pending Handler
 """
 
 from __future__ import annotations
@@ -13,7 +12,6 @@ import logging
 from typing import Any
 
 from app.ai.context.pending_state import PendingAction, PendingState
-from app.ai.recognition.pipeline import RecognitionPipeline
 
 logger = logging.getLogger(__name__)
 
@@ -46,10 +44,9 @@ _CANCEL_EXACT: frozenset[str] = frozenset({
 
 
 class PendingGuard:
-    """Pending 状态守卫。
+    """LangGraph Pending 状态守卫。
 
-    根据用户消息判断 Pending 状态下如何处理。
-    严格按 HUMAN → CANCEL → NEW_INTENT → RESUME 顺序检查。
+    顶层不再尝试识别新意图；图中流程只能通过明确取消、转人工或正常恢复退出。
     """
 
     async def check(
@@ -57,22 +54,11 @@ class PendingGuard:
         message: str,
         context: Any | None,
         pending: PendingState,
-        recognition: RecognitionPipeline | None = None,
     ) -> PendingAction:
-        """检查用户消息，返回对应的 Pending 动作。
-
-        Args:
-            message: 用户消息原文
-            context: 当前会话上下文
-            pending: 当前 Pending 状态
-            recognition: 场景识别管线，传入时通过场景识别判断 NEW_INTENT
-
-        Returns:
-            PendingAction 枚举值
-        """
+        """检查用户消息，返回对应的 Pending 动作。"""
+        _ = context
         text = message.strip()
 
-        # 1. HUMAN: 转人工请求（最高优先级）
         if self._is_human_request(text):
             logger.info(
                 "PendingGuard=HUMAN scenario=%s step=%s msg=%.30s",
@@ -80,7 +66,6 @@ class PendingGuard:
             )
             return PendingAction.HUMAN
 
-        # 2. CANCEL: 退出/取消信号
         if self._is_cancel_signal(text):
             logger.info(
                 "PendingGuard=CANCEL scenario=%s step=%s msg=%.30s",
@@ -88,42 +73,15 @@ class PendingGuard:
             )
             return PendingAction.CANCEL
 
-        # 2.5 Graph 模式保护：流输入（地址/数量/确认）不进入 NEW_INTENT 检测
-        if pending.mode == "graph":
-            logger.info(
-                "PendingGuard=graph_mode scenario=%s step=%s msg=%.30s → RESUME",
-                pending.scenario_id, pending.step, text,
-            )
-            return PendingAction.RESUME
-
-        # 3. NEW_INTENT: 通过场景识别判断意图转换
-        if recognition is not None:
-            is_new = await self._is_new_intent(text, pending, recognition, context)
-            if is_new:
-                logger.info(
-                    "PendingGuard=NEW_INTENT scenario=%s step=%s msg=%.30s",
-                    pending.scenario_id, pending.step, text,
-                )
-                return PendingAction.NEW_INTENT
-
-        # 4. RESUME: 都不是，恢复 Pending Handler
         logger.info(
             "PendingGuard=RESUME scenario=%s step=%s msg=%.30s",
             pending.scenario_id, pending.step, text,
         )
         return PendingAction.RESUME
 
-    # ──────────────────────────────────────
-    # 内部检查方法
-    # ──────────────────────────────────────
-
     @staticmethod
     def _is_human_request(text: str) -> bool:
-        """检查是否为转人工请求。
-
-        精确短语匹配，避免"人工智能"等误触发。
-        单独"人工"也视为转人工请求（精确匹配）。
-        """
+        """检查是否为转人工请求。"""
         if text == "人工":
             return True
         return any(kw in text for kw in _HUMAN_KEYWORDS)
@@ -143,21 +101,3 @@ class PendingGuard:
         if text in ("不买了", "不想要了", "先不要了"):
             return True
         return False
-
-    @staticmethod
-    async def _is_new_intent(
-        text: str,
-        pending: PendingState,
-        recognition: RecognitionPipeline,
-        context: Any | None = None,
-    ) -> bool:
-        """通过场景识别判断用户消息是否为当前 Pending 之外的新意图。"""
-        try:
-            decision = await recognition.recognize(text, context)
-            return decision.scenario_id != pending.scenario_id
-        except Exception:
-            logger.warning(
-                "PendingGuard 场景识别失败，降级为 RESUME scenario=%s",
-                pending.scenario_id,
-            )
-            return False

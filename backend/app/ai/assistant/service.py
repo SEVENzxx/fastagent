@@ -156,7 +156,7 @@ class AssistantService:
         conversation_id: int,
     ) -> HandlerResult:
         """处理 Pending 流程。返回 HandlerResult（内部异常不抛到外层）。"""
-        action = await self.pending_guard.check(text, context, pending, self.recognition)
+        action = await self.pending_guard.check(text, context, pending)
         logger.info(
             "PendingGuard=%s scenario=%s step=%s",
             action.value, pending.scenario_id, pending.step,
@@ -168,16 +168,21 @@ class AssistantService:
         if action == PendingAction.CANCEL:
             return HandlerResult.cancel(
                 scenario_id=pending.scenario_id,
-                reply="已取消当前操作，还有什么可以帮您？",
-            )
-
-        if action == PendingAction.NEW_INTENT:
-            return await self._handle_pending_new_intent(
-                text, context, pending, tenant_id, conversation_id,
+                reply=self._pending_cancel_reply(pending.scenario_id),
             )
 
         # RESUME
         return await self._handle_pending_resume(pending, text, context)
+
+    @staticmethod
+    def _pending_cancel_reply(scenario_id: str) -> str:
+        """按图场景生成取消回复。"""
+        replies = {
+            "order.create": "已取消下单。如需其他帮助，请随时告诉我。",
+            "order.cancel": "已取消操作，订单保持不变。如需其他帮助请随时告诉我。",
+            "order.refund": "已取消售后申请，订单保持不变。如需其他帮助请随时告诉我。",
+        }
+        return replies.get(scenario_id, "已取消当前操作，还有什么可以帮您？")
 
     async def _handle_pending_human(
         self,
@@ -200,27 +205,6 @@ class AssistantService:
             ),
             context,
         )
-
-    async def _handle_pending_new_intent(
-        self,
-        text: str,
-        context: SessionContext,
-        pending: PendingState,
-        tenant_id: int,
-        conversation_id: int,
-    ) -> HandlerResult:
-        """清除当前 Pending 后重新走识别链路。"""
-        clear_ok = await self._apply_pending_with_retry(
-            HandlerResult(
-                scenario_id=pending.scenario_id,
-                reply="",
-                pending_directive=PendingDirective.CLEAR,
-            ),
-            tenant_id, conversation_id,
-        )
-        if not clear_ok:
-            return self._fallback_result(severity="unavailable")
-        return await self._try_context_or_recognize(text, context)
 
     async def _handle_pending_resume(
         self,

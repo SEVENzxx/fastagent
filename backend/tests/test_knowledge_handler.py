@@ -640,15 +640,12 @@ class TestKnowledgeEdgeCases:
     async def test_resume_returns_no_knowledge(self) -> None:
         """resume → 返回"未查到"。"""
         from app.ai.context.pending_state import PendingState
-        from datetime import datetime, timezone, timedelta
 
         handler = KnowledgeHandler(skill=FakeKnowledgeSkill)
         pending = PendingState(
             scenario_id="knowledge.qa",
             step="some_step",
-            expected_response_type="text",
-            created_at=datetime.now(timezone.utc),
-            expires_at=datetime.now(timezone.utc) + timedelta(minutes=30),
+            graph_thread_id="thread-knowledge",
         )
         result = await handler.resume(pending, "test", make_context())
         assert "未查到" in result.reply

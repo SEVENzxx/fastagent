@@ -33,6 +33,7 @@ from app.ai.graphs.common import (
     graph_exception,
     graph_failed,
 )
+from app.ai.graphs.observability import observe_graph_node
 from app.config import settings
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
@@ -189,10 +190,16 @@ async def resolve_order_node(
     # 恢复调用且已有候选列表
     if resolved_orders:
         choice = interrupt(
-            "请选择要取消的订单编号：\n" + _format_order_choices(resolved_orders)
+            "请选择要取消的订单编号：\n"
+            + _format_order_choices(resolved_orders)
+            + "\n\n输入订单编号选择，输入「取消」放弃操作。"
         )
+        choice_stripped = choice.strip().lower()
+        if choice_stripped in ("取消", "不取消", "算了", "不要了", "no", "n"):
+            return {"error": "用户取消操作", "reply": "已取消操作，订单保持不变。如需其他帮助请随时告诉我。"}
+
         try:
-            idx = int(choice.strip()) - 1
+            idx = int(choice_stripped) - 1
             if 0 <= idx < len(resolved_orders):
                 order = resolved_orders[idx]
                 return {
@@ -201,7 +208,7 @@ async def resolve_order_node(
                 }
         except (ValueError, IndexError):
             logger.debug("取消订单：用户序号选择无效")
-        return {"error": INVALID_CHOICE_REPLY, "reply": "请输入有效的订单编号。"}
+        return {"error": INVALID_CHOICE_REPLY, "reply": "请输入有效的订单编号，或输入「取消」放弃操作。"}
 
     # 首次调用：从文本或上下文提取订单号
     from app.ai.skills.orders import _extract_order_id as extract_id
@@ -505,11 +512,11 @@ def build_order_cancel_graph(checkpointer: Any | None = None) -> StateGraph:
     """
     builder = StateGraph(OrderCancelState)
 
-    builder.add_node("resolve_order", resolve_order_node)
-    builder.add_node("validate_cancelable", validate_cancelable_node)
-    builder.add_node("confirm_cancel", confirm_cancel_node)
-    builder.add_node("execute_cancel", execute_cancel_node)
-    builder.add_node("build_result", build_result_node)
+    builder.add_node("resolve_order", observe_graph_node("order.cancel", "resolve_order", resolve_order_node))
+    builder.add_node("validate_cancelable",observe_graph_node("order.cancel", "validate_cancelable", validate_cancelable_node))
+    builder.add_node("confirm_cancel", observe_graph_node("order.cancel", "confirm_cancel", confirm_cancel_node))
+    builder.add_node("execute_cancel", observe_graph_node("order.cancel", "execute_cancel", execute_cancel_node))
+    builder.add_node("build_result", observe_graph_node("order.cancel", "build_result", build_result_node))
 
     builder.add_edge(START, "resolve_order")
     builder.add_conditional_edges("resolve_order", _route_resolve_order)

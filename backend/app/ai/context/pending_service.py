@@ -1,18 +1,17 @@
-"""PendingService — Pending 状态的 Redis 独立存储。
+"""PendingService — LangGraph Pending 状态的 Redis 独立存储。
 
 key 格式：pending:{tenant_id}:{conversation_id}
-与 SessionContext 分开存储（不同 TTL，不同 key prefix）。
+与 SessionContext 分开存储；Pending TTL 固定为图恢复窗口。
 """
 
 from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime, timezone
 from typing import Any
 
 from app.ai.context.pending_state import PendingDirective, PendingState, PendingStateCorruptedError
-from app.common.constants.config import PENDING_TTL_SECONDS
+from app.common.constants.config import GRAPH_PENDING_TTL_SECONDS
 
 logger = logging.getLogger(__name__)
 
@@ -40,13 +39,13 @@ async def close_cached_pending_redis_client() -> None:
 
 
 class PendingService:
-    """Pending 状态读写，独立 Redis key。"""
+    """LangGraph Pending 状态读写，独立 Redis key。"""
 
     def __init__(
         self,
         redis_client: Any | None = None,
         *,
-        ttl_seconds: int = PENDING_TTL_SECONDS,
+        ttl_seconds: int = GRAPH_PENDING_TTL_SECONDS,
     ) -> None:
         self.redis = redis_client or _get_redis_client()
         self.ttl_seconds = ttl_seconds

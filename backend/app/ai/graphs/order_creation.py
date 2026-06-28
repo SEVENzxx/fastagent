@@ -40,6 +40,7 @@ from app.ai.graphs.common import (
     graph_exception,
     graph_failed,
 )
+from app.ai.graphs.observability import observe_graph_node
 from app.config import settings
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
@@ -266,9 +267,14 @@ async def resolve_product_node(
         choice = interrupt(
             "请选择要购买的商品：\n"
             + _format_product_choices(resolved)
+            + "\n\n输入商品编号选择，输入「取消」放弃下单。"
         )
+        choice_stripped = choice.strip().lower()
+        if choice_stripped in ("取消", "取消下单", "算了", "不要了", "不买了"):
+            return {"error": "用户取消下单", "confirmed": False, "reply": "已取消下单。如需其他帮助，请随时告诉我。"}
+
         try:
-            idx = int(choice.strip()) - 1
+            idx = int(choice_stripped) - 1
             if 0 <= idx < len(resolved):
                 p = resolved[idx]
                 return {
@@ -279,7 +285,7 @@ async def resolve_product_node(
                 }
         except (ValueError, IndexError):
             logger.debug("下单：用户序号选择无效")
-        return {"error": INVALID_CHOICE_REPLY, "reply": "请输入有效的商品编号。"}
+        return {"error": INVALID_CHOICE_REPLY, "reply": "请输入有效的商品编号，或输入「取消」放弃下单。"}
 
     # 首次调用：尝试 DB 解析
     text = state.get("input_text", "")
@@ -393,6 +399,9 @@ async def collect_missing_info_node(
         if len(missing_labels) > 1
         else f"请提供{missing_labels[0]}。"
     )
+
+    prompt = f"{prompt}\n输入「取消」放弃下单。"
+
 
     reply = interrupt(prompt)
     reply_stripped = reply.strip()
@@ -929,16 +938,16 @@ def build_order_creation_graph(checkpointer: Any | None = None) -> StateGraph:
     """
     builder = StateGraph(OrderCreationState)
 
-    builder.add_node("resolve_product", resolve_product_node)
-    builder.add_node("confirm_product", confirm_product_node)
-    builder.add_node("collect_missing_info", collect_missing_info_node)
-    builder.add_node("show_summary", show_summary_node)
-    builder.add_node("execute_create", execute_create_node)
-    builder.add_node("simulate_payment", simulate_payment_node)
-    builder.add_node("wait_agent_approval", wait_agent_approval_node)
-    builder.add_node("arrange_shipping", arrange_shipping_node)
-    builder.add_node("notify_customer", notify_customer_node)
-    builder.add_node("build_result", build_result_node)
+    builder.add_node("resolve_product", observe_graph_node("order.create", "resolve_product", resolve_product_node))
+    builder.add_node("confirm_product", observe_graph_node("order.create", "confirm_product", confirm_product_node))
+    builder.add_node("collect_missing_info", observe_graph_node("order.create", "collect_missing_info", collect_missing_info_node))
+    builder.add_node("show_summary", observe_graph_node("order.create", "show_summary", show_summary_node))
+    builder.add_node("execute_create", observe_graph_node("order.create", "execute_create", execute_create_node))
+    builder.add_node("simulate_payment", observe_graph_node("order.create", "simulate_payment", simulate_payment_node))
+    builder.add_node("wait_agent_approval", observe_graph_node("order.create", "wait_agent_approval", wait_agent_approval_node))
+    builder.add_node("arrange_shipping",observe_graph_node("order.create", "arrange_shipping", arrange_shipping_node))
+    builder.add_node("notify_customer", observe_graph_node("order.create", "notify_customer", notify_customer_node))
+    builder.add_node("build_result", observe_graph_node("order.create", "build_result", build_result_node))
 
     builder.add_edge(START, "resolve_product")
     builder.add_conditional_edges("resolve_product", _route_resolve_product)

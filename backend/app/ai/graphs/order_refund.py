@@ -30,6 +30,7 @@ from app.ai.graphs.common import (
     graph_exception,
     graph_failed,
 )
+from app.ai.graphs.observability import observe_graph_node
 from app.config import settings
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
@@ -184,10 +185,16 @@ async def resolve_order_node(
     # 恢复调用且已有候选列表
     if resolved_orders:
         choice = interrupt(
-            "请选择要申请售后的订单编号：\n" + _format_order_choices(resolved_orders)
+            "请选择要申请售后的订单编号：\n"
+            + _format_order_choices(resolved_orders)
+            + "\n\n输入订单编号选择，输入「取消」放弃售后申请。"
         )
+        choice_stripped = choice.strip().lower()
+        if choice_stripped in ("取消", "不退了", "算了", "不要了", "no", "n"):
+            return {"error": "用户取消售后申请", "reply": "已取消售后申请，订单保持不变。如需其他帮助请随时告诉我。"}
+
         try:
-            idx = int(choice.strip()) - 1
+            idx = int(choice_stripped) - 1
             if 0 <= idx < len(resolved_orders):
                 order = resolved_orders[idx]
                 return {
@@ -196,7 +203,7 @@ async def resolve_order_node(
                 }
         except (ValueError, IndexError):
             logger.debug("售后：用户序号选择无效")
-        return {"error": INVALID_CHOICE_REPLY, "reply": "请输入有效的订单编号。"}
+        return {"error": INVALID_CHOICE_REPLY, "reply": "请输入有效的订单编号，或输入「取消」放弃售后申请。"}
 
     # 首次调用：从文本提取订单号
     from app.ai.skills.orders import _extract_order_id as extract_id
@@ -317,14 +324,17 @@ async def collect_reason_node(
         return {}
 
     reason = interrupt(
-        "请告知退款或售后原因，例如：商品质量问题、不想要了、发错货等。"
+        "请告知退款或售后原因，例如：商品质量问题、发错货等。\n输入「取消」放弃售后申请。"
     )
-    if reason and reason.strip():
-        return {"refund_reason": reason.strip()}
+    reason_stripped = reason.strip() if reason else ""
+    if reason_stripped.lower() in ("取消", "不退了", "算了", "不要了", "no", "n"):
+        return {"error": "用户取消售后申请", "reply": "已取消售后申请，订单保持不变。如需其他帮助请随时告诉我。"}
+    if reason_stripped:
+        return {"refund_reason": reason_stripped}
 
     return {
         "error": "缺少退款原因",
-        "reply": "请提供退款或售后原因。",
+        "reply": "请提供退款或售后原因，或输入「取消」放弃售后申请。",
     }
 
 
@@ -528,12 +538,12 @@ def build_order_refund_graph(checkpointer: Any | None = None) -> StateGraph:
     """
     builder = StateGraph(OrderRefundState)
 
-    builder.add_node("resolve_order", resolve_order_node)
-    builder.add_node("validate_refundable", validate_refundable_node)
-    builder.add_node("collect_reason", collect_reason_node)
-    builder.add_node("confirm_refund", confirm_refund_node)
-    builder.add_node("execute_refund", execute_refund_node)
-    builder.add_node("build_result", build_result_node)
+    builder.add_node("resolve_order", observe_graph_node("order.refund", "resolve_order", resolve_order_node))
+    builder.add_node("validate_refundable",observe_graph_node("order.refund", "validate_refundable", validate_refundable_node))
+    builder.add_node("collect_reason", observe_graph_node("order.refund", "collect_reason", collect_reason_node))
+    builder.add_node("confirm_refund", observe_graph_node("order.refund", "confirm_refund", confirm_refund_node))
+    builder.add_node("execute_refund", observe_graph_node("order.refund", "execute_refund", execute_refund_node))
+    builder.add_node("build_result", observe_graph_node("order.refund", "build_result", build_result_node))
 
     builder.add_edge(START, "resolve_order")
     builder.add_conditional_edges("resolve_order", _route_resolve_order)

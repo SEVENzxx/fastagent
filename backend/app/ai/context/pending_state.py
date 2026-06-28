@@ -1,13 +1,10 @@
 """Pending 状态模型与指令枚举。
 
-PendingState 和 SessionContext 分开存储（不同 TTL）。
-simple Pending 只保存短期可丢弃候选快照，graph Pending 只保存图恢复索引。
+PendingState 只作为 LangGraph 子图的恢复信封。
+普通商品/知识上下文由 SessionContext 承载，避免双写。
 """
 
 from __future__ import annotations
-
-from datetime import datetime
-from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -24,17 +21,15 @@ class PendingStateCorruptedError(Exception):
 
 class PendingAction(LabeledEnum):
     """PendingGuard 检查后返回的动作指令。"""
-    HUMAN = "human"           # 转人工请求
-    CANCEL = "cancel"         # 退出信号："算了""不要了"
-    NEW_INTENT = "new_intent" # 明显新意图，清理当前 Pending
-    RESUME = "resume"         # 恢复 Pending Handler
+    HUMAN = "human"   # 转人工请求
+    CANCEL = "cancel" # 退出信号："算了""不要了"
+    RESUME = "resume" # 恢复 LangGraph Handler
 
     @property
     def label(self) -> str:
         labels = {
             PendingAction.HUMAN: "转人工",
             PendingAction.CANCEL: "退出/取消",
-            PendingAction.NEW_INTENT: "新意图",
             PendingAction.RESUME: "恢复流程",
         }
         return labels[self]
@@ -57,26 +52,12 @@ class PendingDirective(LabeledEnum):
 
 
 class PendingState(BaseModel):
-    """持久化的 Pending 状态。
+    """持久化的 LangGraph 恢复信封。
 
-    mode="simple": 保存短期可丢弃候选快照（如商品多候选），数据在 data 字段。
-    mode="graph":  只保存恢复索引（graph_thread_id, interrupt_id），
-                   业务进度在 LangGraph checkpoint 中。
+    只保存顶层路由和图恢复索引；业务进度由 LangGraph checkpoint 保存。
     """
 
     scenario_id: str = Field(description="场景 ID")
-    step: str = Field(description="当前步骤")
-    expected_response_type: str = Field(description="期望的用户响应类型（ordinal/confirm/text）")
-    mode: Literal["simple", "graph"] = Field(default="simple", description="Pending 模式")
-
-    # simple pending 候选数据
-    data: dict[str, Any] = Field(default_factory=dict, description="simple pending 候选数据快照")
-
-    # graph pending 恢复索引
-    graph_thread_id: str | None = Field(None, description="LangGraph 线程 ID")
-    interrupt_id: str | None = Field(None, description="LangGraph 中断点 ID")
-
-    created_at: datetime = Field(description="创建时间")
-    expires_at: datetime = Field(description="过期时间")
-    attempts: int = Field(0, description="已追问轮次")
-    idempotency_key: str | None = Field(None, description="幂等 key（写操作时使用）")
+    step: str = Field(description="当前图节点")
+    graph_thread_id: str = Field(description="LangGraph 线程 ID")
+    interrupt_id: str | None = Field(default=None, description="LangGraph 中断点 ID")

@@ -1,0 +1,54 @@
+# 记忆偏好用例
+env:
+  local:
+    base_url: "http://localhost:8000"
+
+tenant_id: 319767484162940928
+conversation_prefix: "harness"
+
+cases:
+  - name: "记忆-保存偏好"
+    description: "用户表达个人偏好，验证 AI 能识别记忆保存意图并记录"
+    risk_level: "p2"
+    business_constraints:
+      - "应识别'喜欢黑色'为记忆保存意图"
+      - "不得拒绝记录用户偏好"
+    tags: ["memory", "p2"]
+    messages:
+      - content: "我喜欢黑色"
+    expected:
+      status_code: 200
+      reply_not_empty: true
+      max_latency_ms: 12000
+
+  - name: "记忆-查询偏好"
+    description: "用户查询历史偏好，验证 AI 能识别记忆查询意图"
+    risk_level: "p2"
+    business_constraints:
+      - "应识别'我有什么偏好'为记忆查询意图"
+      - "不得拒绝回答或报错"
+    tags: ["memory", "p2"]
+    messages:
+      - content: "我有什么偏好"
+    expected:
+      status_code: 200
+      reply_not_empty: true
+      max_latency_ms: 12000
+
+  - name: "记忆-保存后查询"
+    description: "先保存偏好再查询，验证同一会话中记忆持久化"
+    risk_level: "p2"
+    business_constraints:
+      - "第一轮应记录用户偏好"
+      - "第二轮应召回刚才保存的偏好信息"
+    tags: ["memory", "p2", "context"]
+    messages:
+      - description: "用户表达颜色偏好"
+        content: "我喜欢黑色"
+      - description: "用户查询已保存的偏好"
+        content: "我有什么偏好"
+    expected:
+      status_code: 200
+      reply_not_empty: true
+      reply_contains_any: ["黑色", "偏好", "喜欢"]
+      max_latency_ms: 15000

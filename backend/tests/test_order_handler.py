@@ -901,10 +901,11 @@ class TestOrderCreationGraph:
         assert result.scenario_id == "order.create"
         assert result.pending_directive == PendingDirective.SET
         assert result.pending_state is not None
-        assert result.pending_state.mode == "graph"
+        assert result.pending_state.graph_thread_id
         assert result.pending_state.scenario_id == "order.create"
         # 首轮应中断在商品确认节点
         assert "确认" in result.reply and "商品" in result.reply
+        assert "取消" in result.reply
 
     @pytest.mark.asyncio
     async def test_create_resume_duplicate_order_start_keeps_pending(self) -> None:
@@ -1108,9 +1109,10 @@ class TestOrderCancelGraph:
         assert result.scenario_id == "order.cancel"
         assert result.pending_directive == PendingDirective.SET
         assert result.pending_state is not None
-        assert result.pending_state.mode == "graph"
+        assert result.pending_state.graph_thread_id
         # 确认取消中断
         assert "确认" in result.reply or "取消" in result.reply
+        assert "取消" in result.reply
 
     @pytest.mark.asyncio
     async def test_cancel_full_flow(self) -> None:
@@ -1241,10 +1243,7 @@ class TestEdgeCases:
         pending = PendingState(
             scenario_id="order.list",
             step="choose",
-            expected_response_type="text",
-            mode="simple",
-            created_at=datetime.now(timezone.utc),
-            expires_at=datetime.now(timezone.utc) + timedelta(minutes=30),
+            graph_thread_id="thread-order-list",
         )
         result = await handler.resume(pending, "1", make_context())
         assert result.reply

@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import logging
 import re
-from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from app.ai.components.extractors import ProductDetailExtractor, ProductFilterExtractor
@@ -17,7 +16,7 @@ from app.ai.components.product_reference_resolver import (
     _parse_ordinal_from_text,
 )
 from app.ai.context.context_resolver import _is_usage_question
-from app.ai.context.pending_state import PendingDirective, PendingState
+from app.ai.context.pending_state import PendingDirective
 from app.ai.context.session_context import SessionContext
 from app.ai.handlers.base import BaseHandler, HandlerResult
 from app.ai.recognition.examples import SCENARIO
@@ -46,9 +45,6 @@ _KNOWLEDGE_KEYWORDS: frozenset[str] = frozenset({
     "质量", "好用", "靠谱", "场景", "人群", "评价", "优缺点", "详细",
 })
 
-# 自然语言问题标记：resume 中 resolver 无法匹配时，
-# 以问题结尾的消息视为用户换了话题，不再追问旧候选
-_RE_QUESTION = re.compile(r"[吗嘛呢？?]$")
 
 # _call_skill 方法安全默认值（DB 不可用时）
 _SKILL_DEFAULTS: dict[str, Any] = {
@@ -87,7 +83,7 @@ class ProductHandler(BaseHandler):
         """处理商品场景。"""
         ctx: SessionContext = context  # type: ignore[assignment]
         scenario = decision.scenario_id
-        text = ctx.last_user_message or ""
+        text = ctx.last_user_message or str(decision.entities.get("raw_text") or "")
 
         self._init_trace_context(scenario)
 
@@ -109,123 +105,6 @@ class ProductHandler(BaseHandler):
                 result = HandlerResult(
                     scenario_id=scenario,
                     reply="该功能正在开发中，请稍后再试。",
-                    pending_directive=PendingDirective.CLEAR,
-                )
-
-        self._merge_trace_context(result)
-        return result
-
-    async def resume(
-        self,
-        pending: object,
-        message: str,
-        context: object,
-    ) -> HandlerResult:
-        """恢复商品 Pending。
-
-        当前支持从多候选追问中恢复（用户回复序号或名称）。
-        """
-        ctx: SessionContext = context  # type: ignore[assignment]
-        psc = pending  # PendingState
-        scenario = getattr(psc, "scenario_id", SCENARIO.PRODUCT_DETAIL)
-
-        self._init_trace_context(scenario)
-
-        # 商品对比请求 → 转给 compare handler，不继续走明细 resume
-        if _RE_TWO_ORDINALS.search(message) or _is_compare_continuation(message):
-            result = await self._handle_compare(message, ctx)
-            self._merge_trace_context(result)
-            return result
-
-        # 多候选澄清恢复
-        resolver = self._get_resolver(ctx)
-        ref_result = await resolver.resolve(
-            text=message,
-            entities={},
-            context=ctx,
-            tenant_id=ctx.tenant_id,
-        )
-        if ref_result.resolved:
-            if _is_usage_question(message):
-                # 用法/适用性提问 → 路由到 _handle_usage
-                from app.ai.recognition.types import ScenarioDecision
-                usage_decision = ScenarioDecision(
-                    scenario_id=SCENARIO.PRODUCT_USAGE,
-                    confidence=0.9,
-                    entities={
-                        "product_id": ref_result.product_id,
-                        "product_name": ref_result.product_name or "",
-                    },
-                )
-                result = await self._handle_usage(message, usage_decision, ctx)
-            elif scenario == SCENARIO.PRODUCT_DETAIL:
-                result = await self._detail_by_id(
-                    ref_result.product_id, ref_result.product_name, ctx,
-                    query_text=message,
-                )
-            else:
-                result = None
-            if result is not None:
-                # 来自候选列表的选择 → 保留候选列表，支持继续浏览其他商品
-                pending_candidates = getattr(psc, "data", {}).get("candidates")
-                if pending_candidates and ref_result.product_id is not None:
-                    in_list = any(
-                        int(_get_candidate_id(c)) == ref_result.product_id
-                        for c in pending_candidates
-                    )
-                    if in_list:
-                        now_ = datetime.now(timezone.utc)
-                        result.pending_directive = PendingDirective.SET
-                        result.pending_state = PendingState(
-                            scenario_id=SCENARIO.PRODUCT_DETAIL,
-                            step="choose_product_candidate",
-                            expected_response_type="ordinal_or_text",
-                            data={"candidates": pending_candidates},
-                            created_at=now_,
-                            expires_at=now_ + timedelta(minutes=30),
-                        )
-                self._merge_trace_context(result)
-                return result
-
-        # 未解析：ref_result 有自有候选（模糊名称匹配）→ 追问新候选
-        if ref_result.candidates:
-            formatted = [
-                {
-                    "index": c.index if not isinstance(c, dict) else c.get("index", i + 1),
-                    "name": c.product_name if not isinstance(c, dict) else c.get("name", c.get("product_name", "")),
-                }
-                for i, c in enumerate(ref_result.candidates)
-            ]
-            result = HandlerResult(
-                scenario_id=scenario,
-                reply=ProductReplyBuilder.clarify_candidates(formatted),
-                pending_directive=PendingDirective.KEEP,
-            )
-        elif _RE_QUESTION.search(message.strip()):
-            # 自然语言问题（吗/嘛/呢/？/?），resolver 无法匹配
-            # → 用户换了话题，清理 pending
-            result = HandlerResult(
-                scenario_id=scenario,
-                reply="已退出当前商品选择。请重新输入商品名称或使用分类浏览。",
-                pending_directive=PendingDirective.CLEAR,
-            )
-        else:
-            # 不清不楚但可能还在尝试选择 → 保留旧候选继续追问
-            pending_candidates = getattr(psc, "data", {}).get("candidates")
-            if pending_candidates:
-                formatted = [
-                    {"index": i + 1, "name": _get_candidate_name(c)}
-                    for i, c in enumerate(pending_candidates)
-                ]
-                result = HandlerResult(
-                    scenario_id=scenario,
-                    reply=ProductReplyBuilder.clarify_candidates(formatted),
-                    pending_directive=PendingDirective.KEEP,
-                )
-            else:
-                result = HandlerResult(
-                    scenario_id=scenario,
-                    reply="请提供更完整的商品名称或型号。",
                     pending_directive=PendingDirective.CLEAR,
                 )
 
@@ -299,22 +178,10 @@ class ProductHandler(BaseHandler):
             _price_keywords = ("便宜", "实惠", "性价比", "预算", "优惠", "低价", "经济")
             if any(kw in text for kw in _price_keywords):
                 suffix = "价格实惠"
-
-        from datetime import datetime, timedelta, timezone
-
-        now = datetime.now(timezone.utc)
         return HandlerResult(
             scenario_id=SCENARIO.PRODUCT_FILTER_SEARCH,
             reply=ProductReplyBuilder.product_list(products, header_suffix=suffix),
-            pending_directive=PendingDirective.SET,
-            pending_state=PendingState(
-                scenario_id=SCENARIO.PRODUCT_DETAIL,
-                step="choose_product_candidate",
-                expected_response_type="ordinal_or_text",
-                data={"candidates": candidates},
-                created_at=now,
-                expires_at=now + timedelta(minutes=30),
-            ),
+            pending_directive=PendingDirective.CLEAR,
             context_update={
                 "product_candidates": candidates,
                 "last_visible_products": [
@@ -362,17 +229,7 @@ class ProductHandler(BaseHandler):
                 result = await self._detail_by_id(
                     int(target["id"]), target["name"], ctx, query_text=text,
                 )
-                # 保留候选列表，支持继续浏览
-                now_ = datetime.now(timezone.utc)
-                result.pending_directive = PendingDirective.SET
-                result.pending_state = PendingState(
-                    scenario_id=SCENARIO.PRODUCT_DETAIL,
-                    step="choose_product_candidate",
-                    expected_response_type="ordinal_or_text",
-                    data={"candidates": candidates},
-                    created_at=now_,
-                    expires_at=now_ + timedelta(minutes=30),
-                )
+                # 候选列表仍保留在 SessionContext 中，便于继续按序号浏览。
                 return result
             return HandlerResult(
                 scenario_id=SCENARIO.PRODUCT_DETAIL,
@@ -403,15 +260,7 @@ class ProductHandler(BaseHandler):
             return HandlerResult(
                 scenario_id=SCENARIO.PRODUCT_DETAIL,
                 reply=reply,
-                pending_directive=PendingDirective.SET,
-                pending_state=PendingState(
-                    scenario_id=SCENARIO.PRODUCT_DETAIL,
-                    step="choose_product_candidate",
-                    expected_response_type="ordinal_or_text",
-                    data={"candidates": candidates},
-                    created_at=datetime.now(timezone.utc),
-                    expires_at=datetime.now(timezone.utc) + timedelta(minutes=30),
-                ),
+                pending_directive=PendingDirective.CLEAR,
                 context_update={
                     "product_candidates": candidates,
                     "last_visible_products": [
@@ -704,7 +553,11 @@ class ProductHandler(BaseHandler):
         ref_result: Any,
         ctx: SessionContext,
     ) -> HandlerResult:
-        """构造多候选追问结果。"""
+        """构造多候选追问结果，并把候选写入 SessionContext。"""
+        candidates = [
+            {"id": c.product_id, "name": c.product_name}
+            for c in ref_result.candidates
+        ]
         reply = ProductReplyBuilder.clarify_candidates(
             [
                 {"index": c.index, "name": c.product_name}
@@ -712,38 +565,22 @@ class ProductHandler(BaseHandler):
             ]
         ) if ref_result.candidates else ref_result.reason
 
-        pending_state = None
-        pending_directive: PendingDirective = PendingDirective.CLEAR
-        if ref_result.candidates:
-            pending_state = PendingState(
-                scenario_id=scenario_id,
-                step="choose_product_candidate",
-                expected_response_type="ordinal_or_text",
-                data={
-                    "candidates": [
-                        {"id": c.product_id, "name": c.product_name}
-                        for c in ref_result.candidates
-                    ],
-                    "original_query": getattr(ctx, "last_user_message", ""),
-                },
-                created_at=__import__("datetime").datetime.now(__import__("zoneinfo").ZoneInfo("UTC")),
-                expires_at=__import__("datetime").datetime.now(__import__("zoneinfo").ZoneInfo("UTC")),
-            )
-            # 快速填充 expires_at
-            from datetime import datetime, timedelta, timezone
-            pending_state.created_at = datetime.now(timezone.utc)
-            pending_state.expires_at = datetime.now(timezone.utc) + timedelta(minutes=30)
-            pending_directive = PendingDirective.SET
+        context_update = {}
+        if candidates:
+            context_update = {
+                "product_candidates": candidates,
+                "last_visible_products": [
+                    {"index": i + 1, "product_id": str(c["id"]), "name": c["name"]}
+                    for i, c in enumerate(candidates)
+                ],
+                "last_intent": scenario_id,
+            }
 
         return HandlerResult(
             scenario_id=scenario_id,
             reply=reply,
-            pending_directive=pending_directive,
-            pending_state=pending_state,
-            context_update={"product_candidates": [
-                {"id": c.product_id, "name": c.product_name}
-                for c in ref_result.candidates
-            ]} if ref_result.candidates else {},
+            pending_directive=PendingDirective.CLEAR,
+            context_update=context_update,
         )
 
     def _get_resolver(self, ctx: SessionContext) -> ProductReferenceResolver:

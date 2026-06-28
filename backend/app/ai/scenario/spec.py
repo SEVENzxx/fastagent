@@ -136,19 +136,16 @@ SCENARIO_SPECS: dict[str, ScenarioSpec] = {
     "product.detail": ScenarioSpec(
         scenario_id="product.detail",
         allowed_skills=["get_detail"],
-        allow_pending=True,
         risk_level="read_only",
     ),
     "product.compare": ScenarioSpec(
         scenario_id="product.compare",
         allowed_skills=["batch_get_detail"],
-        allow_pending=True,
         risk_level="read_only",
     ),
     "product.attribute_query": ScenarioSpec(
         scenario_id="product.attribute_query",
         allowed_skills=["get_attribute"],
-        allow_pending=True,
         risk_level="read_only",
     ),
     "product.usage": ScenarioSpec(

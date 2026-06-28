@@ -7,9 +7,7 @@ SCENE_RECOGNITION_MAX_TOKENS: int = 200          # 场景识别 LLM 判决 max_t
 SEMANTIC_RECOMMEND_MAX_TOKENS: int = 512         # 语义推荐 LLM max_tokens
 
 # ── Pending ──
-PENDING_TTL_SECONDS: int = 1800                  # Pending 默认 TTL（30 分钟）
-PENDING_MAX_ATTEMPTS: int = 3                    # Pending 最大追问轮次
-GRAPH_PENDING_TTL_SECONDS: int = 7200            # 图 Pending TTL（2 小时）
+GRAPH_PENDING_TTL_SECONDS: int = 7200            # LangGraph Pending TTL（2 小时）
 
 # ── 场景识别 ──
 HIGH_CONFIDENCE_SCORE: float = 0.75              # 高置信意图阈值
