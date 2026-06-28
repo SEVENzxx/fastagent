@@ -17,10 +17,10 @@ class SessionContext(BaseModel):
     上下文规则：
       - 商品详情/价格/库存不长期缓存，必须通过 DB / skill 获取最新数据。
       - 订单金额/状态不只信 Redis，执行前必须查 DB。
-      - 商品上下文可按轮次或 TTL 清理。
-      - 订单上下文不能简单按 3 轮清空，必须看订单状态和 pending action。
+      - 商品上下文依赖 SessionContext TTL 和显式 context_update 清理。
+      - 订单图流程状态保存在 LangGraph checkpoint，SessionContext 只保留可复用的订单引用。
       - 用户切换商品只清商品域上下文，不清订单域。
-      - 用户明确退出当前流程时清 pending candidates / confirmation / slot。
+      - 用户明确退出图流程时清 LangGraph Pending；商品候选按 SessionContext TTL 或新列表覆盖。
     """
 
     # ── 租户与会话标识 ──
@@ -43,25 +43,16 @@ class SessionContext(BaseModel):
     compare_base_product_id: str | None = Field(None, description="对比基准商品 ID（对比延续时使用）")
     product_page: int = Field(1, description="商品列表当前页码")
     product_candidates: list[dict[str, Any]] = Field(default_factory=list, description="搜索/推荐的商品候选列表")
-    disambiguation_candidates: list[dict[str, Any]] = Field(default_factory=list, description="需用户澄清的消歧候选")
     last_visible_products: list[dict[str, Any]] = Field(default_factory=list, description="最近可见商品列表（序号解析用），格式：[{\"index\": int, \"product_id\": str, \"name\": str}]")
     compare_product_ids: list[str] = Field(default_factory=list, description="最近对比涉及的商品 ID 列表")
     last_product_query: str | None = Field(None, description="用户最近一次商品搜索/筛选的关键词")
-    recent_products: list[dict[str, Any]] = Field(default_factory=list, description="最近交互过的商品摘要列表（最多 5 条）")
-    product_context_round: int = Field(0, description="商品上下文已持续轮数（超阈值可清理）")
-    product_search_history: list[dict[str, Any]] = Field(default_factory=list, description="近5轮商品搜索结果滑动窗口")
 
     # ── 订单域上下文（当前进行中的订单状态） ──
     active_order_id: str | None = Field(None, description="当前操作的目标订单 ID")
     draft_order_id: str | None = Field(None, description="草稿态订单 ID（未提交确认）")
-    active_order_state: str | None = Field(None, description="目标订单当前状态")
-    pending_order_action: str | None = Field(None, description="待执行的订单操作（confirm / cancel）")
     recent_orders: list[dict[str, Any]] = Field(default_factory=list, description="最近订单候选列表")
 
-    # ── 槽位与确认（多轮补槽 + 高危操作审批） ──
-    slots: dict[str, Any] = Field(default_factory=dict, description="已填充的槽位键值对")
-    pending_slot: str | None = Field(None, description="当前等待用户补充的槽位名称")
-    pending_confirmation: dict[str, Any] | None = Field(None, description="待用户确认的操作快照")
+    # ── 人工审批上下文 ──
     pending_human_approval: dict[str, Any] | None = Field(None, description="待坐席审批的高危操作")
 
     # ── 知识域上下文（用于追问续查和精准召回） ──

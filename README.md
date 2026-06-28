@@ -35,13 +35,13 @@ FastAgent 以多租户 SaaS 模式运行：
 ```
 渠道消息
   → AssistantService（主编排）
-    → PendingGuard（恢复 / 取消 / 新意图判断）
+    → PendingGuard（转人工 / 取消 / 恢复）
     → RecognitionPipeline（场景识别）
     → HandlerRegistry → Handler.execute()
       → Components（参数解析与校验）
       → Skills（结构化业务操作）
       → ReplyBuilder（回复组装）
-    → SessionContext 更新 + Pending 指令
+    → SessionContext 更新 + graph Pending 指令
   → AssistantRuntimeResult
 ```
 
@@ -75,7 +75,7 @@ FastAgent 以多租户 SaaS 模式运行：
 ### 商品场景
 - **商品浏览** — 按分类展示，不依赖 LLM
 - **条件筛选** — 多属性组合筛选（分类、价格、属性），基于租户模板校验
-- **商品详情** — 名称/SKU 匹配 → SQL 查询 → 知识库检索 → LLM 组织回复
+- **商品详情** — 名称/SKU 匹配 → SQL 查询 → 知识库检索 → LLM 组织回复；多候选/序号选择只写 SessionContext
 - **商品对比** — 分别解析每个商品引用，按 product_id 精准召回知识
 - **属性查询** — 注入租户属性模板，确保抽取结果合法
 
@@ -98,8 +98,8 @@ FastAgent 以多租户 SaaS 模式运行：
 - **管理 API** — 完整的租户配置 REST API，支持自动化入驻
 
 ### 系统能力
-- **Pending 恢复** — 支持取消、新意图切换、转人工，四态守卫（HUMAN → CANCEL → NEW_INTENT → RESUME）
-- **幂等保障** — SHA-256 幂等 key，写操作可重入
+- **Pending 恢复** — 仅服务 LangGraph 子流程，三态守卫（HUMAN → CANCEL → RESUME）；商品多轮依赖 SessionContext
+- **状态 TTL** — SessionContext 1 小时，LangGraph Pending 2 小时，避免商品候选与图恢复状态双写
 - **资源追踪** — 自动记录 LLM 调用、向量检索、Skill 调用次数，支撑测试断言
 - **场景权限** — ScenarioSpec 约束每个场景可调用的 Skill、上下文读写、LLM/向量使用
 
@@ -116,7 +116,7 @@ backend/app/
 │   ├── reply_builders/   # 回复组装（商品、订单、知识、模板）
 │   ├── prompts/          # Prompt 集中管理
 │   ├── graphs/           # LangGraph 子图（下单、取消、售后）
-│   ├── context/          # 会话上下文、Pending 状态
+│   ├── context/          # SessionContext、LangGraph Pending 状态
 │   ├── services/         # RAG 服务、属性抽取服务
 │   ├── scenario/         # 场景定义与权限配置
 │   ├── rag/              # 向量检索

@@ -1,36 +1,55 @@
-"""AI 应用层魔法值常量集中管理。
+"""AI 应用层常量兼容导出。
 
-应用层业务常量集中管理，禁止散落在 Handler/Skill/Service 中。超时等运维参数在 config.py 中通过 .env 配置。
+常量事实来源在 ``app.common.constants.config`` 和 ``app.common.constants.business``。
+新代码不要在本模块继续新增常量，避免出现多套配置源。
 """
 
 from __future__ import annotations
 
-# ── 上下文限制 ──
-MAX_RECENT_PRODUCTS: int = 10          # 最近浏览商品保留数
-PRODUCT_CANDIDATE_LIMIT: int = 5       # 商品多候选最大数
-DEFAULT_PAGE_SIZE: int = 5             # 商品列表翻页默认每页条数
-PRODUCT_CLARIFY_LIMIT: int = 5         # 商品澄清追问最大轮次
-RECENT_ORDERS_LIMIT: int = 10          # 最近订单列表长度上限
-BATCH_GET_PRODUCTS_LIMIT: int = 10     # 批量查询商品 ID 上限
-LAST_KNOWLEDGE_REFS_MAX: int = 5       # last_knowledge_refs 保留条数上限
+from app.common.constants.business import (
+    BATCH_GET_PRODUCTS_LIMIT,
+    DEFAULT_PAGE_SIZE,
+    IDEMPOTENCY_TTL_AFTERSALES,
+    IDEMPOTENCY_TTL_ORDER,
+    KNOWLEDGE_DEIXIS_KEYWORDS,
+    KNOWLEDGE_SHORT_CONTENT_TOKEN_LIMIT,
+    LAST_KNOWLEDGE_REFS_MAX,
+    MAX_RECENT_PRODUCTS,
+    POLICY_KNOWLEDGE_TOP_K,
+    PRODUCT_CANDIDATE_LIMIT,
+    PRODUCT_CLARIFY_LIMIT,
+    PRODUCT_KNOWLEDGE_TOP_K,
+    RECENT_ORDERS_LIMIT,
+)
+from app.common.constants.config import (
+    GRAPH_PENDING_TTL_SECONDS,
+    HIGH_CONFIDENCE_GAP,
+    HIGH_CONFIDENCE_SCORE,
+    LLM_ENTITY_EXTRACT_MAX_TOKENS,
+    PRODUCT_ATTR_EXTRACT_MAX_TOKENS,
+    SCENE_RECOGNITION_MAX_TOKENS,
+    SEMANTIC_RECOMMEND_MAX_TOKENS,
+)
 
-# ── LLM 限制 ──
-LLM_ENTITY_EXTRACT_MAX_TOKENS: int = 500  # 实体抽取 LLM 最大 token
-PRODUCT_ATTR_EXTRACT_MAX_TOKENS: int = 1024  # 商品属性抽取 max_tokens
-PRODUCT_KNOWLEDGE_TOP_K: int = 5          # 商品知识检索 top_k
-POLICY_KNOWLEDGE_TOP_K: int = 5           # 政策知识检索 top_k
-SCENE_RECOGNITION_MAX_TOKENS: int = 200   # 场景识别 LLM 判决 max_tokens
-SEMANTIC_RECOMMEND_MAX_TOKENS: int = 512  # 语义推荐 LLM max_tokens
-
-# ── Pending ──
-GRAPH_PENDING_TTL_SECONDS: int = 7200  # LangGraph Pending TTL（2 小时）
-IDEMPOTENCY_TTL_ORDER: int = 86400     # 订单幂等 key TTL（24 小时）
-IDEMPOTENCY_TTL_AFTERSALES: int = 604800  # 售后幂等 key TTL（7 天）
-
-# ── 场景配置 ──
-HIGH_CONFIDENCE_SCORE: float = 0.85    # 高置信意图阈值
-HIGH_CONFIDENCE_GAP: float = 0.15      # 高置信候选差距
-
-# ── Knowledge ──
-KNOWLEDGE_DEIXIS_KEYWORDS: frozenset = frozenset({"这个", "该", "此", "刚刚", "刚才", "该政策", "该优惠"})
-KNOWLEDGE_SHORT_CONTENT_TOKEN_LIMIT: int = 300
+__all__ = [
+    "BATCH_GET_PRODUCTS_LIMIT",
+    "DEFAULT_PAGE_SIZE",
+    "GRAPH_PENDING_TTL_SECONDS",
+    "HIGH_CONFIDENCE_GAP",
+    "HIGH_CONFIDENCE_SCORE",
+    "IDEMPOTENCY_TTL_AFTERSALES",
+    "IDEMPOTENCY_TTL_ORDER",
+    "KNOWLEDGE_DEIXIS_KEYWORDS",
+    "KNOWLEDGE_SHORT_CONTENT_TOKEN_LIMIT",
+    "LAST_KNOWLEDGE_REFS_MAX",
+    "LLM_ENTITY_EXTRACT_MAX_TOKENS",
+    "MAX_RECENT_PRODUCTS",
+    "POLICY_KNOWLEDGE_TOP_K",
+    "PRODUCT_ATTR_EXTRACT_MAX_TOKENS",
+    "PRODUCT_CANDIDATE_LIMIT",
+    "PRODUCT_CLARIFY_LIMIT",
+    "PRODUCT_KNOWLEDGE_TOP_K",
+    "RECENT_ORDERS_LIMIT",
+    "SCENE_RECOGNITION_MAX_TOKENS",
+    "SEMANTIC_RECOMMEND_MAX_TOKENS",
+]
