@@ -23,6 +23,7 @@ def register_default_handlers(registry: HandlerRegistry) -> None:
     registry.register("template.farewell", TemplateHandler())
     registry.register("template.silent", TemplateHandler())
     registry.register("template.fallback", TemplateHandler())
+    registry.register("template.clarify", TemplateHandler())
 
     # Human
     registry.register("human.transfer", HumanHandler())

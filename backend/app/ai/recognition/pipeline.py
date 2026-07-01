@@ -3,8 +3,9 @@
 流程：
   1. 文本归一化
   2. 上下文优先：短确认 + 草稿订单 → order.confirm
-  3. 强规则匹配 → HUMAN / SILENT 直接返回
-  4. 场景识别（向量 + LLM）
+  3. 无上下文歧义词澄清：确认/取消等 → template.clarify（不走向量/LLM）
+  4. 强规则匹配 → HUMAN / SILENT 直接返回
+  5. 场景识别（向量 + LLM）
 
 输出：ScenarioDecision(scenario_id, confidence, entities)
 """
@@ -32,6 +33,11 @@ logger = logging.getLogger(__name__)
 # 短确认 + 草稿订单 → 走 order.confirm，优先于 SILENT 规则
 _CONFIRM_SIGNALS: frozenset[str] = frozenset({
     "好的", "确认", "可以", "没问题", "行", "就这个", "下单", "OK", "ok",
+})
+
+# 依赖上下文的歧义词 — 无业务上下文时不走向量/LLM，直接引导澄清
+_AMBIGUOUS_KEYWORDS: frozenset[str] = frozenset({
+    "确认", "取消", "不取消", "算了", "不要了",
 })
 
 
@@ -71,6 +77,11 @@ class RecognitionPipeline:
         if priority is not None:
             return priority
 
+        # ── 1.5: 无上下文歧义词澄清（确认/取消等关键词无对应流程时引导，不走向量/LLM）──
+        clarify = self._check_ambiguous_without_context(normalized, context, started)
+        if clarify is not None:
+            return clarify
+
         # ── 2: 强规则匹配（不触发 LLM / Vector）──
         rule_hit = self._check_rule_match(normalized, started)
         if rule_hit is not None:
@@ -106,6 +117,34 @@ class RecognitionPipeline:
                 entities={"reason": "短确认词+草稿订单"},
             )
         return None
+
+    def _check_ambiguous_without_context(
+        self, normalized: str, context: Any, started: float,
+    ) -> ScenarioDecision | None:
+        """无业务上下文时，确认/取消类歧义词不走向量/LLM，直接引导澄清。
+
+        有 draft_order_id / active_order_id 说明有进行中的流程，不拦截。
+        """
+        if context and (
+            self._ctx_get(context, "draft_order_id")
+            or self._ctx_get(context, "active_order_id")
+        ):
+            return None
+
+        stripped = normalized.strip()
+        if stripped not in _AMBIGUOUS_KEYWORDS:
+            return None
+
+        elapsed = (time.perf_counter() - started) * 1000
+        logger.info(
+            "【场景识别】歧义词无上下文，引导澄清 keyword=%s elapsed=%.0fms",
+            stripped, elapsed,
+        )
+        return ScenarioDecision(
+            scenario_id="template.clarify",
+            confidence=0.8,
+            entities={"reason": f"歧义词「{stripped}」无业务上下文，引导用户表达真实意图"},
+        )
 
     def _check_rule_match(self, normalized: str, started: float) -> ScenarioDecision | None:
         """强规则匹配。"""

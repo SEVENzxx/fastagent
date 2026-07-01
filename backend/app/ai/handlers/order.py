@@ -13,6 +13,7 @@ Redis PendingState 只保存 graph_thread_id / interrupt_id。
 from __future__ import annotations
 
 import logging
+import re
 import uuid
 from datetime import datetime, timezone, timedelta
 from typing import Any
@@ -43,6 +44,87 @@ from app.ai.skills.gateway import SkillError, call_skill
 from app.config import settings
 
 logger = logging.getLogger(__name__)
+
+_CN_NUM_MAP: dict[str, int] = {
+    "一": 1, "二": 2, "两": 2, "三": 3, "四": 4,
+    "五": 5, "六": 6, "七": 7, "八": 8, "九": 9, "十": 10,
+}
+_RE_ORDER_PRODUCT_ORDINAL = re.compile(r"第\s*([一二两三四五六七八九十\d]+)\s*[款个台件]?")
+_RE_BARE_NUMBER = re.compile(r"^\s*(\d+)\s*$")
+_PRODUCT_DEIXIS_WORDS: tuple[str, ...] = (
+    "这个", "这款", "它", "那个", "那款",
+    "刚才那个", "刚刚那个", "刚才那款", "刚刚那款",
+)
+
+
+def _parse_order_product_ordinal(text: str) -> int | None:
+    """从下单文本中解析商品序号。"""
+    stripped = text.strip()
+    m = _RE_BARE_NUMBER.fullmatch(stripped)
+    if m:
+        return int(m.group(1))
+    m = _RE_ORDER_PRODUCT_ORDINAL.search(stripped)
+    if not m:
+        return None
+    raw = m.group(1).strip()
+    return int(raw) if raw.isdigit() else _CN_NUM_MAP.get(raw)
+
+
+def _contains_product_deixis(text: str) -> bool:
+    """判断下单文本中是否包含商品指代。"""
+    stripped = text.strip()
+    return bool(stripped) and any(word in stripped for word in _PRODUCT_DEIXIS_WORDS)
+
+
+def _candidate_id_name(item: Any) -> tuple[str, str] | None:
+    """兼容 product_candidates / last_visible_products 的商品候选格式。"""
+    if not isinstance(item, dict):
+        return None
+    raw_id = item.get("product_id") or item.get("id")
+    if raw_id is None:
+        return None
+    name = str(item.get("name") or item.get("product_name") or "")
+    return str(raw_id), name
+
+
+def _context_product_candidates(ctx: SessionContext) -> list[dict[str, str]]:
+    """按最近可见顺序提取商品候选。"""
+    raw_candidates = ctx.last_visible_products or ctx.product_candidates
+    candidates: list[dict[str, str]] = []
+    for item in raw_candidates:
+        id_name = _candidate_id_name(item)
+        if id_name is not None:
+            pid, name = id_name
+            candidates.append({"id": pid, "name": name})
+    return candidates
+
+
+def _resolve_create_product_from_context(text: str, ctx: SessionContext) -> tuple[str | None, str | None, str | None]:
+    """解析下单文本中的商品引用，返回 product_id / product_name / error_reply。"""
+    if ctx.last_focus_product_id:
+        return str(ctx.last_focus_product_id), ctx.last_product_name or text, None
+
+    candidates = _context_product_candidates(ctx)
+    ordinal = _parse_order_product_ordinal(text)
+    if ordinal is not None:
+        if not candidates:
+            return None, None, None
+        if 1 <= ordinal <= len(candidates):
+            target = candidates[ordinal - 1]
+            return target["id"], target["name"], None
+        return None, None, f"没有找到第 {ordinal} 款商品，请回复列表中的有效序号。"
+
+    if _contains_product_deixis(text):
+        last_pid = ctx.last_product_id
+        if last_pid:
+            return str(last_pid), ctx.last_product_name or text, None
+        if len(candidates) == 1:
+            target = candidates[0]
+            return target["id"], target["name"], None
+        if len(candidates) > 1:
+            return None, None, "您想购买哪一款？请回复商品序号后再下单。"
+
+    return None, ctx.last_product_name or text, None
 
 
 class OrderHandler(BaseHandler):
@@ -162,8 +244,14 @@ class OrderHandler(BaseHandler):
             )
 
         # 从会话上下文取焦点商品
-        product_id = str(ctx.last_focus_product_id) if ctx.last_focus_product_id else None
-        product_name = ctx.last_product_name or text
+        product_id, product_name, error_reply = _resolve_create_product_from_context(text, ctx)
+        if error_reply:
+            return HandlerResult(
+                scenario_id="order.create",
+                reply=error_reply,
+                pending_directive=PendingDirective.CLEAR,
+            )
+        product_name = product_name or text
 
         from app.ai.graphs.order_creation import get_creation_graph
 
@@ -183,7 +271,6 @@ class OrderHandler(BaseHandler):
         config = {
             "configurable": {
                 "thread_id": graph_thread_id,
-                "auto_approve": settings.ORDER_AUTO_APPROVE,
             },
         }
 

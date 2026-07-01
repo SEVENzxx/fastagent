@@ -18,6 +18,7 @@ class TemplateReplyBuilder:
         "template.farewell": "不客气，祝您购物愉快！",
         "template.silent": "...",
         "template.fallback": "抱歉，我没有理解您的意思，请重新描述一下？",
+        "template.clarify": "当前没有需要确认或取消的流程。您可以直接告诉我您的需求，比如查询商品、查询订单、或咨询政策等。",
     }
 
     _DEFAULT: str = _TEMPLATES["template.fallback"]

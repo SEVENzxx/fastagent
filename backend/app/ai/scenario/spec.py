@@ -97,6 +97,11 @@ SCENARIO_SPECS: dict[str, ScenarioSpec] = {
         allowed_skills=[],
         risk_level="read_only",
     ),
+    "template.clarify": ScenarioSpec(
+        scenario_id="template.clarify",
+        allowed_skills=[],
+        risk_level="read_only",
+    ),
 
     # ══════════════════════════════════════════
     # Human
@@ -135,22 +140,26 @@ SCENARIO_SPECS: dict[str, ScenarioSpec] = {
     ),
     "product.detail": ScenarioSpec(
         scenario_id="product.detail",
-        allowed_skills=["get_detail"],
+        allowed_skills=["get_detail", "search_products", "search_product_knowledge"],
+        allow_llm_entity_extraction=True,
+        allow_llm_reply_generation=True,
+        allow_vector_search=True,
         risk_level="read_only",
     ),
     "product.compare": ScenarioSpec(
         scenario_id="product.compare",
-        allowed_skills=["batch_get_detail"],
+        allowed_skills=["batch_get_detail", "get_detail", "search_products"],
         risk_level="read_only",
     ),
     "product.attribute_query": ScenarioSpec(
         scenario_id="product.attribute_query",
-        allowed_skills=["get_attribute"],
+        allowed_skills=["search_products", "get_detail", "get_attribute"],
         risk_level="read_only",
     ),
     "product.usage": ScenarioSpec(
         scenario_id="product.usage",
-        allowed_skills=["get_detail", "get_attribute"],
+        allowed_skills=["get_detail", "search_product_knowledge"],
+        allow_llm_entity_extraction=True,
         allow_llm_reply_generation=True,
         allow_vector_search=True,
         risk_level="read_only",
