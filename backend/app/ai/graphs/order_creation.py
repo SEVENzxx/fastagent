@@ -1,23 +1,20 @@
-"""OrderCreationGraph — 下单 LangGraph 子图（完整生命周期）。
+"""OrderCreationGraph — 下单 LangGraph 子图（客户侧下单流程）。
 
 流程：
   resolve_product → confirm_product → collect_missing_info → show_summary
-  → execute_create → simulate_payment → wait_agent_approval
-  → arrange_shipping → notify_customer → build_result
+  → execute_create → build_result
 
 中断点：
   - 商品不明确 → resolved_products + interrupt 让用户选择
   - 产品确认 → interrupt 展示商品+价格，让用户确认/修改数量
   - 信息收集 → interrupt 灵活收集地址/电话（可一次性提供）
   - 汇总确认 → interrupt 展示完整订单摘要，等待最终确认
-  - 坐席审批（可选）→ interrupt 等待坐席手动审批（auto_approve=False 时）
 
 写入约束（P1）：
   - SQLite 持久化 checkpointer（非 MemorySaver），重启后图状态可恢复
   - Redis 持久化幂等 key（非内存 dict），跨 worker/重启有效
   - 汇总确认后按最终业务参数生成提交幂等 key
   - execute_create 前必须从 IdempotencyService 查重，相同 key 只执行一次写操作
-  - simulate_payment / arrange_shipping 各自独立幂等
 
 Skilling：
   - execute_create 优先使用 config["configurable"]["order_skill"]（测试注入）
@@ -109,7 +106,7 @@ async def close_checkpointer() -> None:
 
 
 class OrderCreationState(TypedDict, total=False):
-    """下单子图状态 — 完整生命周期。"""
+    """下单子图状态 — 客户侧下单流程。"""
 
     # ── 入参 ──
     tenant_id: int
@@ -136,6 +133,7 @@ class OrderCreationState(TypedDict, total=False):
     # ── 汇总确认 ──
     total_amount: float | None
     confirmed: bool
+    needs_reconfirm: bool
 
     # ── 执行结果 ──
     order_id: str | None
@@ -492,6 +490,8 @@ async def show_summary_node(
         )
         return {
             "confirmed": True,
+            "needs_reconfirm": False,
+            "error": None,
             "total_amount": total,
             "idempotency_key": idempotency_key,
             "reply": "",
@@ -500,13 +500,42 @@ async def show_summary_node(
     if choice_stripped in ("取消", "取消下单", "算了", "不要了", "no", "n"):
         return {
             "confirmed": False,
+            "needs_reconfirm": False,
             "reply": "已取消下单。如需其他帮助，请随时告诉我。",
         }
 
+    # 修改地址/电话：检测输入中是否包含新的地址或手机号
+    updates: dict[str, Any] = {}
+    phone_match = re.search(r"1[3-9]\d{9}", choice_stripped)
+    if phone_match:
+        new_phone = phone_match.group()
+        if new_phone != phone:
+            updates["receiver_phone"] = new_phone
+            updates["reply"] = "已更新联系电话，请重新确认订单。"
+    for sep in ("地址：", "地址:", "收货地址：", "收货地址:"):
+        if sep in choice_stripped:
+            parts = choice_stripped.split(sep, 1)
+            addr = parts[1].strip()
+            if addr and addr != address:
+                updates["shipping_address"] = addr
+                updates["reply"] = "已更新收货地址，请重新确认订单。"
+            break
+    else:
+        remaining = re.sub(r"1[3-9]\d{9}", "", choice_stripped).strip()
+        if remaining and len(remaining) >= 4 and remaining not in (address, phone):
+            updates["shipping_address"] = remaining
+            updates["reply"] = "已更新收货地址，请重新确认订单。"
+
+    if updates:
+        updates["confirmed"] = False
+        updates["needs_reconfirm"] = True
+        updates["error"] = None
+        return updates
+
     return {
         "confirmed": False,
-        "reply": CONFIRM_OR_CANCEL_PROMPT,
         "error": "确认输入无效",
+        "reply": CONFIRM_OR_CANCEL_PROMPT,
     }
 
 
@@ -574,6 +603,9 @@ async def execute_create_node(
                 db=db,
                 items=[{"product_name": product_name, "quantity": quantity}],
                 shipping_address=address,
+                receiver_phone=phone,
+                receiver_name=state.get("receiver_name"),
+                conversation_id=state.get("conversation_id"),
             )
             if not result.ok:
                 logger.warning("下单失败(注入skill): tenant=%s error=%s", tenant_id, result.error)
@@ -582,7 +614,7 @@ async def execute_create_node(
         elif db is None:
             # 无 DB（测试环境无 skill 注入）→ mock
             mock_id = f"mock_{tenant_id}_{contact_id}"
-            reply = _mock_create_reply(product_name, quantity, address, mock_id)
+            reply = _mock_create_reply(product_name, quantity, address, phone, mock_id)
             if idempotency_key:
                 await order_idempotency.set(
                     idempotency_key,
@@ -600,6 +632,9 @@ async def execute_create_node(
                 db=db,
                 items=[{"product_name": product_name, "quantity": quantity}],
                 shipping_address=address,
+                receiver_phone=phone,
+                receiver_name=state.get("receiver_name"),
+                conversation_id=state.get("conversation_id"),
             )
             if not result.ok:
                 logger.warning("下单失败: tenant=%s error=%s", tenant_id, result.error)
@@ -608,7 +643,11 @@ async def execute_create_node(
             await db.commit()
 
         order_id = payload.get("order_id", "")
-        message = payload.get("message", f"订单已创建（#{order_id}）。")
+        message = payload.get("message") or (
+            f"订单已创建，订单号：#{order_id}，"
+            "当前状态：待坐席审核发货，请耐心等待。"
+            "坐席审核通过后会安排发货，发货后将通知您。"
+        )
         if idempotency_key:
             await order_idempotency.set(
                 idempotency_key,
@@ -622,11 +661,23 @@ async def execute_create_node(
         return graph_exception(exc, idempotency_key)
 
 
-def _mock_create_reply(product_name: str, quantity: int, address: str | None, order_id: str) -> str:
-    reply_parts = ["订单已创建（模拟）：", f"  商品：{product_name} ×{quantity}"]
+def _mock_create_reply(
+    product_name: str,
+    quantity: int,
+    address: str | None,
+    phone: str | None,
+    order_id: str,
+) -> str:
+    reply_parts = [
+        f"订单已创建，订单号：#{order_id}",
+        "当前状态：待坐席审核发货。",
+        f"商品：{product_name} ×{quantity}",
+    ]
     if address:
-        reply_parts.append(f"  收货地址：{address}")
-    reply_parts.append(f"  订单号：#" + order_id)
+        reply_parts.append(f"收货地址：{address}")
+    if phone:
+        reply_parts.append(f"联系电话：{phone}")
+    reply_parts.append("坐席审核通过后会安排发货，发货后将通知您。")
     return "\n".join(reply_parts)
 
 
@@ -637,7 +688,7 @@ async def simulate_payment_node(
     """模拟支付 — pending_customer_confirm → paid。"""
     _ = config
     order_id = state.get("order_id")
-    if state.get("write_executed") or not order_id:
+    if not order_id:
         return {}
 
     from app.ai.services.idempotency import order_idempotency
@@ -860,8 +911,13 @@ def _format_product_choices(products: list[dict[str, Any]]) -> str:
 
 
 def _route_resolve_product(state: OrderCreationState) -> str:
-    if state.get("error"):
-        return "build_result"
+    # error + 未选中商品 → 当前节点的错误，按类型分流
+    if state.get("error") and not state.get("selected_product_id"):
+        if state.get("confirmed") is False:
+            return "build_result"             # 用户明确取消
+        if state.get("resolved_products"):
+            return "resolve_product"          # 多候选无效选择，重选
+        return "build_result"                 # 无匹配商品，结束
     if state.get("resolved_products") and not state.get("selected_product_id"):
         return "resolve_product"
     return "confirm_product"
@@ -890,8 +946,11 @@ def _route_collect_missing_info(state: OrderCreationState) -> str:
 
 
 def _route_show_summary(state: OrderCreationState) -> str:
-    if state.get("error"):
-        return "build_result"
+    # error + 未确认 → 当前节点的无效输入；已确认则 error 是残留
+    if state.get("error") and not state.get("confirmed"):
+        return "show_summary"
+    if state.get("needs_reconfirm"):
+        return "show_summary"
     if not state.get("confirmed"):
         return "build_result"
     return "execute_create"
@@ -900,7 +959,8 @@ def _route_show_summary(state: OrderCreationState) -> str:
 def _route_execute_create(state: OrderCreationState) -> str:
     if state.get("error"):
         return "build_result"
-    return "simulate_payment"
+    # 客户侧只负责创建客户已确认的订单；审批、发货和发货通知由后台流程推进。
+    return "build_result"
 
 
 def _route_simulate_payment(state: OrderCreationState) -> str:

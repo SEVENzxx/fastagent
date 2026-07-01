@@ -328,9 +328,13 @@ async def collect_reason_node(
     )
     reason_stripped = reason.strip() if reason else ""
     if reason_stripped.lower() in ("取消", "不退了", "算了", "不要了", "no", "n"):
-        return {"error": "用户取消售后申请", "reply": "已取消售后申请，订单保持不变。如需其他帮助请随时告诉我。"}
+        return {
+            "confirmed": False,
+            "error": "用户取消售后申请",
+            "reply": "已取消售后申请，订单保持不变。如需其他帮助请随时告诉我。",
+        }
     if reason_stripped:
-        return {"refund_reason": reason_stripped}
+        return {"refund_reason": reason_stripped, "error": None}
 
     return {
         "error": "缺少退款原因",
@@ -356,7 +360,7 @@ async def confirm_refund_node(
     choice_stripped = choice.strip().lower()
 
     if choice_stripped in ("确认", "确认退款", "确认售后", "是", "yes", "y", "确定"):
-        return {"confirmed": True}
+        return {"confirmed": True, "error": None}
 
     if choice_stripped in ("取消", "不退了", "算了", "不要了", "no", "n"):
         return {
@@ -494,7 +498,12 @@ def _format_order_choices(orders: list[dict[str, Any]]) -> str:
 
 
 def _route_resolve_order(state: OrderRefundState) -> str:
-    if state.get("error"):
+    # error + 未选中订单 → 当前节点的错误
+    if state.get("error") and not state.get("selected_order_id"):
+        if state.get("confirmed") is False:
+            return "build_result"
+        if state.get("resolved_orders"):
+            return "resolve_order"
         return "build_result"
     return "validate_refundable"
 
@@ -509,13 +518,18 @@ def _route_validate_refundable(state: OrderRefundState) -> str:
 
 def _route_collect_reason(state: OrderRefundState) -> str:
     if state.get("error"):
+        if state.get("confirmed") is False:
+            return "build_result"
+        if not state.get("refund_reason"):
+            return "collect_reason"
         return "build_result"
     return "confirm_refund"
 
 
 def _route_confirm_refund(state: OrderRefundState) -> str:
-    if state.get("error"):
-        return "build_result"
+    # error + 未确认 → 当前节点的无效输入
+    if state.get("error") and not state.get("confirmed"):
+        return "confirm_refund"
     if not state.get("confirmed"):
         return "build_result"
     return "execute_refund"

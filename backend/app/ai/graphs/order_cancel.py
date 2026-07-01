@@ -474,7 +474,12 @@ def _format_order_choices(orders: list[dict[str, Any]]) -> str:
 
 
 def _route_resolve_order(state: OrderCancelState) -> str:
-    if state.get("error"):
+    # error + 未选中订单 → 当前节点的错误
+    if state.get("error") and not state.get("selected_order_id"):
+        if state.get("confirmed") is False:
+            return "build_result"
+        if state.get("resolved_orders"):
+            return "resolve_order"
         return "build_result"
     return "validate_cancelable"
 
@@ -488,8 +493,9 @@ def _route_validate_cancelable(state: OrderCancelState) -> str:
 
 
 def _route_confirm_cancel(state: OrderCancelState) -> str:
-    if state.get("error"):
-        return "build_result"
+    # error + 未确认 → 当前节点的无效输入
+    if state.get("error") and not state.get("confirmed"):
+        return "confirm_cancel"
     if not state.get("confirmed"):
         return "build_result"
     return "execute_cancel"
