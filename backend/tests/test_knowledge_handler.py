@@ -88,6 +88,7 @@ class FakeKnowledgeSkill:
         doc_id: str = "",
         title: str = "",
         token_count: int = 100,
+        product_id: str = "",
     ) -> None:
         cls.knowledge_chunks.append({
             "id": chunk_id,
@@ -95,6 +96,7 @@ class FakeKnowledgeSkill:
             "content": content,
             "token_count": token_count,
             "title": title,
+            "product_id": product_id,
             "score": 0.9,
         })
 
@@ -130,6 +132,7 @@ class FakeKnowledgeSkill:
         tenant_id: int,
         query: str,
         doc_ids: list[str] | None = None,
+        product_id: str | None = None,
         db: Any = None,
         **kwargs: Any,
     ) -> ToolResult:
@@ -139,6 +142,7 @@ class FakeKnowledgeSkill:
             "tenant_id": tenant_id,
             "query": query,
             "doc_ids": doc_ids,
+            "product_id": product_id,
         })
 
         query_lower = query.lower()
@@ -151,9 +155,34 @@ class FakeKnowledgeSkill:
         # doc_ids 过滤（追问场景）
         if doc_ids:
             items = [i for i in items if i["doc_id"] in doc_ids]
+        if product_id:
+            items = [i for i in items if str(i.get("product_id") or "") == str(product_id)]
 
         return ToolResult(ok=True, skill_name="search_knowledge", result={"items": items})
 
+    @staticmethod
+    async def search_product_knowledge(
+        *,
+        tenant_id: int,
+        query: str,
+        product_id: str | int,
+        db: Any = None,
+        **kwargs: Any,
+    ) -> ToolResult:
+        """按商品 ID 检索知识分块。"""
+        result = await FakeKnowledgeSkill.search_knowledge(
+            tenant_id=tenant_id,
+            query=query,
+            product_id=str(product_id),
+            db=db,
+            **kwargs,
+        )
+        return ToolResult(
+            ok=result.ok,
+            skill_name="search_product_knowledge",
+            result=result.result,
+            error=result.error,
+        )
 
 # ══════════════════════════════════════════════
 # 辅助函数
@@ -462,7 +491,7 @@ class TestKnowledgeLLMSummary:
         handler = KnowledgeHandler(skill=FakeKnowledgeSkill)
 
         with patch(
-            "app.ai.handlers.knowledge.complete",
+            "app.ai.reply_builders.knowledge.complete",
             new=AsyncMock(return_value="根据保修政策，本产品保修期为一年。"),
         ) as mock_complete:
             ctx = make_context()
@@ -488,7 +517,7 @@ class TestKnowledgeLLMSummary:
         handler = KnowledgeHandler(skill=FakeKnowledgeSkill)
 
         with patch(
-            "app.ai.handlers.knowledge.complete",
+            "app.ai.reply_builders.knowledge.complete",
             new=AsyncMock(return_value="目前有满 100 减 20 和满 200 减 50 两种优惠。"),
         ) as mock_complete:
             ctx = make_context()
@@ -511,7 +540,7 @@ class TestKnowledgeLLMSummary:
         handler = KnowledgeHandler(skill=FakeKnowledgeSkill)
 
         with patch(
-            "app.ai.handlers.knowledge.complete",
+            "app.ai.reply_builders.knowledge.complete",
             new=AsyncMock(side_effect=RuntimeError("LLM 超时")),
         ):
             ctx = make_context()
@@ -590,7 +619,7 @@ class TestKnowledgeContextUpdate:
         decision = make_decision("knowledge.policy", text="知识")
 
         with patch(
-            "app.ai.handlers.knowledge.complete",
+            "app.ai.reply_builders.knowledge.complete",
             new=AsyncMock(return_value="摘要内容。"),
         ):
             result = await handler.execute(decision, ctx)

@@ -83,8 +83,8 @@ export interface BatchStatusResponse {
 export const STATUS_LABELS: Record<string, string> = {
   draft: '草稿',
   pending_customer_confirm: '待客户确认',
-  customer_confirmed: '客户已确认',
-  agent_confirmed: '坐席已确认',
+  customer_confirmed: '待审核发货',
+  agent_confirmed: '待发货',
   shipped: '已发货',
   signed: '已签收',
   cancelled: '已取消',
@@ -132,9 +132,9 @@ export function updateOrder(id: string | number, data: OrderUpdate) {
   return request.put<OrderResponse>(`/orders/${id}`, data).then((res) => res.data)
 }
 
-export function transitionOrderStatus(id: string | number, status: string) {
+export function transitionOrderStatus(id: string | number, status: string, reason?: string) {
   return request
-    .patch<OrderResponse>(`/orders/${id}/status`, { status })
+    .patch<OrderResponse>(`/orders/${id}/status`, { status, reason })
     .then((res) => res.data)
 }
 
@@ -142,8 +142,4 @@ export function batchTransitionStatus(data: OrderBatchStatusTransition) {
   return request
     .patch<BatchStatusResponse>('/orders/batch/status', data)
     .then((res) => res.data)
-}
-
-export function cancelOrder(id: string | number) {
-  return request.delete(`/orders/${id}`)
 }

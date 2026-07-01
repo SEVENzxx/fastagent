@@ -159,13 +159,18 @@ async function handleStatusTransition(order: OrderResponse, toStatus: string) {
 
 async function handleCancel(order: OrderResponse) {
   try {
-    await ElMessageBox.confirm('确定要取消该订单吗？', '取消订单', {
-      confirmButtonText: '确定',
-      cancelButtonText: '返回',
-      type: 'warning',
-    })
-    await ordersApi.cancelOrder(order.id)
-    ElMessage.success('订单已取消')
+    const { value: reason } = await ElMessageBox.prompt(
+      '取消后客户将收到通知，请填写取消原因。',
+      '取消订单',
+      {
+        confirmButtonText: '确定取消',
+        cancelButtonText: '返回',
+        inputPlaceholder: '请填写取消原因',
+        inputValidator: (v: string) => !!v.trim() || '取消原因不能为空',
+      },
+    )
+    await ordersApi.transitionOrderStatus(order.id, 'cancelled', reason)
+    ElMessage.success('订单已取消，已通知客户')
     loadData()
     drawerVisible.value = false
   } catch { /* cancelled */ }
@@ -175,7 +180,7 @@ function canTransition(order: OrderResponse, toStatus: string): boolean {
   const transitions: Record<string, string[]> = {
     draft: ['pending_customer_confirm', 'cancelled'],
     pending_customer_confirm: ['customer_confirmed', 'cancelled'],
-    customer_confirmed: ['agent_confirmed', 'cancelled'],
+    customer_confirmed: ['shipped', 'cancelled'],
     agent_confirmed: ['shipped', 'cancelled'],
     shipped: ['signed'],
     signed: [],
@@ -187,7 +192,7 @@ function canTransition(order: OrderResponse, toStatus: string): boolean {
 const statusTabs = [
   { label: '全部', value: null },
   { label: '待客户确认', value: 'pending_customer_confirm' },
-  { label: '客户已确认', value: 'customer_confirmed' },
+  { label: '待审核发货', value: 'customer_confirmed' },
   { label: '已发货', value: 'shipped' },
   { label: '已签收', value: 'signed' },
 ]
@@ -281,7 +286,7 @@ onMounted(() => {
             type="warning"
             @click.stop="handleStatusTransition(row, 'shipped')"
           >
-            发货
+            {{ row.status === 'customer_confirmed' ? '审核并发货' : '发货' }}
           </el-button>
           <el-button
             v-if="canTransition(row, 'cancelled')"
@@ -390,7 +395,7 @@ onMounted(() => {
             type="warning"
             @click="handleStatusTransition(detailOrder, 'shipped')"
           >
-            标记发货
+            {{ detailOrder.status === 'customer_confirmed' ? '审核通过并发货' : '标记发货' }}
           </el-button>
           <el-button
             v-if="canTransition(detailOrder, 'signed')"

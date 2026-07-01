@@ -48,13 +48,13 @@ const title = computed(() => ({ conversations: '跨租户会话', orders: '跨�
 /**
  * 根据当前 Tab 动态返回状态筛选选项
  * 会话状态：AI处理中 → 待人工 → 人工处理中 → 已关闭
- * 订单状态：草稿 → 待客户确认 → 客户已确认 → 已发货 → 已签收 → 已取消
+ * 订单状态：草稿 → 待客户确认 → 待审核发货 → 已发货 → 已签收 → 已取消
  * 知识库状态：处理中 → 就绪 → 失败
  */
 const statusOptions = computed(() => activeTab.value === 'conversations'
   ? [['ai_processing', 'AI处理中'], ['pending_human', '待人工'], ['human_processing', '人工处理中'], ['closed', '已关闭']]
   : activeTab.value === 'orders'
-    ? [['draft', '草稿'], ['pending_customer_confirm', '待客户确认'], ['customer_confirmed', '客户已确认'], ['shipped', '已发货'], ['signed', '已签收'], ['cancelled', '已取消']]
+    ? [['draft', '草稿'], ['pending_customer_confirm', '待客户确认'], ['customer_confirmed', '待审核发货'], ['shipped', '已发货'], ['signed', '已签收'], ['cancelled', '已取消']]
     : [['processing', '处理中'], ['ready', '就绪'], ['failed', '失败']])
 
 /**

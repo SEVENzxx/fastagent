@@ -145,3 +145,53 @@ cases:
       reply_not_empty: true
       reply_contains_any: ["确认", "订单", "下单"]
       max_latency_ms: 12000
+
+  - name: "订单-推荐后这款下单并改地址确认"
+    description: "回归：商品推荐列表后说这款能进入下单；最终确认页修改地址后 Pending 不丢失"
+    risk_level: "p1"
+    business_constraints:
+      - "推荐列表只有一个商品时，'这款'应解析为该商品，而不是拿整句搜索商品"
+      - "最终确认页修改地址后，下一句确认应继续提交订单"
+      - "不得回复当前没有需要确认的流程或订单功能开发中"
+    tags: ["order", "p1", "regression", "graph"]
+    messages:
+      - description: "用户按预算找平板"
+        content: "给我推荐2000-3000的平板电脑"
+        expected:
+          status_code: 200
+          reply_not_empty: true
+          reply_contains_any: ["平板", "商品", "Tab"]
+      - description: "用户用这款指代推荐结果下单"
+        content: "就买这款吧"
+        expected:
+          status_code: 200
+          reply_not_empty: true
+          reply_contains_any: ["您要购买的是", "数量", "确认"]
+          reply_not_contains: ["未找到相关商品"]
+      - description: "用户确认商品和数量"
+        content: "确认"
+        expected:
+          status_code: 200
+          reply_not_empty: true
+          reply_contains_any: ["收货地址", "联系电话"]
+      - description: "用户提供地址和电话"
+        content: "收货地址：四川省成都市恒大 手机号：18223008485"
+        expected:
+          status_code: 200
+          reply_not_empty: true
+          reply_contains_any: ["请确认订单信息", "提交订单"]
+      - description: "用户在最终确认页修改地址"
+        content: "四川省成都市阳光城"
+        expected:
+          status_code: 200
+          reply_not_empty: true
+          reply_contains_any: ["四川省成都市阳光城", "确认订单", "提交订单"]
+          reply_not_contains: ["当前没有需要确认", "功能正在开发"]
+      - description: "用户重新确认提交订单"
+        content: "确认"
+    expected:
+      status_code: 200
+      reply_not_empty: true
+      reply_contains_any: ["订单", "已创建", "待坐席审核", "待发货"]
+      reply_not_contains: ["当前没有需要确认", "功能正在开发", "未找到相关商品", "已发货"]
+      max_latency_ms: 30000

@@ -31,7 +31,7 @@ function canTransition(order: OrderResponse | Record<string, any>, toStatus: str
   const transitions: Record<string, string[]> = {
     draft: ['pending_customer_confirm', 'cancelled'],
     pending_customer_confirm: ['customer_confirmed', 'cancelled'],
-    customer_confirmed: ['agent_confirmed', 'cancelled'],
+    customer_confirmed: ['shipped', 'cancelled'],
     agent_confirmed: ['shipped', 'cancelled'],
     shipped: ['signed'],
     signed: [],
@@ -88,7 +88,7 @@ function canTransition(order: OrderResponse | Record<string, any>, toStatus: str
           type="warning"
           @click.stop="emit('statusChange', orderId(order), 'shipped')"
         >
-          发货
+          {{ order.status === 'customer_confirmed' ? '审核并发货' : '发货' }}
         </el-button>
         <el-button
           v-if="canTransition(order, 'cancelled')"

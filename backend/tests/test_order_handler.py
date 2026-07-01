@@ -19,6 +19,7 @@ os.environ.setdefault("FASTAGENT_TEST_MODE", "1")
 
 from collections.abc import Generator
 from datetime import datetime, timezone, timedelta
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -108,7 +109,7 @@ class FakeOrderSkill:
         db: Any = None,
         **kwargs: Any,
     ) -> ToolResult:
-        """模拟创建订单草稿。"""
+        """模拟创建客户已确认订单。"""
         _ = db
         items = kwargs.get("items") or []
         FakeOrderSkill.call_log.append({
@@ -127,9 +128,12 @@ class FakeOrderSkill:
         order_id = f"mock_{tenant_id}_{contact_id}"
         item = items[0]
         reply = "\n".join([
-            "订单已创建（模拟）：",
-            f"  商品：{item.get('product_name', '')} ×{item.get('quantity', 1)}",
-            f"  订单号：#mock_{tenant_id}_{contact_id}",
+            f"订单已创建，订单号：#mock_{tenant_id}_{contact_id}",
+            "当前状态：待坐席审核发货。",
+            f"商品：{item.get('product_name', '')} ×{item.get('quantity', 1)}",
+            f"收货地址：{kwargs.get('shipping_address', '')}",
+            f"联系电话：{kwargs.get('receiver_phone', '')}",
+            "坐席审核通过后会安排发货，发货后将通知您。",
         ])
         return ToolResult(
             ok=True,
@@ -138,7 +142,7 @@ class FakeOrderSkill:
                 "order_id": order_id,
                 "message": reply,
                 "items": items,
-                "status": "draft",
+                "status": "customer_confirmed",
             },
         )
 
@@ -233,6 +237,34 @@ class FakeOrderSkill:
             ok=True,
             skill_name="arrange_shipping",
             result={"order_id": order_id, "status": "shipped", "message": "订单已发货。"},
+        )
+
+    @staticmethod
+    async def create_refund(
+        *,
+        tenant_id: int,
+        contact_id: int | None = None,
+        db: Any = None,
+        **kwargs: Any,
+    ) -> ToolResult:
+        """模拟提交售后申请。"""
+        _ = db
+        order_id = kwargs.get("order_id", "")
+        reason = kwargs.get("reason", "")
+        FakeOrderSkill.call_log.append({
+            "method": "create_refund",
+            "tenant_id": tenant_id,
+            "contact_id": contact_id,
+            "order_id": order_id,
+            "reason": reason,
+        })
+        return ToolResult(
+            ok=True,
+            skill_name="create_refund",
+            result={
+                "order_id": order_id,
+                "message": f"订单 #{order_id} 售后申请已提交。原因：{reason}",
+            },
         )
 
     @staticmethod
@@ -883,6 +915,110 @@ class TestListIntentWithActive:
 
 
 # ══════════════════════════════════════════════
+# 6. OrderSkill 下单状态
+# ══════════════════════════════════════════════
+
+
+class TestOrderSkillCreateDraft:
+    """create_order_draft 在下单图语义下创建客户已确认订单。"""
+
+    @pytest.mark.asyncio
+    async def test_create_order_draft_uses_customer_confirmed(self) -> None:
+        """用户已在图内确认订单，创建时应进入 customer_confirmed。"""
+        import app.ai.skills.orders as order_skill
+
+        captured: dict[str, Any] = {}
+
+        async def _fake_create_order_with_status(**kwargs: Any) -> ToolResult:
+            captured.update(kwargs)
+            return ToolResult(
+                ok=True,
+                skill_name=kwargs["skill_name"],
+                result={"order_id": "1", "message": "ok"},
+            )
+
+        with patch.object(order_skill, "_create_order_with_status", _fake_create_order_with_status):
+            result = await order_skill.create_order_draft(
+                tenant_id=1,
+                contact_id=1,
+                db=object(),
+                items=[{"product_name": "测试商品", "quantity": 1}],
+            )
+
+        assert result.ok
+        assert captured["status"] == "customer_confirmed"
+
+
+class TestOrderNotificationService:
+    """订单状态通知服务。"""
+
+    @pytest.mark.asyncio
+    async def test_notify_order_shipped_creates_system_message_and_broadcasts(self) -> None:
+        """订单发货通知应落库、出站投递并广播到会话。"""
+        import app.services.order_notification_service as notification_service
+
+        order = SimpleNamespace(
+            id=1001,
+            tenant_id=1,
+            contact_id=2,
+            conversation_id=3,
+            items=[
+                SimpleNamespace(
+                    product_snapshot={"product_name": "测试耳机"},
+                    quantity=1,
+                )
+            ],
+        )
+        conversation = SimpleNamespace(id=3, tenant_id=1, contact_id=2)
+        message = SimpleNamespace(
+            id=9,
+            conversation_id=3,
+            sender_type="SYSTEM",
+            content_type="text",
+            content="您的订单 #1001 已发货，请注意查收。",
+            metadata_={"event": "order.shipped"},
+            reply_to_id=None,
+            is_read=True,
+            is_recalled=False,
+            created_at=datetime.now(timezone.utc),
+        )
+        captured: dict[str, Any] = {}
+
+        async def _fake_get_conversation(db: Any, conversation_id: int, tenant_id: int) -> Any:
+            captured["get_conversation"] = (db, conversation_id, tenant_id)
+            return conversation
+
+        async def _fake_create_message(db: Any, conversation_id: int, tenant_id: int, body: Any) -> Any:
+            captured["create_message"] = (db, conversation_id, tenant_id, body)
+            return conversation, message
+
+        async def _fake_deliver_message(db: Any, conv: Any, msg: Any) -> Any:
+            captured["deliver_message"] = (db, conv, msg)
+            return msg
+
+        async def _fake_publish(conversation_id: int, payload: dict[str, Any]) -> None:
+            captured["publish"] = (conversation_id, payload)
+
+        with (
+            patch.object(notification_service.conversation_service, "get_conversation", _fake_get_conversation),
+            patch.object(notification_service.conversation_service, "create_message", _fake_create_message),
+            patch.object(notification_service.outbound_message_service, "deliver_message", _fake_deliver_message),
+            patch.object(notification_service.manager, "publish", _fake_publish),
+        ):
+            result = await notification_service.notify_order_shipped(object(), order)
+
+        assert result is message
+        _, _, _, body = captured["create_message"]
+        assert body.sender_type == "SYSTEM"
+        assert body.metadata["event"] == "order.shipped"
+        assert "已发货" in body.content
+        assert "测试耳机" in body.content
+        published_conversation_id, published_payload = captured["publish"]
+        assert published_conversation_id == 3
+        assert published_payload["type"] == "message.created"
+
+
+# ══════════════════════════════════════════════
 # 6. 未实现场景 + 边界
 # ══════════════════════════════════════════════
 
@@ -943,6 +1079,7 @@ class TestOrderCreationGraph:
     @pytest.mark.asyncio
     async def test_create_full_flow(self) -> None:
         """下单完整流程：首轮→补地址→确认→完成。"""
+        FakeOrderSkill.reset()
         handler = OrderHandler(skill=FakeOrderSkill)
         ctx = make_context()
         decision = make_decision("order.create", text="买耳机")
@@ -966,6 +1103,119 @@ class TestOrderCreationGraph:
         assert result4.pending_directive == PendingDirective.CLEAR
         assert result4.pending_state is None
         assert "订单" in result4.reply or "耳机" in result4.reply
+        assert "待坐席审核" in result4.reply
+        assert "已发货" not in result4.reply
+        methods = [call.get("method") for call in FakeOrderSkill.call_log]
+        assert "create_order_draft" in methods
+        assert "simulate_payment" not in methods
+        assert "agent_approve" not in methods
+        assert "arrange_shipping" not in methods
+        create_call = next(call for call in FakeOrderSkill.call_log if call.get("method") == "create_order_draft")
+        assert create_call["receiver_phone"] == "13800138000"
+        assert create_call["conversation_id"] == ctx.conversation_id
+
+    @pytest.mark.asyncio
+    async def test_create_from_visible_single_candidate_deixis(self) -> None:
+        """推荐列表只有一个候选时，"这款"应直接解析为该候选并进入下单。"""
+        handler = OrderHandler(skill=FakeOrderSkill)
+        ctx = make_context(
+            product_candidates=[{"id": 101, "name": "TabPro 11 平板电脑"}],
+            last_visible_products=[
+                {"index": 1, "product_id": "101", "name": "TabPro 11 平板电脑"},
+            ],
+            last_focus_product_id=None,
+            last_product_id=None,
+            last_product_name=None,
+        )
+        decision = make_decision("order.create", text="就买这款吧")
+
+        result = await handler.execute(decision, ctx)
+
+        assert result.pending_directive == PendingDirective.SET
+        assert result.pending_state is not None
+        assert "TabPro 11 平板电脑" in result.reply
+        assert "就买这款吧" not in result.reply
+
+    @pytest.mark.asyncio
+    async def test_create_from_visible_ordinal_reference(self) -> None:
+        """下单第一款应从最近可见商品列表解析商品。"""
+        handler = OrderHandler(skill=FakeOrderSkill)
+        ctx = make_context(
+            product_candidates=[
+                {"id": 101, "name": "TabPro 11 平板电脑"},
+                {"id": 102, "name": "TabPro 12 平板电脑"},
+            ],
+            last_visible_products=[
+                {"index": 1, "product_id": "101", "name": "TabPro 11 平板电脑"},
+                {"index": 2, "product_id": "102", "name": "TabPro 12 平板电脑"},
+            ],
+        )
+        decision = make_decision("order.create", text="下单第一款")
+
+        result = await handler.execute(decision, ctx)
+
+        assert result.pending_directive == PendingDirective.SET
+        assert result.pending_state is not None
+        assert "TabPro 11 平板电脑" in result.reply
+
+    @pytest.mark.asyncio
+    async def test_create_summary_address_update_keeps_pending(self) -> None:
+        """最终确认页修改地址后，应继续保留下单 Pending 并允许再次确认提交。"""
+        FakeOrderSkill.reset()
+        handler = OrderHandler(skill=FakeOrderSkill)
+        ctx = make_context()
+        decision = make_decision("order.create", text="买耳机")
+
+        result1 = await handler.execute(decision, ctx)
+        assert result1.pending_state is not None
+
+        result2 = await handler.resume(result1.pending_state, "确认", ctx)
+        assert result2.pending_state is not None
+
+        result3 = await handler.resume(result2.pending_state, "北京市朝阳区 13800138000", ctx)
+        assert result3.pending_state is not None
+
+        result4 = await handler.resume(result3.pending_state, "上海市浦东新区", ctx)
+        assert result4.pending_directive == PendingDirective.SET
+        assert result4.pending_state is not None
+        assert "上海市浦东新区" in result4.reply
+        assert "确认" in result4.reply
+
+        result5 = await handler.resume(result4.pending_state, "确认", ctx)
+        assert result5.pending_directive == PendingDirective.CLEAR
+        assert "订单" in result5.reply
+        assert "待坐席审核" in result5.reply
+        assert "已发货" not in result5.reply
+        assert any(
+            call.get("method") == "create_order_draft"
+            and call.get("shipping_address") == "上海市浦东新区"
+            for call in FakeOrderSkill.call_log
+        )
+
+    @pytest.mark.asyncio
+    async def test_create_summary_invalid_then_confirm_submits(self) -> None:
+        """最终确认页无效输入后再确认，不应被残留 error 阻断提交。"""
+        FakeOrderSkill.reset()
+        handler = OrderHandler(skill=FakeOrderSkill)
+        ctx = make_context()
+        decision = make_decision("order.create", text="买耳机")
+
+        result1 = await handler.execute(decision, ctx)
+        assert result1.pending_state is not None
+
+        result2 = await handler.resume(result1.pending_state, "确认", ctx)
+        assert result2.pending_state is not None
+
+        result3 = await handler.resume(result2.pending_state, "北京市朝阳区 13800138000", ctx)
+        assert result3.pending_state is not None
+
+        result4 = await handler.resume(result3.pending_state, "好", ctx)
+        assert result4.pending_directive == PendingDirective.SET
+        assert result4.pending_state is not None
+
+        result5 = await handler.resume(result4.pending_state, "确认", ctx)
+        assert result5.pending_directive == PendingDirective.CLEAR
+        assert any(call.get("method") == "create_order_draft" for call in FakeOrderSkill.call_log)
 
     @pytest.mark.asyncio
     async def test_create_cancel_during_confirm(self) -> None:
@@ -1033,6 +1283,41 @@ class TestOrderCreationGraph:
 # ══════════════════════════════════════════════
 # 6. Graph Resume trace_id 生命周期
 # ══════════════════════════════════════════════
+
+
+class TestOrderRefundGraph:
+    """order.refund 使用 OrderRefundGraph。"""
+
+    @pytest.mark.asyncio
+    async def test_refund_empty_reason_keeps_pending(self) -> None:
+        """售后原因为空时，应继续保留 Pending 等待用户补充原因。"""
+        FakeOrderSkill.reset()
+        handler = OrderHandler(skill=FakeOrderSkill)
+        ctx = make_context()
+        decision = make_decision("order.refund", text="申请售后订单 123456789012345")
+
+        result1 = await handler.execute(decision, ctx)
+        assert result1.pending_directive == PendingDirective.SET
+        assert result1.pending_state is not None
+        assert "原因" in result1.reply
+
+        result2 = await handler.resume(result1.pending_state, "   ", ctx)
+        assert result2.pending_directive == PendingDirective.SET
+        assert result2.pending_state is not None
+        assert "原因" in result2.reply
+
+        result3 = await handler.resume(result2.pending_state, "商品质量问题", ctx)
+        assert result3.pending_directive == PendingDirective.SET
+        assert result3.pending_state is not None
+        assert "商品质量问题" in result3.reply
+
+        result4 = await handler.resume(result3.pending_state, "确认", ctx)
+        assert result4.pending_directive == PendingDirective.CLEAR
+        assert any(
+            call.get("method") == "create_refund"
+            and call.get("reason") == "商品质量问题"
+            for call in FakeOrderSkill.call_log
+        )
 
 
 class TestGraphResumeTraceId:

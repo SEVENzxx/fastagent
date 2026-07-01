@@ -114,16 +114,20 @@ def fake_skill_registry() -> HandlerRegistry:
             resolved=False, need_clarification=True, reason="未找到匹配商品",
         ),
     )
-    product_handler = ProductHandler(skill=FakeProductSkill, resolver=fake_resolver)
+    product_handler = ProductHandler(
+        skill=FakeProductSkill,
+        resolver=fake_resolver,
+        knowledge_skill=FakeKnowledgeSkill,
+    )
     for sid in ("product.catalog", "product.filter_search", "product.semantic_recommend",
                 "product.sku_query", "product.detail", "product.compare",
-                "product.attribute_query", "product.pagination_sort"):
+                "product.attribute_query", "product.usage", "product.pagination_sort"):
         r.register(sid, product_handler)
 
     # ── Order 场景 ──
     order_handler = OrderHandler(skill=FakeOrderSkill)
     for sid in ("order.list", "order.filter", "order.detail", "order.shipping_status",
-                "order.create", "order.cancel", "order.confirm"):
+                "order.create", "order.cancel", "order.confirm", "order.refund"):
         r.register(sid, order_handler)
 
     # ── Knowledge 场景 ──
@@ -212,16 +216,16 @@ class TestScenarioPermissionValidation:
         assert result.metadata["scenario_id"] == "order.list"
 
     @pytest.mark.asyncio
-    async def test_product_filter_search_no_llm(
+    async def test_product_filter_search_uses_entity_llm(
         self,
         arch_service: AssistantService,
         arch_mocks: dict[str, Any],
     ) -> None:
-        """product.filter_search → llm_calls == 0。"""
+        """product.filter_search → 实体抽取会调用 1 次 LLM。"""
         await (ScenarioTestBuilder(arch_service, arch_mocks)
             .user_says("耳机")
             .scenario_is("product.filter_search")
-            .expect_llm_calls(0)
+            .expect_llm_calls(1)
             .run())
 
     @pytest.mark.asyncio
@@ -778,7 +782,7 @@ class TestProductFakeSkillContent:
         result = await (ScenarioTestBuilder(fake_skill_service, fake_skill_mocks)
             .user_says("耳机")
             .scenario_is("product.filter_search")
-            .expect_llm_calls(0)
+            .expect_llm_calls(1)
             .expect_skill_calls("search_products")
             .expect_reply_contains("无线耳机")
             .run())
@@ -870,7 +874,7 @@ class TestProductFakeSkillContent:
         result = await (ScenarioTestBuilder(fake_skill_service, fake_skill_mocks)
             .user_says("无线蓝牙耳机")
             .scenario_is("product.detail")
-            .expect_llm_calls(0)
+            .expect_llm_calls(1)
             .expect_skill_calls("get_detail")
             .expect_reply_contains("无线蓝牙耳机")
             .run())
@@ -1252,6 +1256,7 @@ class TestKnowledgeFakeSkillDetailedContent:
             "Tab 11 支持快充功能，15 分钟可充至 50%。",
             title="Tab 11 充电说明",
             token_count=30,
+            product_id="101",
         )
 
         result = await (ScenarioTestBuilder(fake_skill_service, fake_skill_mocks)

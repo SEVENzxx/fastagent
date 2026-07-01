@@ -55,7 +55,7 @@ async def _run_search_all():
     tenant_id = 0  # 改成你实际用的 tenant_id
 
     queries = {
-        VectorDomain.INTENT_SAMPLE: "那我买一个这个耳机",
+        VectorDomain.INTENT_SAMPLE: "有什么产品推荐?",
         # VectorDomain.KNOWLEDGE_CHUNK: "这款产品适合跑步的时候使用吗？",
         # VectorDomain.QA_PAIR: "售后政策是什么",
         # VectorDomain.PRODUCT: "咨询一下商品",

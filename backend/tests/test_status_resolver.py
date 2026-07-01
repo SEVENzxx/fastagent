@@ -45,6 +45,7 @@ class TestStatusResolver:
 
     def test_confirmed(self) -> None:
         assert StatusResolver.resolve("已确认") == "customer_confirmed"
+        assert StatusResolver.resolve("待审核") == "customer_confirmed"
 
     def test_no_match(self) -> None:
         assert StatusResolver.resolve("随便看看") is None
@@ -105,6 +106,9 @@ class TestDisplayName:
 
     def test_cancelled(self) -> None:
         assert StatusResolver.display_name("cancelled") == "已取消"
+
+    def test_customer_confirmed(self) -> None:
+        assert StatusResolver.display_name("customer_confirmed") == "待审核"
 
     def test_unknown(self) -> None:
         assert StatusResolver.display_name("unknown_status") == "unknown_status"
