@@ -14,7 +14,7 @@ STATUS_TRANSITIONS: dict[str, set[str]] = {
     "draft": {"pending_customer_confirm", "cancelled"},
     "pending_customer_confirm": {"customer_confirmed", "paid", "cancelled"},
     "paid": {"agent_confirmed", "cancelled"},
-    "customer_confirmed": {"agent_confirmed", "cancelled"},
+    "customer_confirmed": {"agent_confirmed", "shipped", "cancelled"},
     "agent_confirmed": {"shipped", "cancelled"},
     "shipped": {"signed", "refunding"},
     "signed": {"refunding"},
@@ -110,8 +110,8 @@ class OrderCreate(CamelModel):
     @field_validator("status")
     @classmethod
     def status_valid(cls, v: str) -> str:
-        if v not in {"draft", "pending_customer_confirm"}:
-            raise ValueError("创建时状态只能为 draft 或 pending_customer_confirm")
+        if v not in {"draft", "pending_customer_confirm", "customer_confirmed"}:
+            raise ValueError("创建时状态只能为 draft、pending_customer_confirm 或 customer_confirmed")
         return v
 
 
@@ -132,6 +132,7 @@ class OrderStatusTransition(CamelModel):
     """订单状态变更"""
 
     status: str = Field(description="目标状态")
+    reason: str | None = Field(None, description="变更原因（取消时必填）")
 
     @field_validator("status")
     @classmethod

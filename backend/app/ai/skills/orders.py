@@ -103,7 +103,7 @@ async def create_order_draft(
     db: AsyncSession,
     **kwargs,
 ) -> ToolResult:
-    """创建订单草稿。商品必须已经明确，不能用整句用户话术兜底成商品名。"""
+    """创建客户已确认订单。商品必须已经明确，不能用整句用户话术兜底成商品名。"""
     items_raw = kwargs.get("items") or []
     order_items = []
     for it in items_raw:
@@ -128,7 +128,7 @@ async def create_order_draft(
         db=db,
         order_items=order_items,
         kwargs=kwargs,
-        status="draft",
+        status="customer_confirmed",
         skill_name="create_order_draft",
     )
 
@@ -185,7 +185,16 @@ async def _create_order_with_status(
     return ToolResult(
         ok=True,
         skill_name=skill_name,
-        result=payload | {"message": _build_create_message(payload["items"], order.payable_amount, payload["missing_info"])},
+        result=payload | {
+            "message": _build_create_message(
+                payload["items"],
+                order.payable_amount,
+                payload["missing_info"],
+                order_id=payload["order_id"],
+                shipping_address=payload["shipping_address"],
+                receiver_phone=payload["receiver_phone"],
+            )
+        },
     )
 
 
@@ -463,7 +472,7 @@ async def simulate_payment(
 ) -> ToolResult:
     """模拟支付 — pending_customer_confirm → paid。
 
-    下单图自动流程的一部分，将订单标记为已支付。
+    保留给需要支付模拟的内部流程使用，将订单标记为已支付。
     """
     order_id = kwargs.get("order_id")
     if order_id is None:
@@ -512,9 +521,9 @@ async def agent_approve(
     db: AsyncSession,
     **kwargs,
 ) -> ToolResult:
-    """坐席审批通过 — paid → agent_confirmed。
+    """坐席审批通过 — customer_confirmed/paid → agent_confirmed。
 
-    下单图自动流程的一部分（auto_approve=True 时自动调用）。
+    由后台审核流程调用，审核通过后进入待发货状态。
     """
     order_id = kwargs.get("order_id")
     if order_id is None:
@@ -565,7 +574,7 @@ async def arrange_shipping(
 ) -> ToolResult:
     """安排发货 — agent_confirmed → shipped。
 
-    下单图自动流程的一部分，将订单标记为已发货并记录发货时间。
+    后台发货流程调用，将订单标记为已发货并记录发货时间。
     """
     order_id = kwargs.get("order_id")
     if order_id is None:
@@ -877,17 +886,31 @@ def _build_create_message(
     items: list[dict],
     payable: float,
     missing: list[str],
+    *,
+    order_id: str,
+    shipping_address: str | None,
+    receiver_phone: str | None,
 ) -> str:
-    lines = ["已为您创建订单："]
+    lines = [
+        f"订单已创建，订单号：#{order_id}",
+        "当前状态：待坐席审核发货。",
+        "商品明细：",
+    ]
     for it in items:
         lines.append(
             f"  • {it['product_name']} ×{it['quantity']}  "
             f"单价 ¥{it['unit_price']:.2f}  小计 ¥{it['subtotal']:.2f}"
         )
     lines.append(f"应付金额：¥{payable:.2f}")
+    if shipping_address:
+        lines.append(f"收货地址：{shipping_address}")
+    if receiver_phone:
+        lines.append(f"联系电话：{receiver_phone}")
     if missing:
         missing_labels = [FIELD_LABELS.get(m, m) for m in missing]
         lines.append(f"请补充：{'、'.join(missing_labels)}")
+    else:
+        lines.append("坐席审核通过后会安排发货，发货后将通知您。")
     return "\n".join(lines)
 
 

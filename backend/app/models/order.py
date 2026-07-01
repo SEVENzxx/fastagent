@@ -11,7 +11,7 @@ from app.utils.id_generator import generate_id
 
 
 class Order(Base):
-    """订单主表 —— 状态机: draft → pending_customer_confirm → paid → agent_confirmed → shipped → signed / cancelled"""
+    """订单主表 —— 状态机: draft → pending_customer_confirm/customer_confirmed → agent_confirmed 或 shipped → signed / cancelled"""
 
     __tablename__ = "orders"
 
@@ -20,7 +20,7 @@ class Order(Base):
     contact_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("contacts.id"), nullable=False, comment="下单客户")
     conversation_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("conversations.id"), nullable=True, comment="来源会话")
     employee_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("employees.id"), nullable=True, comment="负责坐席")
-    status: Mapped[str] = mapped_column(String(30), default="draft", server_default="draft", comment="draft / pending_customer_confirm / paid / agent_confirmed / shipped / signed / cancelled")
+    status: Mapped[str] = mapped_column(String(30), default="draft", server_default="draft", comment="draft / pending_customer_confirm / customer_confirmed / paid / agent_confirmed / shipped / signed / cancelled")
     total_amount: Mapped[float] = mapped_column(Numeric(12, 2), default=0, server_default="0", comment="商品合计")
     discount_amount: Mapped[float] = mapped_column(Numeric(12, 2), default=0, server_default="0", comment="优惠金额")
     payable_amount: Mapped[float] = mapped_column(Numeric(12, 2), default=0, server_default="0", comment="应付金额")

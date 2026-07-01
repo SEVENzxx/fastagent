@@ -15,7 +15,7 @@ from app.schemas.order import (
     OrderStatusTransition,
     OrderUpdate, OrderItemResponse,
 )
-from app.services import order_service
+from app.services import order_notification_service, order_service
 
 router = APIRouter(prefix="/orders", tags=["订单"])
 
@@ -150,12 +150,17 @@ async def transition_order_status(
     """订单状态流转"""
     try:
         order = await order_service.transition_order_status(
-            db, order_id, current_user.tenant_id, body.status
+            db, order_id, current_user.tenant_id, body.status,
+            reason=body.reason,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     if not order:
         raise HTTPException(status_code=404, detail="订单不存在")
+    if order.status == "shipped":
+        await order_notification_service.notify_order_shipped(db, order)
+    elif order.status == "cancelled" and body.reason:
+        await order_notification_service.notify_order_cancelled(db, order, body.reason)
     return _to_response(order)
 
 
@@ -169,6 +174,11 @@ async def batch_transition_status(
     succeeded, failed = await order_service.batch_transition_status(
         db, current_user.tenant_id, body.order_ids, body.status
     )
+    if body.status == "shipped":
+        for order_id in succeeded:
+            order = await order_service.get_order(db, order_id, current_user.tenant_id)
+            if order is not None:
+                await order_notification_service.notify_order_shipped(db, order)
     return {"succeeded": [str(s) for s in succeeded], "failed": [str(f) for f in failed]}
 
 

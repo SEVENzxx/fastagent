@@ -95,6 +95,7 @@ async def create_order(
 
     discount = Decimal("0")
     payable = total_amount - discount
+    confirmed_at = datetime.now(timezone.utc) if body.status == "customer_confirmed" else None
 
     order = Order(
         tenant_id=tenant_id,
@@ -110,6 +111,7 @@ async def create_order(
         remark=body.remark,
         created_by_type=created_by_type,
         created_by_employee_id=created_by_employee_id,
+        confirmed_at=confirmed_at,
         metadata_={"missing_info": _detect_missing_info(body)},
     )
     db.add(order)
@@ -184,8 +186,14 @@ async def transition_order_status(
     order_id: int,
     tenant_id: int,
     to_status: str,
+    *,
+    reason: str | None = None,
 ) -> Order | None:
-    """变更订单状态，校验状态流转规则并自动处理库存。"""
+    """变更订单状态，校验状态流转规则并自动处理库存。
+
+    Args:
+        reason: 状态变更原因。取消时必填，用于推送客户。
+    """
     order = await get_order(db, order_id, tenant_id)
     if order is None:
         return None
@@ -199,10 +207,18 @@ async def transition_order_status(
 
     now = datetime.now(timezone.utc)
 
-    if to_status == "agent_confirmed":
-        await _deduct_inventory_for_order(db, order, now)
-    elif to_status == "cancelled":
+    from_status = order.status
+
+    if to_status == "cancelled":
+        if reason:
+            meta = dict(order.metadata_ or {})
+            meta["cancel_reason"] = reason
+            order.metadata_ = meta
         await _restore_inventory_for_order(db, order, now)
+    elif to_status == "agent_confirmed":
+        await _deduct_inventory_for_order(db, order, now)
+    elif to_status == "shipped" and from_status != "agent_confirmed":
+        await _deduct_inventory_for_order(db, order, now)
 
     order.status = to_status
     order.updated_at = now
@@ -408,9 +424,9 @@ async def _deduct_inventory_for_order(
     order: Order,
     now: datetime,
 ) -> None:
-    """订单进入坐席确认态时扣减库存。
+    """订单进入坐席确认或发货态时扣减库存。
 
-    创建订单和客户确认只表示意向，不锁库存；坐席审核通过后才认为订单有效。
+    创建订单和客户确认只表示意向，不锁库存；坐席审核通过或直接发货后才认为订单有效。
     metadata.inventory_deducted 用于避免重复扣减。
     """
     metadata = dict(order.metadata_ or {})
