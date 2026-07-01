@@ -18,8 +18,6 @@ from typing import Any
 from app.common.constants.business import KNOWLEDGE_DEIXIS_KEYWORDS, KNOWLEDGE_SHORT_CONTENT_TOKEN_LIMIT
 from app.ai.context.pending_state import PendingDirective
 from app.ai.handlers.base import BaseHandler, HandlerResult, call_skill_failed
-from app.ai.llm.gateway import LLMUseCase, complete
-from app.ai.prompts.knowledge_summary import build_knowledge_summary_messages
 from app.ai.recognition.types import ScenarioDecision
 from app.ai.reply_builders.knowledge import KnowledgeReplyBuilder
 from app.ai.context.session_context import SessionContext
@@ -228,7 +226,7 @@ class KnowledgeHandler(BaseHandler):
         knowledge_context = "\n\n".join(
             str(item.get("content", "")) for item in items if item.get("content")
         )
-        summary = await self._summarize_with_llm(text, knowledge_context, tenant_id)
+        summary = await KnowledgeReplyBuilder.summarize(text, knowledge_context, tenant_id)
         reply = KnowledgeReplyBuilder.knowledge_summary(items, summary)
         return HandlerResult(
             scenario_id=scenario,
@@ -250,25 +248,6 @@ class KnowledgeHandler(BaseHandler):
         检查文本是否包含指代关键词。
         """
         return any(kw in text for kw in KNOWLEDGE_DEIXIS_KEYWORDS)
-
-    async def _summarize_with_llm(
-        self,
-        user_text: str,
-        knowledge_context: str,
-        tenant_id: int,
-    ) -> str:
-        """基于知识库内容进行 LLM 摘要。"""
-        messages = build_knowledge_summary_messages(user_text, knowledge_context)
-        try:
-            return await complete(
-                use_case=LLMUseCase.RAG_REPLY,
-                messages=messages,
-                tenant_id=tenant_id,
-                temperature=0.2,
-            )
-        except Exception:
-            logger.warning("知识摘要 LLM 失败，降级返回拼接内容: text=%s", user_text[:40])
-            return knowledge_context[:500]
 
     async def _call_skill(
         self,

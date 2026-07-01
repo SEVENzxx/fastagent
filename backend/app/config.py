@@ -121,7 +121,7 @@ class Settings(BaseSettings):
     HARNESS_API_TOKEN: str = ""         # Harness 内部测试 API 的 Token 认证
 
     # ── 订单流程 ──
-    ORDER_AUTO_APPROVE: bool = True  # 下单后坐席自动审批（为 False 时等待坐席手动审批）
+    ORDER_AUTO_APPROVE: bool = False  # 旧自动审批开关；客户侧下单图不再自动审批/发货
 
     # ── 企业微信（WeCom 出站 API）──
     WECOM_TIMEOUT_SECONDS: float = 10.0

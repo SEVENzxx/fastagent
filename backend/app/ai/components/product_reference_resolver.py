@@ -1,13 +1,14 @@
 """ProductReferenceResolver — 产品引用解析组件。
 
-纯规则 + 上下文实现，不调用 LLM。直接调 ProductSkill，无抽象层。
+纯规则 + 上下文实现，不调用 LLM。产品校验和搜索通过注入的 ProductLookup 完成，
+避免组件绕过 SkillGateway 直接访问数据库。
 """
 
 from __future__ import annotations
 
 import logging
 import re
-from typing import Any
+from typing import Any, Protocol
 
 from pydantic import BaseModel, Field
 
@@ -32,6 +33,22 @@ class ProductReferenceResult(BaseModel):
     need_clarification: bool = False
     reason: str = ""
 
+
+class ProductLookup(Protocol):
+    """产品查询端口，由 Handler 注入基于 SkillGateway 的实现。"""
+
+    async def get_detail(self, product_id: int, tenant_id: int) -> dict[str, Any] | None:
+        """查询并校验产品详情。"""
+        ...
+
+    async def search(
+        self,
+        name: str,
+        tenant_id: int,
+        limit: int = 10,
+    ) -> list[dict[str, Any]]:
+        """按名称搜索产品候选。"""
+        ...
 
 # ── 正则与解析辅助 ──
 
@@ -146,10 +163,10 @@ def _parse_ordinal_from_text(text: str) -> int | None:
 
 
 class ProductReferenceResolver:
-    """产品引用解析器。直接调 ProductSkill，无抽象层。"""
+    """产品引用解析器。"""
 
-    def __init__(self) -> None:
-        pass
+    def __init__(self, lookup: ProductLookup | None = None) -> None:
+        self._lookup = lookup
 
     async def resolve(
         self, text: str, entities: dict[str, Any],
@@ -183,29 +200,24 @@ class ProductReferenceResolver:
         # 步骤 5: 产品名搜索
         return await self._try_resolve_by_name(stripped, tenant_id)
 
-    # ── 内部查询（直接调 ProductSkill） ──
+    # ── 内部查询（通过注入端口，避免组件直接开 DB session） ──
 
-    @staticmethod
-    async def _validate(pid: int, tenant_id: int) -> dict[str, Any] | None:
+    async def _validate(self, pid: int, tenant_id: int) -> dict[str, Any] | None:
+        if self._lookup is None:
+            logger.debug("产品校验缺少 lookup: pid=%s tenant_id=%s", pid, tenant_id)
+            return None
         try:
-            from app.integrations.database import AsyncSessionLocal
-            from app.ai.skills.products import ProductSkill
-            async with AsyncSessionLocal() as db:
-                return await ProductSkill.get_detail(db=db, tenant_id=tenant_id, product_id=pid)
+            return await self._lookup.get_detail(pid, tenant_id)
         except Exception:
             logger.debug("产品校验失败: pid=%s tenant_id=%s", pid, tenant_id)
             return None
 
-    @staticmethod
-    async def _search(name: str, tenant_id: int, limit: int = 10) -> list[dict[str, Any]]:
+    async def _search(self, name: str, tenant_id: int, limit: int = 10) -> list[dict[str, Any]]:
+        if self._lookup is None:
+            logger.debug("产品搜索缺少 lookup: name=%s tenant_id=%s", name[:80], tenant_id)
+            return []
         try:
-            from app.integrations.database import AsyncSessionLocal
-            from app.ai.skills.products import ProductSkill, SearchProductParams
-            async with AsyncSessionLocal() as db:
-                return await ProductSkill.search_products(
-                    db=db, tenant_id=tenant_id,
-                    params=SearchProductParams(product_name=name, limit=limit),
-                )
+            return await self._lookup.search(name, tenant_id, limit)
         except Exception:
             logger.debug("产品搜索失败: name=%s tenant_id=%s", name[:80], tenant_id)
             return []

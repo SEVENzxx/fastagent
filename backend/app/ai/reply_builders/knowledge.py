@@ -5,7 +5,13 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any
+
+from app.ai.llm.gateway import LLMUseCase, complete
+from app.ai.prompts.knowledge_summary import build_knowledge_summary_messages
+
+logger = logging.getLogger(__name__)
 
 
 class KnowledgeReplyBuilder:
@@ -44,6 +50,25 @@ class KnowledgeReplyBuilder:
             if content:
                 parts.append(content)
         return "\n\n".join(parts)
+
+    @staticmethod
+    async def summarize(
+        user_text: str,
+        knowledge_context: str,
+        tenant_id: int,
+    ) -> str:
+        """基于知识库内容进行 LLM 摘要。"""
+        messages = build_knowledge_summary_messages(user_text, knowledge_context)
+        try:
+            return await complete(
+                use_case=LLMUseCase.RAG_REPLY,
+                messages=messages,
+                tenant_id=tenant_id,
+                temperature=0.2,
+            )
+        except Exception:
+            logger.warning("知识摘要 LLM 失败，降级返回拼接内容: text=%s", user_text[:40], exc_info=True)
+            return knowledge_context[:500]
 
     @staticmethod
     def knowledge_summary(

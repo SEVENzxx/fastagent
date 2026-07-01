@@ -24,8 +24,8 @@ DEFAULT_IGNORE_PHRASES: set[str] = {"你好", "您好", "谢谢", "再见"}
 DEFAULT_ORDER_STATUS_LABELS: dict[str, str] = {
     "draft": "草稿",
     "pending_customer_confirm": "待客户确认",
-    "customer_confirmed": "客户已确认",
-    "agent_confirmed": "已确认",
+    "customer_confirmed": "待审核发货",
+    "agent_confirmed": "待发货",
     "shipped": "已发货",
     "signed": "已签收",
     "cancelled": "已取消",
@@ -74,5 +74,4 @@ async def get_custom_prompt(db: AsyncSession, tenant_id: int) -> str | None:
     if tenant is not None and tenant.custom_prompt:
         return tenant.custom_prompt
     return None
-
 

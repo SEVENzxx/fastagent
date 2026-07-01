@@ -15,7 +15,7 @@ from __future__ import annotations
 # 中文状态到单一状态值的映射（精确匹配，不包含"未发货"类宽泛查询）
 _STATUS_MAP: dict[str, str] = {
     "待确认": "pending_customer_confirm",
-    "待审核": "pending_customer_confirm",
+    "待审核": "customer_confirmed",
     "未确认": "pending_customer_confirm",
     "已确认": "customer_confirmed",
     "已审核": "agent_confirmed",
@@ -88,8 +88,8 @@ class StatusResolver:
         display: dict[str, str] = {
             "draft": "草稿",
             "pending_customer_confirm": "待确认",
-            "customer_confirmed": "已确认",
-            "agent_confirmed": "已审核",
+            "customer_confirmed": "待审核",
+            "agent_confirmed": "待发货",
             "shipped": "已发货",
             "signed": "已签收",
             "cancelled": "已取消",

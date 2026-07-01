@@ -31,7 +31,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 # 样本 schema 版本：变更时 bootstrap 会清理旧版本 point 并重新索引
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 RiskLevelType = Literal["READ_ONLY", "LOW_RISK_WRITE", "HIGH_RISK_WRITE"]
 
@@ -45,6 +45,9 @@ class SCENARIO:
     PRODUCT_DETAIL = "product.detail"
     PRODUCT_COMPARE = "product.compare"
     PRODUCT_USAGE = "product.usage"
+    PRODUCT_SEMANTIC_RECOMMEND = "product.semantic_recommend"
+    PRODUCT_SKU_QUERY = "product.sku_query"
+    PRODUCT_ATTRIBUTE_QUERY = "product.attribute_query"
     PRODUCT_PAGINATION = "product.pagination_sort"
     ORDER_LIST = "order.list"
     ORDER_FILTER = "order.filter"
@@ -53,6 +56,7 @@ class SCENARIO:
     ORDER_CREATE = "order.create"
     ORDER_CANCEL = "order.cancel"
     ORDER_CONFIRM = "order.confirm"
+    ORDER_REFUND = "order.refund"
     KNOWLEDGE_POLICY = "knowledge.policy"
     KNOWLEDGE_QA = "knowledge.qa"
     KNOWLEDGE_PRODUCT_QA = "knowledge.product_qa"
@@ -224,6 +228,27 @@ DEFAULT_INTENT_EXAMPLES: tuple[IntentExample, ...] = (
     IntentExample(SCENARIO.PRODUCT_DETAIL, "商品详情", "READ_ONLY", "是否有库存"),
     IntentExample(SCENARIO.PRODUCT_DETAIL, "商品详情", "READ_ONLY", "有可售的吗"),
 
+    #  product.semantic_recommend — 语义推荐
+    IntentExample(SCENARIO.PRODUCT_SEMANTIC_RECOMMEND, "语义推荐", "READ_ONLY", "根据我的需求推荐一下"),
+    IntentExample(SCENARIO.PRODUCT_SEMANTIC_RECOMMEND, "语义推荐", "READ_ONLY", "帮我找适合我的商品"),
+    IntentExample(SCENARIO.PRODUCT_SEMANTIC_RECOMMEND, "语义推荐", "READ_ONLY", "不知道选哪款，帮我推荐"),
+    IntentExample(SCENARIO.PRODUCT_SEMANTIC_RECOMMEND, "语义推荐", "READ_ONLY", "有没有更符合我需求的"),
+    IntentExample(SCENARIO.PRODUCT_SEMANTIC_RECOMMEND, "语义推荐", "READ_ONLY", "按我的使用场景推荐商品"),
+
+    #  product.sku_query — SKU 查询
+    IntentExample(SCENARIO.PRODUCT_SKU_QUERY, "SKU 查询", "READ_ONLY", "查一下这个 SKU"),
+    IntentExample(SCENARIO.PRODUCT_SKU_QUERY, "SKU 查询", "READ_ONLY", "SKU 对应哪款商品"),
+    IntentExample(SCENARIO.PRODUCT_SKU_QUERY, "SKU 查询", "READ_ONLY", "帮我按 SKU 查商品"),
+    IntentExample(SCENARIO.PRODUCT_SKU_QUERY, "SKU 查询", "READ_ONLY", "这个货号是什么商品"),
+    IntentExample(SCENARIO.PRODUCT_SKU_QUERY, "SKU 查询", "READ_ONLY", "按货号查一下"),
+
+    #  product.attribute_query — 商品属性查询
+    IntentExample(SCENARIO.PRODUCT_ATTRIBUTE_QUERY, "商品属性查询", "READ_ONLY", "这款有哪些参数"),
+    IntentExample(SCENARIO.PRODUCT_ATTRIBUTE_QUERY, "商品属性查询", "READ_ONLY", "这个商品的属性是什么"),
+    IntentExample(SCENARIO.PRODUCT_ATTRIBUTE_QUERY, "商品属性查询", "READ_ONLY", "查一下规格参数"),
+    IntentExample(SCENARIO.PRODUCT_ATTRIBUTE_QUERY, "商品属性查询", "READ_ONLY", "这款的配置有哪些"),
+    IntentExample(SCENARIO.PRODUCT_ATTRIBUTE_QUERY, "商品属性查询", "READ_ONLY", "商品参数给我看一下"),
+
     #  product.compare — 商品对比
     IntentExample(SCENARIO.PRODUCT_COMPARE, "商品对比", "READ_ONLY", "哪个好用"),
     IntentExample(SCENARIO.PRODUCT_COMPARE, "商品对比", "READ_ONLY", "有什么区别"),
@@ -366,6 +391,13 @@ DEFAULT_INTENT_EXAMPLES: tuple[IntentExample, ...] = (
     IntentExample(SCENARIO.ORDER_CONFIRM, "确认订单", "HIGH_RISK_WRITE", "提交吧"),
     IntentExample(SCENARIO.ORDER_CONFIRM, "确认订单", "HIGH_RISK_WRITE", "可以提交"),
 
+    #  order.refund — 退款售后
+    IntentExample(SCENARIO.ORDER_REFUND, "退款售后", "HIGH_RISK_WRITE", "我要退款"),
+    IntentExample(SCENARIO.ORDER_REFUND, "退款售后", "HIGH_RISK_WRITE", "我要退货"),
+    IntentExample(SCENARIO.ORDER_REFUND, "退款售后", "HIGH_RISK_WRITE", "申请售后"),
+    IntentExample(SCENARIO.ORDER_REFUND, "退款售后", "HIGH_RISK_WRITE", "怎么退款"),
+    IntentExample(SCENARIO.ORDER_REFUND, "退款售后", "HIGH_RISK_WRITE", "这个订单能退吗"),
+
     #  knowledge.policy — 政策咨询
     IntentExample(SCENARIO.KNOWLEDGE_POLICY, "政策咨询", "READ_ONLY", "能优惠吗"),
     IntentExample(SCENARIO.KNOWLEDGE_POLICY, "政策咨询", "READ_ONLY", "有没有折扣"),
@@ -486,6 +518,9 @@ SCENARIO_DESCRIPTIONS: dict[str, str] = {
     SCENARIO.PRODUCT_DETAIL: "商品详情咨询，例如：这个怎么样、多少钱、有货吗",
     SCENARIO.PRODUCT_COMPARE: "商品对比，例如：第一款和第二款有什么区别",
     SCENARIO.PRODUCT_USAGE: "商品适用性咨询，例如：这款适合跑步吗、可以用来游泳吗",
+    SCENARIO.PRODUCT_SEMANTIC_RECOMMEND: "按自然语言需求推荐商品，例如：根据我的需求推荐一下、帮我找适合我的商品",
+    SCENARIO.PRODUCT_SKU_QUERY: "按 SKU 或货号精确查询商品，例如：查一下这个 SKU、按货号查一下",
+    SCENARIO.PRODUCT_ATTRIBUTE_QUERY: "查询商品规格属性，例如：这款有哪些参数、商品参数给我看一下",
     SCENARIO.PRODUCT_PAGINATION: "翻页/排序，例如：下一页、按价格排序",
     SCENARIO.ORDER_LIST: "查看订单列表，例如：我的订单",
     SCENARIO.ORDER_FILTER: "筛选订单，例如：未发货的订单有哪些",
@@ -494,6 +529,7 @@ SCENARIO_DESCRIPTIONS: dict[str, str] = {
     SCENARIO.ORDER_CREATE: "下单，例如：我要买这个、帮我下单",
     SCENARIO.ORDER_CANCEL: "取消订单，例如：取消订单、不想要了",
     SCENARIO.ORDER_CONFIRM: "确认订单，例如：确认、没问题、就这个了",
+    SCENARIO.ORDER_REFUND: "退款售后，例如：我要退款、申请售后",
     SCENARIO.KNOWLEDGE_POLICY: "政策咨询，例如：有什么优惠、什么时候发货",
     SCENARIO.KNOWLEDGE_QA: "知识问答，例如：怎么付款、可以开发票吗",
     SCENARIO.KNOWLEDGE_PRODUCT_QA: "商品知识，例如：这个保修多久、怎么保养",

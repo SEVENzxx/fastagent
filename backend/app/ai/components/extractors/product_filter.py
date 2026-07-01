@@ -24,6 +24,11 @@ from app.services.tenant_template import get_all_tenant_attributes_cached_only
 
 logger = logging.getLogger(__name__)
 
+# Product 模型有独立 SQL 列的字段，不应放入 attrs_json 属性过滤
+_PRODUCT_TOP_LEVEL_FIELDS: frozenset[str] = frozenset({
+    "price", "category_id", "name", "sku", "stock", "floor_price", "is_sample",
+})
+
 # 价格正则
 _RE_RANGE = re.compile(r"(\d{1,6})\s*(?:[-~至到])\s*(\d{1,6})\s*(?:元|块)?")
 _RE_CEILING = re.compile(r"(?:不超过?|低于?|小于|最多|预算)\s*(\d{1,6})|(\d{1,6})\s*(?:以内|以下)")
@@ -77,10 +82,15 @@ class ProductFilterExtractor(ScenarioExtractor):
                 entities["category_id"] = cat_id
                 entities["category_name"] = cat_name
 
-        # ── 5: 属性筛选 ──
+        # ── 5: 属性筛选 — 排除 Product 顶层列（有独立 SQL 列，不应走 attrs_json）──
         attr_filters = llm_entities.get("attr_filters") or {}
         if attr_filters:
-            entities["attr_filters"] = attr_filters
+            conflicting = _PRODUCT_TOP_LEVEL_FIELDS & set(attr_filters.keys())
+            if conflicting:
+                logger.debug("从 attr_filters 排除顶层列: %s", conflicting)
+                attr_filters = {k: v for k, v in attr_filters.items() if k not in _PRODUCT_TOP_LEVEL_FIELDS}
+            if attr_filters:
+                entities["attr_filters"] = attr_filters
 
         return ExtractionResult(
             entities=entities,

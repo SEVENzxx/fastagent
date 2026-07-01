@@ -109,3 +109,28 @@ async def search_knowledge(
             "score": hit.score,
         })
     return ToolResult(ok=True, skill_name="search_knowledge", result={"items": items})
+
+async def search_product_knowledge(
+    *,
+    tenant_id: int,
+    query: str,
+    product_id: str | int,
+    db: Any = None,
+    top_k: int = 5,
+    min_score: float = 0.65,
+) -> ToolResult:
+    """检索指定商品的知识分块。"""
+    result = await search_knowledge(
+        tenant_id=tenant_id,
+        query=query,
+        product_id=str(product_id),
+        db=db,
+        top_k=top_k,
+        min_score=min_score,
+    )
+    return ToolResult(
+        ok=result.ok,
+        skill_name="search_product_knowledge",
+        result=result.result,
+        error=result.error,
+    )

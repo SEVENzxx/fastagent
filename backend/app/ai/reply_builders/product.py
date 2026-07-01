@@ -4,7 +4,10 @@
 """
 from __future__ import annotations
 
+import logging
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 
 class ProductReplyBuilder:
@@ -96,6 +99,36 @@ class ProductReplyBuilder:
         lines.append("")
         lines.append("您还想了解这款产品的哪些信息？")
         return "\n".join(lines)
+
+    @staticmethod
+    async def detail_with_knowledge(
+        *,
+        question: str,
+        product: dict[str, Any],
+        knowledge: list[dict[str, Any]],
+        force_llm: bool = False,
+    ) -> str:
+        """商品详情知识增强回复。"""
+        if not knowledge and not force_llm:
+            return ProductReplyBuilder.product_detail(product)
+
+        from app.ai.llm.gateway import LLMUseCase, complete
+        from app.ai.prompts.product_knowledge_qa import build_messages
+
+        try:
+            raw = await complete(
+                LLMUseCase.RAG_REPLY,
+                build_messages(question, product, knowledge),
+                tenant_id=product.get("tenant_id"),
+                max_tokens=400,
+                temperature=0.3,
+            )
+        except Exception:
+            logger.warning("商品知识回复 LLM 失败: product_id=%s", product.get("id"), exc_info=True)
+            return ProductReplyBuilder.product_detail(product, knowledge=knowledge)
+
+        reply = (raw or "").strip()
+        return reply or ProductReplyBuilder.product_detail(product, knowledge=knowledge)
 
     @staticmethod
     def compare_result(

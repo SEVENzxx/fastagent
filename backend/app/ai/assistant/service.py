@@ -387,7 +387,12 @@ class AssistantService:
             logger.warning("【SpecViolation】%s", v.message)
 
         for v in violations:
-            if v.code in ("READ_ONLY_WRITE_SKILL", "HUMAN_REQUIRED_AUTO_EXEC"):
+            if v.code in (
+                "READ_ONLY_WRITE_SKILL",
+                "HUMAN_REQUIRED_AUTO_EXEC",
+                "LLM_NOT_ALLOWED",
+                "VECTOR_NOT_ALLOWED",
+            ):
                 result.reply = "系统检测到操作异常，已自动终止。请重新描述您的问题或转人工客服。"
                 result.pending_directive = PendingDirective.CLEAR
                 result.pending_state = None

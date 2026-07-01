@@ -11,6 +11,7 @@ from typing import Any
 
 from app.ai.components.extractors import ProductDetailExtractor, ProductFilterExtractor
 from app.ai.components.product_reference_resolver import (
+    ProductLookup,
     ProductReferenceResolver,
     _is_compare_continuation,
     _parse_ordinal_from_text,
@@ -18,7 +19,7 @@ from app.ai.components.product_reference_resolver import (
 from app.ai.context.context_resolver import _is_usage_question
 from app.ai.context.pending_state import PendingDirective
 from app.ai.context.session_context import SessionContext
-from app.ai.handlers.base import BaseHandler, HandlerResult
+from app.ai.handlers.base import BaseHandler, HandlerResult, ToolResult, call_skill_failed
 from app.ai.recognition.examples import SCENARIO
 from app.ai.recognition.types import ScenarioDecision
 from app.ai.reply_builders.product import ProductReplyBuilder
@@ -69,9 +70,11 @@ class ProductHandler(BaseHandler):
         self,
         skill: type[ProductSkill] = ProductSkill,
         resolver: ProductReferenceResolver | None = None,
+        knowledge_skill: object = None,
     ) -> None:
         self._skill = skill
         self._resolver = resolver
+        self._knowledge_skill = knowledge_skill
         self._detail_extractor = ProductDetailExtractor()
         self._filter_extractor = ProductFilterExtractor()
 
@@ -92,12 +95,18 @@ class ProductHandler(BaseHandler):
                 result = await self._handle_catalog(text, ctx)
             case SCENARIO.PRODUCT_FILTER_SEARCH:
                 result = await self._handle_filter_search(text, ctx)
+            case SCENARIO.PRODUCT_SEMANTIC_RECOMMEND:
+                result = await self._handle_semantic_recommend(text, ctx)
+            case SCENARIO.PRODUCT_SKU_QUERY:
+                result = await self._handle_sku_query(text, decision, ctx)
             case SCENARIO.PRODUCT_DETAIL:
                 result = await self._handle_detail(text, decision, ctx)
             case SCENARIO.PRODUCT_COMPARE:
                 result = await self._handle_compare(text, ctx)
             case SCENARIO.PRODUCT_USAGE:
                 result = await self._handle_usage(text, decision, ctx)
+            case SCENARIO.PRODUCT_ATTRIBUTE_QUERY:
+                result = await self._handle_attribute_query(text, decision, ctx)
             case SCENARIO.PRODUCT_PAGINATION:
                 result = await self._handle_pagination_sort(decision, ctx)
             case _:
@@ -196,6 +205,155 @@ class ProductHandler(BaseHandler):
         )
 
 
+    async def _handle_semantic_recommend(
+        self,
+        text: str,
+        ctx: SessionContext,
+    ) -> HandlerResult:
+        """语义推荐 — 先按用户需求检索商品，失败时给出可继续描述的提示。"""
+        products = await self._call_skill(
+            "search_products",
+            tenant_id=ctx.tenant_id,
+            params=SearchProductParams(query_text=text, limit=10),
+        )
+        if not products:
+            return HandlerResult(
+                scenario_id=SCENARIO.PRODUCT_SEMANTIC_RECOMMEND,
+                reply=ProductReplyBuilder.no_results("推荐需求"),
+                pending_directive=PendingDirective.CLEAR,
+                context_update={"last_intent": SCENARIO.PRODUCT_SEMANTIC_RECOMMEND},
+            )
+
+        candidates = [{"id": p["id"], "name": p.get("name", "")} for p in products]
+        return HandlerResult(
+            scenario_id=SCENARIO.PRODUCT_SEMANTIC_RECOMMEND,
+            reply=ProductReplyBuilder.product_list(products),
+            pending_directive=PendingDirective.CLEAR,
+            context_update={
+                "product_candidates": candidates,
+                "last_visible_products": [
+                    {"index": i + 1, "product_id": str(p["id"]), "name": p.get("name", "")}
+                    for i, p in enumerate(products)
+                ],
+                "last_product_query": text[:200],
+                "last_intent": SCENARIO.PRODUCT_SEMANTIC_RECOMMEND,
+            },
+        )
+
+    async def _handle_sku_query(
+        self,
+        text: str,
+        decision: ScenarioDecision,
+        ctx: SessionContext,
+    ) -> HandlerResult:
+        """SKU 精确查询。"""
+        sku = str(decision.entities.get("sku") or text or "").strip()
+        if not sku:
+            return HandlerResult(
+                scenario_id=SCENARIO.PRODUCT_SKU_QUERY,
+                reply="请提供要查询的 SKU。",
+                pending_directive=PendingDirective.CLEAR,
+            )
+
+        product = await self._call_skill(
+            "search_by_sku",
+            tenant_id=ctx.tenant_id,
+            sku=sku,
+        )
+        if product is None:
+            return HandlerResult(
+                scenario_id=SCENARIO.PRODUCT_SKU_QUERY,
+                reply=f"未找到 SKU「{sku}」对应的商品。",
+                pending_directive=PendingDirective.CLEAR,
+            )
+
+        return HandlerResult(
+            scenario_id=SCENARIO.PRODUCT_SKU_QUERY,
+            reply=ProductReplyBuilder.product_detail(product),
+            pending_directive=PendingDirective.CLEAR,
+            context_update={
+                "last_product_id": str(product["id"]),
+                "last_product_name": product.get("name", ""),
+                "last_focus_product_id": str(product["id"]),
+                "last_intent": SCENARIO.PRODUCT_SKU_QUERY,
+            },
+        )
+
+    async def _handle_attribute_query(
+        self,
+        text: str,
+        decision: ScenarioDecision,
+        ctx: SessionContext,
+    ) -> HandlerResult:
+        """商品属性查询。"""
+        resolver = self._get_resolver(ctx)
+        ref_result = await resolver.resolve(
+            text=text,
+            entities=decision.entities,
+            context=ctx,
+            tenant_id=ctx.tenant_id,
+        )
+        if ref_result.need_clarification:
+            return self._clarify_result(SCENARIO.PRODUCT_ATTRIBUTE_QUERY, ref_result, ctx)
+        if not ref_result.resolved or ref_result.product_id is None:
+            return HandlerResult(
+                scenario_id=SCENARIO.PRODUCT_ATTRIBUTE_QUERY,
+                reply="请先告诉我您想查询哪款商品的属性。",
+                pending_directive=PendingDirective.CLEAR,
+            )
+
+        attribute_code = str(decision.entities.get("attribute_code") or "").strip()
+        if attribute_code:
+            attr = await self._call_skill(
+                "get_attribute",
+                tenant_id=ctx.tenant_id,
+                product_id=ref_result.product_id,
+                attribute_code=attribute_code,
+            )
+            if not attr or attr.get("value") is None:
+                reply = f"暂未找到「{ref_result.product_name or ref_result.product_id}」的「{attribute_code}」信息。"
+            else:
+                reply = (
+                    f"{attr.get('product_name') or ref_result.product_name or '该商品'} 的"
+                    f"「{attribute_code}」：{attr.get('value')}"
+                )
+            return HandlerResult(
+                scenario_id=SCENARIO.PRODUCT_ATTRIBUTE_QUERY,
+                reply=reply,
+                pending_directive=PendingDirective.CLEAR,
+                context_update={
+                    "last_product_id": str(ref_result.product_id),
+                    "last_product_name": ref_result.product_name or "",
+                    "last_focus_product_id": str(ref_result.product_id),
+                    "last_intent": SCENARIO.PRODUCT_ATTRIBUTE_QUERY,
+                },
+            )
+
+        product = await self._call_skill(
+            "get_detail",
+            tenant_id=ctx.tenant_id,
+            product_id=ref_result.product_id,
+        )
+        if product is None:
+            return HandlerResult(
+                scenario_id=SCENARIO.PRODUCT_ATTRIBUTE_QUERY,
+                reply=f"商品「{ref_result.product_name or ref_result.product_id}」已下架或不存在。",
+                pending_directive=PendingDirective.CLEAR,
+            )
+        attrs_json = product.get("attrs_json") or {}
+        attrs = attrs_json.get("attr") if isinstance(attrs_json.get("attr"), dict) else attrs_json
+        return HandlerResult(
+            scenario_id=SCENARIO.PRODUCT_ATTRIBUTE_QUERY,
+            reply=ProductReplyBuilder.product_attributes(product, attrs),
+            pending_directive=PendingDirective.CLEAR,
+            context_update={
+                "last_product_id": str(product["id"]),
+                "last_product_name": product.get("name", ""),
+                "last_focus_product_id": str(product["id"]),
+                "last_intent": SCENARIO.PRODUCT_ATTRIBUTE_QUERY,
+            },
+        )
+
     async def _handle_detail(
         self,
         text: str,
@@ -271,28 +429,14 @@ class ProductHandler(BaseHandler):
                 },
             )
 
-        # 单候选 → 展示详情（含知识检索）
+        # 单候选 → 统一走 get_detail，避免搜索结果和详情结果口径不一致。
         p = products[0]
         query = entities.get("query", text)
-        knowledge = await self._fetch_knowledge_if_needed(query, p)
-        query_has_kw = bool(query) and any(kw in query for kw in _KNOWLEDGE_KEYWORDS)
-        if knowledge:
-            reply = await self._generate_knowledge_reply(query, p, knowledge)
-        elif query_has_kw:
-            reply = await self._generate_knowledge_reply(query, p, [])
-        else:
-            reply = ProductReplyBuilder.product_detail(p)
-
-        return HandlerResult(
-            scenario_id=SCENARIO.PRODUCT_DETAIL,
-            reply=reply,
-            pending_directive=PendingDirective.CLEAR,
-            context_update={
-                "last_product_id": str(p["id"]),
-                "last_product_name": p.get("name", ""),
-                "last_focus_product_id": str(p["id"]),
-                "last_intent": SCENARIO.PRODUCT_DETAIL,
-            },
+        return await self._detail_by_id(
+            int(p["id"]),
+            p.get("name"),
+            ctx,
+            query_text=query,
         )
 
     async def _handle_compare(
@@ -417,6 +561,7 @@ class ProductHandler(BaseHandler):
         if pid is not None:
             return await self._detail_by_id(
                 int(pid), product_name, ctx, query_text=text,
+                scenario_id=SCENARIO.PRODUCT_USAGE,
             )
 
         return HandlerResult(
@@ -502,6 +647,9 @@ class ProductHandler(BaseHandler):
         except SkillError:
             logger.warning("Skill 调用失败: method=%s", method)
             return _SKILL_DEFAULTS.get(method, [])
+        except Exception:
+            logger.warning("Skill 调用异常: method=%s", method, exc_info=True)
+            return _SKILL_DEFAULTS.get(method, [])
 
     async def _detail_by_id(
         self,
@@ -509,8 +657,9 @@ class ProductHandler(BaseHandler):
         product_name: str | None,
         ctx: SessionContext,
         query_text: str = "",
+        scenario_id: str = SCENARIO.PRODUCT_DETAIL,
     ) -> HandlerResult:
-        """按 product_id 查询详情，含知识检索。"""
+        """按 product_id 查询详情，含受控知识增强。"""
         product = await self._call_skill(
             "get_detail",
             tenant_id=ctx.tenant_id,
@@ -518,34 +667,23 @@ class ProductHandler(BaseHandler):
         )
         if product is None:
             return HandlerResult(
-                scenario_id=SCENARIO.PRODUCT_DETAIL,
+                scenario_id=scenario_id,
                 reply=f"商品「{product_name or product_id}」已下架或不存在。",
                 pending_directive=PendingDirective.CLEAR,
             )
 
-        # 知识检索（含用法/适用性等关键词匹配）
-        knowledge = await self._fetch_knowledge_if_needed(query_text, product)
-        query_has_kw = bool(query_text) and any(kw in query_text for kw in _KNOWLEDGE_KEYWORDS)
-        if knowledge:
-            reply = await self._generate_knowledge_reply(query_text, product, knowledge)
-        elif query_has_kw:
-            # 关键词命中但向量库无数据 → LLM 根据商品属性生成回复
-            reply = await self._generate_knowledge_reply(query_text, product, [])
-        else:
-            reply = ProductReplyBuilder.product_detail(product)
-
+        reply = await self._build_detail_reply(query_text, product)
         return HandlerResult(
-            scenario_id=SCENARIO.PRODUCT_DETAIL,
+            scenario_id=scenario_id,
             reply=reply,
             pending_directive=PendingDirective.CLEAR,
             context_update={
                 "last_product_id": str(product["id"]),
                 "last_product_name": product.get("name", ""),
                 "last_focus_product_id": str(product["id"]),
-                "last_intent": SCENARIO.PRODUCT_DETAIL,
+                "last_intent": scenario_id,
             },
         )
-
 
     def _clarify_result(
         self,
@@ -585,55 +723,63 @@ class ProductHandler(BaseHandler):
 
     def _get_resolver(self, ctx: SessionContext) -> ProductReferenceResolver:
         """获取或创建 ProductReferenceResolver。"""
+        _ = ctx
         if self._resolver is not None:
             return self._resolver
-        self._resolver = ProductReferenceResolver()
+        self._resolver = ProductReferenceResolver(lookup=_ProductLookup(self))
         return self._resolver
 
-    @staticmethod
-    async def _fetch_knowledge_if_needed(text: str, product: dict[str, Any]) -> list[dict[str, Any]] | None:
-        """检测知识关键词 → 向量检索该产品的知识库数据。"""
-        if not any(kw in text for kw in _KNOWLEDGE_KEYWORDS):
-            return None
+    async def _call_knowledge_skill(
+        self,
+        method: str,
+        **kwargs: Any,
+    ) -> ToolResult:
+        """调用 KnowledgeSkill，并通过 SkillGateway 记录 trace。"""
+        if self._knowledge_skill is None:
+            import app.ai.skills.knowledge as _real_knowledge_skill
+            self._knowledge_skill = _real_knowledge_skill
         try:
-            from app.ai.rag.vector_search import VectorDomain, VectorSearchService
-            vs = VectorSearchService()
-            hits = await vs.search_text(
-                domain=VectorDomain.KNOWLEDGE_CHUNK,
-                tenant_id=product.get("tenant_id", 0),
-                query=text,
-                top_k=5,
-                filters={"product_id": str(product["id"])},
-            )
-            return [
-                {"content": h.payload.get("content", "")[:120]}
-                for h in hits if h.payload.get("content")
-            ] if hits else None
+            return await call_skill(self._knowledge_skill, method, **kwargs)
+        except SkillError:
+            logger.warning("KnowledgeSkill 调用失败: method=%s", method)
+            return call_skill_failed(method)
         except Exception:
-            logger.warning("知识检索失败: product_id=%s", product.get("id"))
-            return None
+            logger.warning("KnowledgeSkill 调用异常: method=%s", method, exc_info=True)
+            return call_skill_failed(method)
 
-    @staticmethod
-    async def _generate_knowledge_reply(
-        question: str, product: dict[str, Any], knowledge: list[dict[str, Any]],
+    async def _build_detail_reply(
+        self,
+        query_text: str,
+        product: dict[str, Any],
     ) -> str:
-        """将产品详情 + 知识库数据 + 用户问题交给 LLM 生成回复。"""
-        from app.ai.llm.gateway import complete
-        from app.ai.prompts.product_knowledge_qa import build_messages
-        from app.integrations.llm_client import LLMUseCase
-
-        try:
-            raw = await complete(
-                LLMUseCase.RAG_REPLY,
-                build_messages(question, product, knowledge),
-                tenant_id=product.get("tenant_id"),
-                max_tokens=400,
-                temperature=0.3,
-            )
-            return raw.strip() if raw else ProductReplyBuilder.product_detail(product)
-        except Exception:
-            logger.warning("LLM 知识回复生成失败，降级为产品详情模板")
+        """按关键词触发产品知识增强，回复生成交给 ReplyBuilder。"""
+        query_has_kw = bool(query_text) and any(kw in query_text for kw in _KNOWLEDGE_KEYWORDS)
+        if not query_has_kw:
             return ProductReplyBuilder.product_detail(product)
+        knowledge = await self._search_product_knowledge(query_text, product)
+        return await ProductReplyBuilder.detail_with_knowledge(
+            question=query_text,
+            product=product,
+            knowledge=knowledge,
+            force_llm=True,
+        )
+
+    async def _search_product_knowledge(
+        self,
+        text: str,
+        product: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        """通过 KnowledgeSkill 检索指定商品的知识分块。"""
+        result = await self._call_knowledge_skill(
+            "search_product_knowledge",
+            tenant_id=int(product.get("tenant_id") or 0),
+            query=text,
+            product_id=str(product.get("id") or ""),
+        )
+        if not result.ok:
+            return []
+        payload = result.result if isinstance(result.result, dict) else {}
+        return list(payload.get("items") or [])
 
     def _get_candidates(self, ctx: SessionContext) -> list[dict[str, Any]]:
         """从上下文获取候选列表，统一为 {id, name} 格式。"""
@@ -661,6 +807,34 @@ class ProductHandler(BaseHandler):
             s = s.strip()
             return int(s) if s.isdigit() else _CN_NUM_MAP.get(s, 0)
         return (_to_int(m.group(1)), _to_int(m.group(2)))
+
+
+class _ProductLookup(ProductLookup):
+    """ProductReferenceResolver 使用的查询端口实现。"""
+
+    def __init__(self, handler: ProductHandler) -> None:
+        self._handler = handler
+
+    async def get_detail(self, product_id: int, tenant_id: int) -> dict[str, Any] | None:
+        """通过 ProductSkill 校验产品详情。"""
+        return await self._handler._call_skill(
+            "get_detail",
+            tenant_id=tenant_id,
+            product_id=product_id,
+        )
+
+    async def search(
+        self,
+        name: str,
+        tenant_id: int,
+        limit: int = 10,
+    ) -> list[dict[str, Any]]:
+        """通过 ProductSkill 搜索产品候选。"""
+        return await self._handler._call_skill(
+            "search_products",
+            tenant_id=tenant_id,
+            params=SearchProductParams(product_name=name, limit=limit),
+        )
 
 
 def _safe_int(value: object, default: int = 1) -> int:

@@ -345,15 +345,15 @@ async def update_tenant_template(
     current = tenant.template_json or {}
     if not isinstance(current, dict):
         current = {}
-    cat_attrs = current.get("category_attributes")
-    if not isinstance(cat_attrs, dict):
-        cat_attrs = {}
+
+    # ⚠️ 必须拷贝一份，不能原地修改 SQLAlchemy 已加载的 dict，
+    # 否则 flush 时新旧值比较会认为没变化，不发出 UPDATE
+    cat_attrs = dict(current.get("category_attributes") or {})
     cat_attrs[str(category_id)] = [ad.model_dump() for ad in validated]
 
     template_value = {"category_attributes": cat_attrs}
     tenant.template_json = template_value
     await db.commit()
-    await db.refresh(tenant)
 
     # 更新 Redis 缓存（全量回写，简化一致性）
     try:
@@ -364,6 +364,8 @@ async def update_tenant_template(
             json.dumps(template_value, ensure_ascii=False),
             ex=TENANT_ATTR_CACHE_TTL,
         )
+        # 清除全部分类缓存，避免其他分类读到旧数据
+        await r.delete(f"{_CACHE_PREFIX}:{tenant_id}:__all__")
     except Exception:
         logger.debug("Redis 更新租户属性缓存失败: tenant_id=%s", tenant_id)
 

@@ -60,7 +60,7 @@ class LLMUseCase(LabeledEnum):
 
     @property
     def uses_tenant_config(self) -> bool:
-        # TODO: 暂时跳过租户 LLM 配置，全部走本地模型。
+        # TODO: 暂时跳过租户 LLM 配置，全部走统一模型。
         # 恢复时改回: return self in {self.RAG_REPLY, self.AGENT}
         return False
 
@@ -101,6 +101,12 @@ class LLMClient(BaseClient):
         raw_model = model or settings.AI_LLM_MODEL
         self.model = normalize_litellm_model(raw_model, self.provider)
         logger.info("LLM 客户端已配置：provider=%s model=%s raw_model=%s", self.provider, self.model, raw_model)
+
+    def _extra_headers(self) -> dict[str, str]:
+        """provider=http 时注入 Authorization: Bearer <api_key>。"""
+        if self.provider == "http" and self.api_key:
+            return {"Authorization": f"Bearer {self.api_key}"}
+        return {}
 
     # ═══════════════════════════ 租户配置 ═══════════════════════════
 
