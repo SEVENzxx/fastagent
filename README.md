@@ -1,185 +1,225 @@
 # FastAgent
 
-**SaaS 智能客服平台** — 面向电商场景的多租户对话 AI 系统。每个租户拥有独立的数据隔离、分类体系、属性模板和 LLM 配置。采用分层架构，将意图识别、参数抽取、业务逻辑、回复生成清晰分离，兼顾可控性与灵活性。
+<p align="center">
+  <strong>面向电商私域场景的多租户 AI 客服与销售助手平台</strong>
+</p>
 
-## SaaS 架构
+<p align="center">
+  <img alt="Python" src="https://img.shields.io/badge/Python-3.12+-3776AB?logo=python&logoColor=white">
+  <img alt="FastAPI" src="https://img.shields.io/badge/FastAPI-0.115+-009688?logo=fastapi&logoColor=white">
+  <img alt="Vue" src="https://img.shields.io/badge/Vue-3-42b883?logo=vue.js&logoColor=white">
+  <img alt="TypeScript" src="https://img.shields.io/badge/TypeScript-6-3178c6?logo=typescript&logoColor=white">
+  <img alt="PostgreSQL" src="https://img.shields.io/badge/PostgreSQL-pgvector-4169e1?logo=postgresql&logoColor=white">
+  <img alt="Qdrant" src="https://img.shields.io/badge/Qdrant-Vector_Search-dc244c">
+</p>
 
-FastAgent 以多租户 SaaS 模式运行：
+FastAgent 不是一个只会闲聊的 ChatBot，而是围绕电商客服、销售跟进和店铺运营构建的业务型 AI 系统。它把商品、订单、知识库、客户资料、人工接管、租户后台和 AI 可观测性放在同一套产品链路里，让 AI 回复可以被业务数据约束、被权限边界限制、被测试用例回归验证。
 
-- **租户隔离** — 每个租户独立数据库 schema（或隔离层），商品分类树、属性模板、知识库、LLM 模型参数均按租户隔离
-- **管理后台** — 租户通过管理后台自行配置机器人名称、欢迎语、商品属性模板、知识库文档、意图样本
-- **API 接入** — 提供标准化 REST API，支持多渠道接入（企业微信、Web、自定义渠道）
-- **可观测性** — 每个租户的 LLM 调用、向量检索、技能调用均可独立追踪和审计
+当前项目适合用来研究和二次开发：
 
-```
-┌─────────────────────────────────────────────────┐
-│                    租户 A                         │
-│  分类树 → 属性模板 → 知识库 → LLM 配置 → 意图样本 │
-└─────────────────────────────────────────────────┘
-┌─────────────────────────────────────────────────┐
-│                    租户 B                         │
-│  分类树 → 属性模板 → 知识库 → LLM 配置 → 意图样本 │
-└─────────────────────────────────────────────────┘
-┌─────────────────────────────────────────────────┐
-│                    租户 C                         │
-│  分类树 → 属性模板 → 知识库 → LLM 配置 → 意图样本 │
-└─────────────────────────────────────────────────┘
-                        │
-                        ▼
-              FastAgent AI 引擎
-        场景识别 → 参数解析 → 业务处理 → 回复生成
-```
+- 电商客服 Agent 的工程化落地方式
+- RAG 知识库、标准问答和商品知识在客服场景里的组合使用
+- 多租户 SaaS 后台与 AI 能力配置
+- 场景识别、结构化 Skill、LangGraph 多轮流程的边界设计
+- AI 链路 trace、资源调用统计和 Harness 回归测试
+
+## 项目亮点
+
+| 能力 | 说明 |
+|------|------|
+| 多租户 SaaS | 租户、员工、角色、权限、套餐、LLM 配置、业务数据按租户维度管理 |
+| 电商业务场景 | 覆盖商品咨询、商品筛选、商品对比、订单查询、订单创建、订单取消、退款/售后等客服高频问题 |
+| 可控 AI 链路 | 场景识别、参数解析、业务操作、回复生成分层处理，避免把所有逻辑塞进一个 Prompt |
+| RAG 知识库 | 支持知识文档、QA 标准问答、商品知识、营销资料、图片素材等检索场景 |
+| 多轮状态管理 | SessionContext 维护普通对话上下文，LangGraph Pending 承接下单、取消、售后等复杂流程 |
+| 人工接管 | 支持转人工、取消、恢复等状态守卫，避免 AI 和人工流程互相覆盖 |
+| 可观测性 | trace_id 贯穿 API、AI、图流程、WebSocket，支持 LangFuse 链路追踪和资源调用统计 |
+| 回归测试 | 内置 Harness 测试框架，用例覆盖商品、订单、知识、记忆、上下文等场景 |
+
+## 当前功能
+
+### 后台与 SaaS
+
+- 登录认证、JWT 会话、员工管理
+- 角色、权限、菜单访问控制
+- 租户管理、套餐管理、平台 Admin 看板
+- LLM 配置、用量统计、调用日志
+- 登录历史、审计日志、系统通知、敏感词配置
+
+### 客服工作台
+
+- 会话列表、消息窗口、WebSocket 在线状态
+- 联系人管理、客户详情、客户资料导入
+- 人工接管与 AI 回复链路衔接
+- 企业微信 Webhook 接入与 Web 测试工具
+
+### 商品与订单
+
+- 商品、分类、属性模板管理
+- 商品导入、商品知识维护、商品卡片展示
+- 订单列表、订单详情、订单状态管理
+- AI 商品推荐、条件筛选、详情咨询、商品对比
+- AI 订单查询、下单、取消、退款/售后流程
+
+### 知识与内容
+
+- 知识文档上传、解析、分块和向量化
+- QA 标准问答管理
+- RAG 命中测试
+- 营销资料管理
+- 图片素材库
+
+### AI 工程能力
+
+- 规则、向量、LLM 组合的场景识别链路
+- Handler / Component / Skill / ReplyBuilder 分层
+- ScenarioSpec 场景权限约束
+- LangGraph 子图处理复杂多轮流程
+- SessionContext 与 Pending 状态隔离
+- trace_id、ResourceTrace、LangFuse 可观测性
+- Harness 回归测试与场景断言
 
 ## 架构概览
 
-```
-渠道消息
-  → AssistantService（主编排）
-    → PendingGuard（转人工 / 取消 / 恢复）
-    → RecognitionPipeline（场景识别）
-    → HandlerRegistry → Handler.execute()
-      → Components（参数解析与校验）
-      → Skills（结构化业务操作）
-      → ReplyBuilder（回复组装）
-    → SessionContext 更新 + graph Pending 指令
-  → AssistantRuntimeResult
+```text
+客户消息 / 企业微信 / Web 测试工具
+        |
+        v
+FastAPI API / WebSocket / Webhook
+        |
+        v
+AssistantService
+        |
+        +--> PendingGuard
+        +--> RecognitionPipeline
+        +--> HandlerRegistry
+        |       |
+        |       +--> Components
+        |       +--> Skills
+        |       +--> ReplyBuilders
+        |
+        +--> SessionContext / LangGraph Pending
+        |
+        v
+业务数据、知识库、向量库、LLM、可观测系统
 ```
 
-### 核心分层
-
-| 层 | 职责 |
-|-------|----------|
-| **Assistant** | 顶层编排、Pending 恢复、收口处理 |
-| **Recognition** | 场景分类：规则 → 向量相似度 → LLM 兜底 |
-| **Handler** | 场景流程负责人 — 编排 Component → Skill → ReplyBuilder |
-| **Component** | 纯参数解析与校验，无业务副作用 |
-| **Skill** | 结构化业务操作，不接收原始文本，不重新识别意图 |
-| **Prompt** | 所有 Prompt 集中管理 |
-| **LangGraph** | 仅用于复杂多轮子流程（下单、取消、售后） |
+更完整的架构说明见 [docs/architecture.md](docs/architecture.md)。
 
 ## 技术栈
 
-| 类别 | 技术 |
-|----------|-----------|
-| 后端 | Python 3.12+, FastAPI, SQLAlchemy (async) |
-| 前端 | Vue 3, TypeScript, Element Plus, Pinia |
-| 数据库 | PostgreSQL (pgvector), Redis |
-| 向量库 | Qdrant |
-| AI/LLM | Ollama, LiteLLM, Langfuse（可观测性） |
-| 流程编排 | LangGraph（复杂子流程） |
-| 向量模型 | BGE/bce-embedding, BGE-reranker |
-| 部署 | Docker Compose（支持 SaaS 多租户部署） |
-
-## 功能特性
-
-### 商品场景
-- **商品浏览** — 按分类展示，不依赖 LLM
-- **条件筛选** — 多属性组合筛选（分类、价格、属性），基于租户模板校验
-- **商品详情** — 名称/SKU 匹配 → SQL 查询 → 知识库检索 → LLM 组织回复；多候选/序号选择只写 SessionContext
-- **商品对比** — 分别解析每个商品引用，按 product_id 精准召回知识
-- **属性查询** — 注入租户属性模板，确保抽取结果合法
-
-### 订单场景
-- **订单列表与筛选** — 规则解析，不走 LLM
-- **订单详情与物流** — 优先级：显式订单号 → 时间/状态条件 → 上下文
-- **创建订单** — LangGraph 子流程：选商品 → SKU → 地址 → 确认 → 草稿 → 确认
-- **取消订单** — LangGraph 子流程，含校验和确认门
-
-### 知识场景
-- **政策问答** — QA pair 高置信直出，长内容仅用 LLM 做摘要
-- **商品知识** — 绑定已确定的 product_id，精准召回
-- **追问续查** — 基于 last_knowledge_refs 精准重新检索
-
-### SaaS 平台能力
-- **多租户管理** — 租户独立配置机器人名称、欢迎语、LLM 参数、知识库
-- **租户商品体系** — 每个租户自定义分类树、属性模板、属性可选值，AI 抽取基于租户数据校验
-- **租户知识库** — 独立知识库文档、QA pair、商品知识，按租户隔离检索
-- **意图样本管理** — 租户可通过管理后台上传意图样本，提升场景识别准确率
-- **管理 API** — 完整的租户配置 REST API，支持自动化入驻
-
-### 系统能力
-- **Pending 恢复** — 仅服务 LangGraph 子流程，三态守卫（HUMAN → CANCEL → RESUME）；商品多轮依赖 SessionContext
-- **状态 TTL** — SessionContext 1 小时，LangGraph Pending 2 小时，避免商品候选与图恢复状态双写
-- **资源追踪** — 自动记录 LLM 调用、向量检索、Skill 调用次数，支撑测试断言
-- **场景权限** — ScenarioSpec 约束每个场景可调用的 Skill、上下文读写、LLM/向量使用
-
-## 项目结构
-
-```
-backend/app/
-├── ai/
-│   ├── assistant/        # 主编排入口、PendingGuard
-│   ├── recognition/      # 场景识别流水线
-│   ├── handlers/         # 场景处理器（商品、订单、知识、转人工、模板）
-│   ├── components/       # 参数解析器（分类、商品引用、筛选条件）
-│   ├── skills/           # 结构化业务能力（商品、订单、知识、记忆）
-│   ├── reply_builders/   # 回复组装（商品、订单、知识、模板）
-│   ├── prompts/          # Prompt 集中管理
-│   ├── graphs/           # LangGraph 子图（下单、取消、售后）
-│   ├── context/          # SessionContext、LangGraph Pending 状态
-│   ├── services/         # RAG 服务、属性抽取服务
-│   ├── scenario/         # 场景定义与权限配置
-│   ├── rag/              # 向量检索
-│   └── llm/              # LLM 网关与客户端抽象
-├── api/                  # REST API 接口
-├── models/               # SQLAlchemy ORM 模型
-├── schemas/              # Pydantic 数据模式
-└── services/             # 领域服务（租户、管理后台等）
-
-frontend/src/
-├── views/                # AI 配置、租户设置等页面
-├── api/                  # API 客户端模块
-└── components/           # 公共组件
-```
+| 模块 | 技术 |
+|------|------|
+| 后端 | Python 3.12, FastAPI, SQLAlchemy Async, Alembic |
+| 前端 | Vue 3, TypeScript, Vite, Element Plus, Pinia |
+| 数据库 | PostgreSQL, pgvector |
+| 缓存与状态 | Redis |
+| 向量检索 | Qdrant |
+| AI 编排 | LangGraph, LiteLLM / OpenAI-compatible HTTP, Ollama |
+| 可观测性 | trace_id, ResourceTrace, LangFuse |
+| 测试 | pytest, Harness scenario runner |
+| 部署 | Docker Compose |
 
 ## 快速开始
 
 ### 环境要求
 
-- Docker & Docker Compose
-- Python 3.12+（本地开发）
-- Node.js 20+（前端开发）
+- Docker 与 Docker Compose
+- Python 3.12+
+- Node.js 20+
+- pnpm
+- uv
 
-### 启动
+### 1. 准备环境变量
 
 ```bash
-# 克隆项目
-git clone <repo-url> && cd fastagent
-
-# 复制环境配置
 cp .env.example .env
-
-# 启动所有服务
-docker compose up -d
-
-# 后端: http://localhost:8000
-# 前端: http://localhost:5173（vite 开发服务器）
 ```
 
-### 本地开发
+`.env.example` 默认使用本地模型服务：
+
+- LLM: `http://localhost:11434`
+- Embedding: `http://localhost:8001`
+- Reranker: `http://localhost:8002/rerank`
+- Qdrant: `http://localhost:6333`
+
+如果只是先跑通后台和基础 API，可以根据本地环境临时关闭或替换 AI 相关配置。
+
+### 2. 启动后端依赖与 API
 
 ```bash
-# 后端
+docker compose up -d
+```
+
+默认服务：
+
+- Backend API: `http://localhost:8000`
+- API Docs: `http://localhost:8000/docs`
+- PostgreSQL: `localhost:5432`
+- Redis: `localhost:6379`
+- Qdrant: `http://localhost:6333`
+
+### 3. 启动前端
+
+```bash
+cd frontend
+pnpm install
+pnpm run dev
+```
+
+前端默认访问：`http://localhost:5173`
+
+### 4. 本地后端开发
+
+```bash
 cd backend
-uv venv
-source .venv/bin/activate
 uv sync
 uv run alembic upgrade head
 uv run uvicorn app.main:app --reload
-
-# 前端
-cd frontend
-npm install
-npm run dev
 ```
 
 ## 测试
 
-基于 Harness 的集成测试，使用真实数据库和向量库：
+后端单元测试与场景测试：
 
 ```bash
 cd backend
-uv run pytest tests/
+uv run pytest
 ```
 
-测试通过断言 `ResourceTrace` 来验证每个场景的 LLM 调用次数、向量检索次数、Skill 调用是否符合场景权限配置。
+Harness 场景回归脚本：
+
+```bash
+cd backend
+uv run python scripts/run_harness.py --help
+```
+
+更多说明见 [docs/evaluation/harness.md](docs/evaluation/harness.md)。
+
+## 文档
+
+| 文档 | 内容 |
+|------|------|
+| [docs/requirements/product-requirements.md](docs/requirements/product-requirements.md) | 当前版产品需求、已实现范围和后续规划 |
+| [docs/requirements/scenarios.md](docs/requirements/scenarios.md) | AI 场景、识别规则、Handler 边界和风险权限 |
+| [docs/architecture.md](docs/architecture.md) | 系统架构、后端分层、前端结构、数据与可观测性 |
+| [docs/development/standards.md](docs/development/standards.md) | 开发规则、行为约束和模块边界 |
+| [docs/development/observability.md](docs/development/observability.md) | trace_id、LangFuse 和链路追踪说明 |
+| [docs/evaluation/harness.md](docs/evaluation/harness.md) | Harness 回归测试说明 |
+
+## 项目状态
+
+FastAgent 目前处于可运行的工程化开发阶段，核心后台、AI 主链路、商品/订单/知识库场景、可观测性和 Harness 已具备基础能力。部分能力仍在持续完善，包括退款写操作闭环、敏感词在发送链路中的深度接入、企业微信幂等与告警、自动跟进安全策略、账单配额和更完整的生产部署方案。
+
+详细需求边界见 [docs/requirements/product-requirements.md](docs/requirements/product-requirements.md)。
+
+## 适合谁
+
+- 正在做电商客服、私域销售、企业微信客服自动化的开发者
+- 想研究业务型 AI Agent 如何落地到真实后台系统的人
+- 想了解 RAG、LangGraph、多租户 SaaS、AI 可观测性如何组合的人
+- 需要一个可二次开发的 AI 客服后台项目的人
+
+## License
+
+本项目采用 [LICENSE](LICENSE) 中声明的许可证。
