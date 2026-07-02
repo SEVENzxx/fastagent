@@ -25,7 +25,7 @@ logger = logging.getLogger("bootstrap")
 
 # 默认超管（仅在无任何员工时创建，安全起见生产环境部署后应修改密码）
 _DEFAULT_ADMIN = {
-    "email": "admin@fastagent.local",
+    "email": "admin@fastagent.com",
     "password": "Admin123!",
     "display_name": "超级管理员",
 }
