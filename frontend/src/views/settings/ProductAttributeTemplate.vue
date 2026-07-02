@@ -118,7 +118,7 @@ function saveEditor() {
   form.queryPath = ['attr', form.key]
 
   if (!form.queryStrategy) {
-    const strategyMap: Record<string, string> = {
+    const strategyMap: Record<string, AttributeDef['queryStrategy']> = {
       boolean: 'jsonb_bool',
       number: 'jsonb_number',
       enum: 'jsonb_equals',
