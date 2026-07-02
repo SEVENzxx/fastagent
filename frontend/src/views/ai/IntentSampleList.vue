@@ -52,6 +52,13 @@ const searchQuery = ref('')
 const searchLoading = ref(false)
 const searchResults = ref<IntentSampleTestHit[]>([])
 
+function focusSearchInput() {
+  setTimeout(() => {
+    const el = document.getElementById('search-input')
+    el?.focus()
+  }, 0)
+}
+
 // ── Load Data ──
 async function loadData() {
   loading.value = true
@@ -225,7 +232,7 @@ onMounted(() => {
     <div class="page-header">
       <h2>场景样本管理</h2>
       <div class="header-actions">
-        <el-button :icon="Search" @click="$nextTick(() => (window as any).document.getElementById('search-input')?.focus())">
+        <el-button :icon="Search" @click="focusSearchInput">
           测试召回
         </el-button>
         <el-button :icon="Upload" @click="openBatchCreate">批量新增</el-button>
