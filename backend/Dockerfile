@@ -5,6 +5,10 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
+# 安装 curl（用于 healthcheck）
+RUN apt-get update && apt-get install -y --no-install-recommends curl && \
+    rm -rf /var/lib/apt/lists/*
+
 # 安装 uv（快速 Python 包管理器）
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
