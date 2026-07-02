@@ -10,7 +10,8 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
 # ── 依赖安装层（利用 Docker 缓存） ──
 COPY pyproject.toml uv.lock /app/
-RUN uv sync --no-dev --frozen
+RUN uv export --no-dev --frozen -o requirements.txt && \
+    pip install --no-cache-dir -i https://mirrors.aliyun.com/pypi/simple/ -r requirements.txt
 
 # ── 源码复制层 ──
 COPY . .
