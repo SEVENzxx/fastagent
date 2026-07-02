@@ -1,10 +1,7 @@
-"""FastAPI 中间件 — 在请求入口生成或继承 trace_id。
+﻿"""FastAPI 中间件 — 在 HTTP 请求入口生成或继承 trace_id。
 
-当前仅定义中间件函数，**未注册到 app/main.py**。
-接入时在 app/main.py 中添加::
-
-    from app.common.trace.middleware import TraceIdMiddleware
-    app.add_middleware(TraceIdMiddleware)
+当前中间件已在 app/main.py 注册。它只处理 HTTP scope；WebSocket
+连接由 app/api/v1/ws.py 在连接入口显式设置和清理 trace_id。
 """
 
 from __future__ import annotations
@@ -51,3 +48,4 @@ class TraceIdMiddleware:
         finally:
             from app.common.trace.context import reset_trace_id
             reset_trace_id()
+

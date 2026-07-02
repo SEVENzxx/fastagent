@@ -77,12 +77,6 @@ async def _get_checkpointer() -> Any:
     return _CHECKPOINTER
 
 
-def _set_checkpointer(cp: Any) -> None:
-    """覆盖 checkpointer（测试用）。"""
-    global _CHECKPOINTER
-    _CHECKPOINTER = cp
-
-
 async def close_checkpointer() -> None:
     """关闭 SQLite checkpointer 连接并清理全局单例。"""
     global _CHECKPOINTER, _GRAPH_INSTANCE
@@ -543,20 +537,3 @@ async def get_cancel_graph() -> StateGraph:
     _GRAPH_INSTANCE = build_order_cancel_graph(checkpointer=cp)
     return _GRAPH_INSTANCE  # type: ignore[return-value]
 
-
-# ── 模块级单例（async lazy）──
-
-
-async def run_order_cancel(
-    initial_state: dict[str, Any],
-    config: dict[str, Any],
-) -> dict[str, Any]:
-    """取消订单子图外部入口。"""
-    logger.info(
-        "订单取消图开始: tenant=%s conv=%s text=%s",
-        initial_state.get("tenant_id"),
-        initial_state.get("conversation_id"),
-        str(initial_state.get("input_text", ""))[:40],
-    )
-    graph = await get_cancel_graph()
-    return await graph.ainvoke(initial_state, config=config)
