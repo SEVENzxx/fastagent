@@ -117,7 +117,7 @@ SCENARIO_SPECS: dict[str, ScenarioSpec] = {
     # ══════════════════════════════════════════
     "product.catalog": ScenarioSpec(
         scenario_id="product.catalog",
-        allowed_skills=["list_categories"],
+        allowed_skills=["list_categories", "search_products"],
         risk_level="read_only",
     ),
     "product.filter_search": ScenarioSpec(

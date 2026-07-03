@@ -131,7 +131,7 @@ class ContextResolver:
         if not stripped:
             return None
 
-        # ── 1: 裸序号（"1"/"第一个"）→ last_visible_products → product.detail ──
+        # ── 1: 裸序号（"1"/"第一个"）→ last_visible_products → product.detail / product.catalog ──
         ordinal = _parse_ordinal(stripped)
         if ordinal is not None and context.last_visible_products:
             # 含有购买意图关键词的序号引用（如"给我下单第一款"），不走上下文解析
@@ -143,6 +143,23 @@ class ContextResolver:
             products = context.last_visible_products
             if 1 <= ordinal <= len(products):
                 target = products[ordinal - 1]
+
+                # 分类序号选择 → product.catalog（下钻）
+                if target.get("is_category"):
+                    logger.info(
+                        "【ContextResolver】分类序号选择 ordinal=%s category_id=%s name=%s",
+                        ordinal, target.get("product_id"), target.get("name"),
+                    )
+                    return ContextResolution(
+                        scenario_id="product.catalog",
+                        entities={
+                            "category_id": int(target["product_id"]),
+                            "category_name": target.get("name", ""),
+                            "reason": "上下文分类序号选择",
+                        },
+                    )
+
+                # 商品序号选择 → product.detail
                 logger.info(
                     "【ContextResolver】裸序号解析 ordinal=%s target_id=%s target_name=%s",
                     ordinal, target.get("product_id"), target.get("name"),

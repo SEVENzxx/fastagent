@@ -92,7 +92,7 @@ class ProductHandler(BaseHandler):
 
         match scenario:
             case SCENARIO.PRODUCT_CATALOG:
-                result = await self._handle_catalog(text, ctx)
+                result = await self._handle_catalog(text, ctx, decision)
             case SCENARIO.PRODUCT_FILTER_SEARCH:
                 result = await self._handle_filter_search(text, ctx)
             case SCENARIO.PRODUCT_SEMANTIC_RECOMMEND:
@@ -126,18 +126,109 @@ class ProductHandler(BaseHandler):
         self,
         text: str,
         ctx: SessionContext,
+        decision: ScenarioDecision | None = None,
     ) -> HandlerResult:
-        """商品分类浏览。"""
+        """商品分类浏览。
+
+        首次进入展示分类树，后续通过 category_id 下钻展示商品列表。
+        """
+        # ── 分类下钻：选中分类后展示该分类下所有商品 ──
+        category_id = None
+        cat_name = None
+        if decision and decision.entities.get("category_id"):
+            category_id = decision.entities["category_id"]
+            cat_name = decision.entities.get("category_name", "")
+
+        if category_id is not None:
+            # 收集所有子分类 ID（含孙子节点）
+            all_cat_ids = await self._collect_descendant_category_ids(
+                ctx.tenant_id, category_id,
+            )
+            params = SearchProductParams(category_ids=all_cat_ids, limit=50)
+            products = await self._call_skill(
+                "search_products", tenant_id=ctx.tenant_id, params=params,
+            )
+            if not products:
+                return HandlerResult(
+                    scenario_id=SCENARIO.PRODUCT_CATALOG,
+                    reply=ProductReplyBuilder.no_results(cat_name or "该分类"),
+                    pending_directive=PendingDirective.CLEAR,
+                    context_update={"last_intent": SCENARIO.PRODUCT_CATALOG},
+                )
+
+            candidates = [
+                {"id": p["id"], "name": p["name"]} for p in products
+            ]
+            return HandlerResult(
+                scenario_id=SCENARIO.PRODUCT_CATALOG,
+                reply=ProductReplyBuilder.product_list(products, category=cat_name),
+                pending_directive=PendingDirective.CLEAR,
+                context_update={
+                    "product_candidates": candidates,
+                    "last_visible_products": [
+                        {"index": i + 1, "product_id": str(p["id"]), "name": p["name"]}
+                        for i, p in enumerate(products)
+                    ],
+                    "last_intent": SCENARIO.PRODUCT_CATALOG,
+                },
+            )
+
+        # ── 首次进入：展示分类树 ──
         categories = await self._call_skill("list_categories", tenant_id=ctx.tenant_id)
         reply = ProductReplyBuilder.category_list(categories)
+
+        # 将根分类保存为序号可选的 visible_products，is_category 标记用于 ContextResolver 路由
+        cat_items = [
+            {
+                "index": i + 1,
+                "product_id": str(cat["id"]),
+                "name": cat["name"],
+                "is_category": True,
+            }
+            for i, cat in enumerate(categories)
+        ]
+
         return HandlerResult(
             scenario_id=SCENARIO.PRODUCT_CATALOG,
             reply=reply,
             pending_directive=PendingDirective.CLEAR,
             context_update={
+                "last_visible_products": cat_items,
                 "last_intent": SCENARIO.PRODUCT_CATALOG,
             },
         )
+
+    async def _collect_descendant_category_ids(
+        self,
+        tenant_id: int,
+        parent_id: int,
+    ) -> list[int]:
+        """收集指定分类下所有子分类 ID（含自身和子孙节点）。
+
+        通过 Skill 获取全部分类树后递归收集。
+        """
+        categories = await self._call_skill("list_categories", tenant_id=tenant_id)
+
+        def _find_node(tree: list[dict], pid: int) -> dict | None:
+            for node in tree:
+                if int(node["id"]) == pid:
+                    return node
+                if node.get("children"):
+                    found = _find_node(node["children"], pid)
+                    if found:
+                        return found
+            return None
+
+        def _collect_ids(node: dict) -> list[int]:
+            ids = [int(node["id"])]
+            for child in node.get("children") or []:
+                ids.extend(_collect_ids(child))
+            return ids
+
+        root_node = _find_node(categories, parent_id)
+        if root_node is None:
+            return [parent_id]
+        return _collect_ids(root_node)
 
     async def _handle_filter_search(
         self,

@@ -27,6 +27,7 @@ class SearchProductParams(BaseModel):
     product_name: str = ""
     category_text: str = ""
     category_id: int | None = None
+    category_ids: list[int] = Field(default_factory=list, description="多分类 ID 列表（用于根分类下钻）")
     min_price: float | None = None
     max_price: float | None = None
     attr_filters: dict[str, Any] = Field(default_factory=dict)
@@ -91,7 +92,9 @@ class ProductSkill:
     ) -> list[dict[str, Any]]:
         """综合搜索商品。"""
         conditions = [Product.tenant_id == tenant_id, Product.is_active.is_(True)]
-        if params.category_id is not None:
+        if params.category_ids:
+            conditions.append(Product.category_id.in_(params.category_ids))
+        elif params.category_id is not None:
             conditions.append(Product.category_id == params.category_id)
         if params.min_price is not None:
             conditions.append(Product.price >= params.min_price)
