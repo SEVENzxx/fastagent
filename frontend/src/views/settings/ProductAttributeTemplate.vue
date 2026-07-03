@@ -12,6 +12,8 @@ const attributes = ref<AttributeDef[]>([])
 const savedJson = ref('')
 const showEditor = ref(false)
 const editingIndex = ref(-1)
+const editMode = ref<'form' | 'json'>('form')
+const jsonInput = ref('')
 
 // ── 分类选择 ──
 const categories = ref<CategoryAttrOption[]>([])
@@ -54,6 +56,39 @@ const jsonPreview = computed(() =>
   JSON.stringify({ attributes: attributes.value }, null, 2)
 )
 
+function switchToJsonMode() {
+  jsonInput.value = JSON.stringify(attributes.value, null, 2)
+  editMode.value = 'json'
+}
+
+function applyJson() {
+  let parsed: any
+  try {
+    parsed = JSON.parse(jsonInput.value)
+  } catch (e: any) {
+    ElMessage.error(`JSON 格式错误: ${e.message}`)
+    return
+  }
+  if (!Array.isArray(parsed)) {
+    ElMessage.error('JSON 必须是属性定义的数组')
+    return
+  }
+  for (let i = 0; i < parsed.length; i++) {
+    const item = parsed[i]
+    if (!item.key || !item.label) {
+      ElMessage.error(`第 ${i + 1} 项缺少 key 或 label`)
+      return
+    }
+    if (item.type === 'enum' && (!item.allowed_values || item.allowed_values.length === 0)) {
+      ElMessage.error(`属性 "${item.key}" 是 enum 类型但未配置 allowed_values`)
+      return
+    }
+  }
+  attributes.value = parsed
+  ElMessage.success(`已导入 ${parsed.length} 个属性`)
+  editMode.value = 'form'
+}
+
 // ── 加载分类列表（仅叶子节点分类）──
 async function loadCategories() {
   try {
@@ -81,6 +116,7 @@ async function handleCategoryChange(categoryId: string) {
   selectedCategoryId.value = categoryId
   const cat = categories.value.find((c) => c.categoryId === categoryId)
   selectedCategoryName.value = cat?.categoryName || '全部分类'
+  editMode.value = 'form'
   await loadTemplate()
 }
 
@@ -206,7 +242,6 @@ async function saveTemplate() {
     })
     attributes.value = result.attributes || []
     savedJson.value = JSON.stringify(attributes.value)
-    // 本地更新分类列表的配置计数，不再重新拉取全部分类
     const idx = categories.value.findIndex((c) => c.categoryId === selectedCategoryId.value)
     if (idx >= 0) {
       categories.value[idx] = {
@@ -234,7 +269,6 @@ async function resetChanges() {
 
 onMounted(async () => {
   await loadCategories()
-  // 默认选中第一个有配置的分类
   const configured = categories.value.find((c) => c.attrCount > 0)
   if (configured && configured.categoryId) {
     selectedCategoryId.value = configured.categoryId
@@ -286,10 +320,17 @@ onMounted(async () => {
         <div class="panel-heading">
           <h3>属性列表</h3>
           <div style="display: flex; gap: 8px">
-            <el-button :icon="RefreshRight" :disabled="!hasChanges || saving" plain @click="resetChanges">
+            <el-button
+              v-if="editMode === 'form'"
+              :icon="RefreshRight"
+              :disabled="!hasChanges || saving"
+              plain
+              @click="resetChanges"
+            >
               重置
             </el-button>
             <el-button
+              v-if="editMode === 'form'"
               type="primary"
               :icon="Plus"
               :disabled="!selectedCategoryId"
@@ -297,33 +338,70 @@ onMounted(async () => {
             >
               新增属性
             </el-button>
+            <el-button
+              v-if="editMode === 'form'"
+              @click="switchToJsonMode"
+              :disabled="!selectedCategoryId"
+            >
+              JSON 模式
+            </el-button>
+            <el-button
+              v-if="editMode === 'json'"
+              type="primary"
+              @click="applyJson"
+            >
+              应用 JSON
+            </el-button>
+            <el-button
+              v-if="editMode === 'json'"
+              @click="editMode = 'form'"
+            >
+              取消
+            </el-button>
           </div>
         </div>
 
-        <div class="attr-table" v-if="attributes.length">
-          <div class="attr-table-header">
-            <span class="col-key">Key</span>
-            <span class="col-label">名称</span>
-            <span class="col-type">类型</span>
-            <span class="col-strategy">查询</span>
-            <span class="col-actions">操作</span>
-          </div>
-          <div class="attr-row" v-for="(attr, index) in attributes" :key="attr.key">
-            <span class="col-key"><code>{{ attr.key }}</code></span>
-            <span class="col-label">{{ attr.label }}</span>
-            <span class="col-type">
-              <el-tag size="small" :type="attr.type === 'boolean' ? 'success' : attr.type === 'number' ? 'warning' : attr.type === 'enum' ? 'danger' : ''">
-                {{ attr.type }}
-              </el-tag>
-            </span>
-            <span class="col-strategy" :title="attr.queryStrategy">{{ attr.queryStrategy?.replace('jsonb_', '') }}</span>
-            <span class="col-actions">
-              <el-button text :icon="Edit" size="small" @click="openEditor(index)">编辑</el-button>
-              <el-button text :icon="Delete" type="danger" size="small" @click="removeAttribute(index)">删除</el-button>
-            </span>
-          </div>
+        <!-- JSON 编辑模式 -->
+        <div v-if="editMode === 'json'" style="margin-bottom: 16px;">
+          <p style="margin: 0 0 8px; font-size: 13px; color: #909399;">
+            直接粘贴属性定义的 JSON 数组，点击「应用 JSON」导入
+          </p>
+          <el-input
+            v-model="jsonInput"
+            type="textarea"
+            :rows="22"
+            placeholder='[{ "key": "brand", "label": "品牌", "type": "enum", "allowed_values": ["苹果", "华为", ...] }, ...]'
+            style="font-family: monospace; font-size: 13px;"
+          />
         </div>
-        <el-empty v-else description="暂无属性配置" :image-size="88" />
+
+        <!-- 表单模式 -->
+        <template v-if="editMode === 'form'">
+          <div class="attr-table" v-if="attributes.length">
+            <div class="attr-table-header">
+              <span class="col-key">Key</span>
+              <span class="col-label">名称</span>
+              <span class="col-type">类型</span>
+              <span class="col-strategy">查询</span>
+              <span class="col-actions">操作</span>
+            </div>
+            <div class="attr-row" v-for="(attr, index) in attributes" :key="attr.key">
+              <span class="col-key"><code>{{ attr.key }}</code></span>
+              <span class="col-label">{{ attr.label }}</span>
+              <span class="col-type">
+                <el-tag size="small" :type="attr.type === 'boolean' ? 'success' : attr.type === 'number' ? 'warning' : attr.type === 'enum' ? 'danger' : ''">
+                  {{ attr.type }}
+                </el-tag>
+              </span>
+              <span class="col-strategy" :title="attr.queryStrategy">{{ attr.queryStrategy?.replace('jsonb_', '') }}</span>
+              <span class="col-actions">
+                <el-button text :icon="Edit" size="small" @click="openEditor(index)">编辑</el-button>
+                <el-button text :icon="Delete" type="danger" size="small" @click="removeAttribute(index)">删除</el-button>
+              </span>
+            </div>
+          </div>
+          <el-empty v-else description="暂无属性配置" :image-size="88" />
+        </template>
 
         <div class="actions" v-if="attributes.length">
           <el-button
