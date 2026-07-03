@@ -266,6 +266,9 @@ class ProductHandler(BaseHandler):
                     reply=reply,
                     pending_directive=PendingDirective.CLEAR,
                     context_update={
+                        "product_candidates": [
+                            {"id": p["id"], "name": p["name"]} for p in visible_products
+                        ],
                         "last_visible_products": [
                             {"index": i + 1, "product_id": str(p["id"]), "name": p["name"]}
                             for i, p in enumerate(visible_products)
@@ -280,6 +283,10 @@ class ProductHandler(BaseHandler):
         )
         extracted = extract_result.entities
 
+        # analysis 模式：LLM 兜底分析匹配，不需要 vector reorder
+        reply_mode = extracted.get("reply_mode", "template")
+        search_query = "" if reply_mode == "analysis" else extracted.get("query_text", "")
+
         products = await self._call_skill(
             "search_products",
             tenant_id=ctx.tenant_id,
@@ -289,7 +296,7 @@ class ProductHandler(BaseHandler):
                 min_price=extracted.get("price_min"),
                 max_price=extracted.get("price_max"),
                 attr_filters=extracted.get("attr_filters") or {},
-                query_text=extracted.get("query_text", ""),
+                query_text=search_query,
             ),
         )
         if not products:
@@ -325,9 +332,12 @@ class ProductHandler(BaseHandler):
         has_more = len(products) > page_size
 
         # ── 按 reply_mode 决定回复方式 ──
-        reply_mode = extracted.get("reply_mode", "template")
         if reply_mode == "analysis":
             reply, visible_products = await self._analysis_reply(text, products)
+            # 候选缩小为 LLM 推荐子集，确保后续序号引用指向推荐商品而非全量
+            candidates = [
+                {"id": p["id"], "name": p["name"]} for p in visible_products
+            ]
         else:
             reply = ProductReplyBuilder.product_list(
                 page_products, header_suffix=suffix, show_pagination=has_more,
