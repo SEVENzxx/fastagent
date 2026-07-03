@@ -285,6 +285,7 @@ class ProductHandler(BaseHandler):
             tenant_id=ctx.tenant_id,
             params=SearchProductParams(
                 category_id=extracted.get("category_id"),
+                category_ids=extracted.get("category_ids", []),
                 min_price=extracted.get("price_min"),
                 max_price=extracted.get("price_max"),
                 attr_filters=extracted.get("attr_filters") or {},

@@ -196,7 +196,9 @@ class VectorSearchService:
                             {
                                 "id": hit.point_id,
                                 "score": hit.score,
-                                "payload_keys": sorted(str(key) for key in hit.payload.keys()),
+                                "scenario_id": hit.payload.get("scenario_id"),
+                                "label": hit.payload.get("label"),
+                                "example_text": (hit.payload.get("example_text") or hit.payload.get("text", ""))[:80],
                             }
                             for hit in hits[:5]
                         ],

@@ -19,7 +19,10 @@ from app.ai.components.extractors.base import ExtractionResult, ScenarioExtracto
 from app.ai.context.session_context import SessionContext
 from app.ai.llm.gateway import LLMUseCase, complete
 from app.ai.prompts.product_extract import PRODUCT_FILTER_EXTRACT_PROMPT
-from app.services.category_service import get_tenant_leaf_categories_cached_only
+from app.services.category_service import (
+    get_tenant_category_hierarchy_cached_only,
+    get_tenant_leaf_categories_cached_only,
+)
 from app.services.tenant_template import get_all_tenant_attributes_cached_only
 
 logger = logging.getLogger(__name__)
@@ -34,6 +37,76 @@ _RE_RANGE = re.compile(r"(\d{1,6})\s*(?:[-~至到])\s*(\d{1,6})\s*(?:元|块)?")
 _RE_CEILING = re.compile(r"(?:不超过?|低于?|小于|最多|预算)\s*(\d{1,6})|(\d{1,6})\s*(?:以内|以下)")
 _RE_FLOOR = re.compile(r"(?:超过|高于|不少于|至少|最少)\s*(\d{1,6})|(\d{1,6})\s*(?:以上|起步)")
 _RE_BARE_PRICE = re.compile(r"(?:价格|预算|价位)?\s*(\d{1,6})\s*(?:元|块)")
+
+
+def _resolve_parent_to_descendant_ids(
+    cat_name: str,
+    hierarchy: list[tuple[int, str, int | None]],
+) -> list[int]:
+    """将父分类名称解析为其所有子孙分类 ID（含自身，递归全部层级）。
+
+    Args:
+        cat_name: 父分类名称（如"电脑办公"）。
+        hierarchy: 全部分类 [(id, name, parent_id), ...]。
+
+    Returns:
+        子孙 ID 列表（含自身），无匹配返回空列表。
+    """
+    # parent_id → [child_id]
+    parent_children: dict[int | None, list[int]] = {}
+    for cid, _, pid in hierarchy:
+        parent_children.setdefault(pid, []).append(cid)
+
+    # 找到匹配的父分类 ID
+    parent_id = None
+    for cid, cname, _ in hierarchy:
+        if cname.strip() == cat_name:
+            parent_id = cid
+            break
+    if parent_id is None:
+        return []
+
+    # DFS 收集所有子孙节点（含自身）
+    result: list[int] = []
+    stack = [parent_id]
+    while stack:
+        node = stack.pop()
+        result.append(node)
+        stack.extend(parent_children.get(node, []))
+    return result
+
+
+def _format_category_tree(
+    hierarchy: list[tuple[int, str, int | None]],
+) -> str:
+    """将分类层级格式化为带缩进的树形文本，用于 LLM prompt。"""
+    if not hierarchy:
+        return "（无分类数据）"
+
+    children: dict[int | None, list[int]] = {}
+    id_name: dict[int, str] = {}
+    for cid, cname, pid in hierarchy:
+        children.setdefault(pid, []).append(cid)
+        id_name[cid] = cname
+
+    # 找出所有非叶子 ID（有子分类的）
+    non_leaf_ids = {pid for pid in children if pid is not None}
+
+    lines: list[str] = []
+    stack = [(pid, 0) for pid in children.get(None, [])]  # 根节点
+    # 按 sort_order 排序（如果 hierarchy 本身就是有序的则跳过）
+    while stack:
+        cid, depth = stack.pop()
+        name = id_name.get(cid, "")
+        is_parent = cid in non_leaf_ids
+        prefix = "  " * depth + ("└ " if depth > 0 else "")
+        suffix = "（父分类）" if is_parent else ""
+        lines.append(f"{prefix}{name}{suffix}")
+        # 子节点逆序入栈，保持显示顺序
+        for child in reversed(children.get(cid, [])):
+            stack.append((child, depth + 1))
+
+    return "\n".join(lines)
 
 
 class ProductFilterExtractor(ScenarioExtractor):
@@ -63,12 +136,13 @@ class ProductFilterExtractor(ScenarioExtractor):
             if pmax is not None:
                 entities["price_max"] = pmax
 
-        # ── 2: 获取租户叶子分类 + 属性定义，嵌入 prompt ──
+        # ── 2: 获取租户分类层级 + 属性定义，嵌入 prompt ──
         leaves = await get_tenant_leaf_categories_cached_only(tenant_id)
+        hierarchy = await get_tenant_category_hierarchy_cached_only(tenant_id)
         attr_defs = await get_all_tenant_attributes_cached_only(tenant_id)
 
         # ── 3: LLM 抽取（分类 + 属性 + query）──
-        llm_entities = await self._llm_extract(stripped, leaves, attr_defs)
+        llm_entities = await self._llm_extract(stripped, hierarchy or leaves, attr_defs)
 
         if llm_entities.get("query"):
             entities["query_text"] = llm_entities["query"]
@@ -78,14 +152,26 @@ class ProductFilterExtractor(ScenarioExtractor):
         if reply_mode in ("template", "analysis"):
             entities["reply_mode"] = reply_mode
 
-        # ── 4: 分类（LLM 输出分类名，代码查表转 ID）──
+        # ── 4: 分类（LLM 输出分类名，代码查表转 ID，支持父分类→子叶子解析）──
         cat_name = (llm_entities.get("category_name") or "").strip()
         if cat_name and leaves:
             leaf_map = {name.strip(): cid for cid, name in leaves}
+
+            # 先查叶子分类
             cat_id = leaf_map.get(cat_name)
             if cat_id is not None:
                 entities["category_id"] = cat_id
                 entities["category_name"] = cat_name
+            elif hierarchy:
+                # 叶子没匹配到 → 查父分类，解析到其所有子孙 ID（含中间节点）
+                descendant_ids = _resolve_parent_to_descendant_ids(cat_name, hierarchy)
+                if descendant_ids:
+                    if len(descendant_ids) == 1:
+                        entities["category_id"] = descendant_ids[0]
+                        entities["category_name"] = cat_name
+                    else:
+                        entities["category_ids"] = descendant_ids
+                        entities["category_name"] = cat_name
 
         # ── 5: 属性筛选 — 排除 Product 顶层列（有独立 SQL 列，不应走 attrs_json）──
         attr_filters = llm_entities.get("attr_filters") or {}
@@ -135,13 +221,21 @@ class ProductFilterExtractor(ScenarioExtractor):
     @staticmethod
     async def _llm_extract(
         text: str,
-        leaves: list[tuple[int, str]] | None,
+        categories: list[tuple[int, str]] | list[tuple[int, str, int | None]] | None,
         attr_defs: list[Any] | None,
     ) -> dict[str, Any]:
-        """调用 LLM 抽取筛选参数，叶子分类 + 属性定义嵌入 prompt。"""
-        if leaves:
-            cat_lines = "\n".join(f"  {cid} → {cname}" for cid, cname in leaves)
-            category_section = f"=== 叶子分类列表 ===\n{cat_lines}\n=================="
+        """调用 LLM 抽取筛选参数，分类层级 + 属性定义嵌入 prompt。
+
+        categories 可以是叶子分类列表 [(id, name)] 或完整层级 [(id, name, parent_id)]。
+        有完整层级时优先用树形展示，LLM 能识别父分类名称。
+        """
+        if categories:
+            # 判断是否为完整层级（含 parent_id）
+            if categories and len(categories[0]) == 3:
+                cat_lines = _format_category_tree(categories)
+            else:
+                cat_lines = "\n".join(f"  {cid} → {cname}" for cid, cname in categories)
+            category_section = f"=== 分类层级 ===\n{cat_lines}\n==================="
         else:
             category_section = "（无分类数据）"
 
@@ -194,6 +288,10 @@ class ProductFilterExtractor(ScenarioExtractor):
         parts: list[str] = []
         if "category_id" in entities:
             parts.append(f"category_id={entities['category_id']}")
+            if "category_name" in entities:
+                parts.append(f"({entities['category_name']})")
+        if "category_ids" in entities:
+            parts.append(f"category_ids={entities['category_ids']}")
             if "category_name" in entities:
                 parts.append(f"({entities['category_name']})")
         if "price_min" in entities:
