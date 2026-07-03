@@ -273,7 +273,9 @@ class ProductHandler(BaseHandler):
                             {"index": i + 1, "product_id": str(p["id"]), "name": p["name"]}
                             for i, p in enumerate(visible_products)
                         ],
-                        "last_focus_product_id": None,
+                        "last_focus_product_id": str(visible_products[0]["id"]) if visible_products else None,
+                        "last_product_id": str(visible_products[0]["id"]) if visible_products else None,
+                        "last_product_name": visible_products[0]["name"] if visible_products else None,
                         "last_intent": SCENARIO.PRODUCT_FILTER_SEARCH,
                         "last_product_query": text[:200],
                     },
@@ -355,8 +357,9 @@ class ProductHandler(BaseHandler):
                     {"index": i + 1, "product_id": str(p["id"]), "name": p["name"]}
                     for i, p in enumerate(visible_products)
                 ],
-                "last_focus_product_id": None,
-                "last_product_id": None,
+                "last_focus_product_id": str(visible_products[0]["id"]) if visible_products else None,
+                "last_product_id": str(visible_products[0]["id"]) if visible_products else None,
+                "last_product_name": visible_products[0]["name"] if visible_products else None,
                 "last_product_query": text[:200],
                 "last_intent": SCENARIO.PRODUCT_FILTER_SEARCH,
             },
@@ -812,7 +815,7 @@ class ProductHandler(BaseHandler):
             pending_directive=PendingDirective.CLEAR,
             context_update={
                 "product_candidates": [
-                    {"id": p["id"], "name": p["name"]} for p in products
+                    {"id": p["id"], "name": p["name"]} for p in page_products
                 ],
                 "product_page": page,
                 "last_intent": SCENARIO.PRODUCT_PAGINATION,
