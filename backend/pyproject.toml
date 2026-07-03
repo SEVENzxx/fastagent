@@ -29,6 +29,7 @@ dependencies = [
     # Agent graph orchestration
     "langgraph>=0.2.0",
     "langgraph-checkpoint-redis>=0.5.0",
+    "redisvl>=0.22.0,<0.23.0",
     "langchain>=0.3.0",
     "pypinyin>=0.55.0",
     # LLM observability
