@@ -3,7 +3,7 @@
 # ── 商品 ──
 MAX_RECENT_PRODUCTS: int = 10              # 最近浏览商品保留数
 PRODUCT_CANDIDATE_LIMIT: int = 5           # 商品多候选最大数
-DEFAULT_PAGE_SIZE: int = 5                 # 商品列表翻页默认每页条数
+DEFAULT_PAGE_SIZE: int = 10                # 商品列表翻页默认每页条数
 PRODUCT_CLARIFY_LIMIT: int = 5             # 商品澄清追问最大轮次
 BATCH_GET_PRODUCTS_LIMIT: int = 10         # 批量查询商品 ID 上限
 PRODUCT_KNOWLEDGE_TOP_K: int = 5           # 商品知识检索 top_k

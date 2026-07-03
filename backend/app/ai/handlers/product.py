@@ -159,12 +159,18 @@ class ProductHandler(BaseHandler):
             candidates = [
                 {"id": p["id"], "name": p["name"]} for p in products
             ]
+            page_size = DEFAULT_PAGE_SIZE
+            page_products = products[:page_size]
+            has_more = len(products) > page_size
             return HandlerResult(
                 scenario_id=SCENARIO.PRODUCT_CATALOG,
-                reply=ProductReplyBuilder.product_list(products, category=cat_name),
+                reply=ProductReplyBuilder.product_list(
+                    page_products, category=cat_name, show_pagination=has_more,
+                ),
                 pending_directive=PendingDirective.CLEAR,
                 context_update={
                     "product_candidates": candidates,
+                    "product_page": 1,
                     "last_visible_products": [
                         {"index": i + 1, "product_id": str(p["id"]), "name": p["name"]}
                         for i, p in enumerate(products)
@@ -278,12 +284,19 @@ class ProductHandler(BaseHandler):
             _price_keywords = ("便宜", "实惠", "性价比", "预算", "优惠", "低价", "经济")
             if any(kw in text for kw in _price_keywords):
                 suffix = "价格实惠"
+
+        page_size = DEFAULT_PAGE_SIZE
+        page_products = products[:page_size]
+        has_more = len(products) > page_size
         return HandlerResult(
             scenario_id=SCENARIO.PRODUCT_FILTER_SEARCH,
-            reply=ProductReplyBuilder.product_list(products, header_suffix=suffix),
+            reply=ProductReplyBuilder.product_list(
+                page_products, header_suffix=suffix, show_pagination=has_more,
+            ),
             pending_directive=PendingDirective.CLEAR,
             context_update={
                 "product_candidates": candidates,
+                "product_page": 1,
                 "last_visible_products": [
                     {"index": i + 1, "product_id": str(p["id"]), "name": p["name"]}
                     for i, p in enumerate(products)
@@ -316,12 +329,17 @@ class ProductHandler(BaseHandler):
             )
 
         candidates = [{"id": p["id"], "name": p.get("name", "")} for p in products]
+
+        page_size = DEFAULT_PAGE_SIZE
+        page_products = products[:page_size]
+        has_more = len(products) > page_size
         return HandlerResult(
             scenario_id=SCENARIO.PRODUCT_SEMANTIC_RECOMMEND,
-            reply=ProductReplyBuilder.product_list(products),
+            reply=ProductReplyBuilder.product_list(page_products, show_pagination=has_more),
             pending_directive=PendingDirective.CLEAR,
             context_update={
                 "product_candidates": candidates,
+                "product_page": 1,
                 "last_visible_products": [
                     {"index": i + 1, "product_id": str(p["id"]), "name": p.get("name", "")}
                     for i, p in enumerate(products)
@@ -673,9 +691,19 @@ class ProductHandler(BaseHandler):
         """
         sort_by = decision.entities.get("sort_by", "")
         sort_order = decision.entities.get("sort_order", "asc")
-        page = _safe_int(decision.entities.get("page"), ctx.product_page)
+        explicit_page = decision.entities.get("page")
         page_size = _safe_int(decision.entities.get("page_size"), DEFAULT_PAGE_SIZE)
-        page = max(1, page)
+        if explicit_page is not None:
+            page = max(1, int(explicit_page))
+        else:
+            # 没有显式页码时根据语义确定翻页方向
+            text = ctx.last_user_message or ""
+            if any(kw in text for kw in ("下一页", "下页", "更多", "还有")):
+                page = ctx.product_page + 1
+            elif any(kw in text for kw in ("上一页", "上页", "返回", "前页")):
+                page = max(1, ctx.product_page - 1)
+            else:
+                page = ctx.product_page
         page_size = max(1, min(page_size, DEFAULT_PAGE_SIZE * 2))
 
         raw_candidates = self._get_candidates(ctx)
