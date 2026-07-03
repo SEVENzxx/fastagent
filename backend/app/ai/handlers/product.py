@@ -20,6 +20,8 @@ from app.ai.context.context_resolver import _is_usage_question
 from app.ai.context.pending_state import PendingDirective
 from app.ai.context.session_context import SessionContext
 from app.ai.handlers.base import BaseHandler, HandlerResult, ToolResult, call_skill_failed
+from app.ai.llm.gateway import LLMUseCase, complete
+from app.ai.prompts.product_extract import PRODUCT_RECOMMEND_ANALYSIS_PROMPT
 from app.ai.recognition.examples import SCENARIO
 from app.ai.recognition.types import ScenarioDecision
 from app.ai.reply_builders.product import ProductReplyBuilder
@@ -95,8 +97,6 @@ class ProductHandler(BaseHandler):
                 result = await self._handle_catalog(text, ctx, decision)
             case SCENARIO.PRODUCT_FILTER_SEARCH:
                 result = await self._handle_filter_search(text, ctx)
-            case SCENARIO.PRODUCT_SEMANTIC_RECOMMEND:
-                result = await self._handle_semantic_recommend(text, ctx)
             case SCENARIO.PRODUCT_SKU_QUERY:
                 result = await self._handle_sku_query(text, decision, ctx)
             case SCENARIO.PRODUCT_DETAIL:
@@ -241,7 +241,7 @@ class ProductHandler(BaseHandler):
         text: str,
         ctx: SessionContext,
     ) -> HandlerResult:
-        """商品筛选搜索 — Extractor 抽参数 → Skill 查询。"""
+        """商品筛选搜索 — Extractor 抽参数 → Skill 查询 → 模板或LLM推荐。"""
         extract_result = await self._filter_extractor.extract(
             text=text, context=ctx, tenant_id=ctx.tenant_id,
         )
@@ -255,6 +255,7 @@ class ProductHandler(BaseHandler):
                 min_price=extracted.get("price_min"),
                 max_price=extracted.get("price_max"),
                 attr_filters=extracted.get("attr_filters") or {},
+                query_text=extracted.get("query_text", ""),
             ),
         )
         if not products:
@@ -288,11 +289,19 @@ class ProductHandler(BaseHandler):
         page_size = DEFAULT_PAGE_SIZE
         page_products = products[:page_size]
         has_more = len(products) > page_size
+
+        # ── 按 reply_mode 决定回复方式 ──
+        reply_mode = extracted.get("reply_mode", "template")
+        if reply_mode == "analysis":
+            reply = await self._analysis_reply(text, products)
+        else:
+            reply = ProductReplyBuilder.product_list(
+                page_products, header_suffix=suffix, show_pagination=has_more,
+            )
+
         return HandlerResult(
             scenario_id=SCENARIO.PRODUCT_FILTER_SEARCH,
-            reply=ProductReplyBuilder.product_list(
-                page_products, header_suffix=suffix, show_pagination=has_more,
-            ),
+            reply=reply,
             pending_directive=PendingDirective.CLEAR,
             context_update={
                 "product_candidates": candidates,
@@ -309,45 +318,36 @@ class ProductHandler(BaseHandler):
         )
 
 
-    async def _handle_semantic_recommend(
+    async def _analysis_reply(
         self,
         text: str,
-        ctx: SessionContext,
-    ) -> HandlerResult:
-        """语义推荐 — 先按用户需求检索商品，失败时给出可继续描述的提示。"""
-        products = await self._call_skill(
-            "search_products",
-            tenant_id=ctx.tenant_id,
-            params=SearchProductParams(query_text=text, limit=10),
+        products: list[dict[str, Any]],
+    ) -> str:
+        """LLM 分析推荐回复 — 对搜到的商品按用户软性需求进行分析推荐。"""
+        product_summary = "\n".join(
+            f"- {p.get('name', '')} ¥{float(p['price']):.0f} {p.get('description', '')[:80]}"
+            for p in products[:20]
         )
-        if not products:
-            return HandlerResult(
-                scenario_id=SCENARIO.PRODUCT_SEMANTIC_RECOMMEND,
-                reply=ProductReplyBuilder.no_results("推荐需求"),
-                pending_directive=PendingDirective.CLEAR,
-                context_update={"last_intent": SCENARIO.PRODUCT_SEMANTIC_RECOMMEND},
+        messages = [
+            {"role": "system", "content": PRODUCT_RECOMMEND_ANALYSIS_PROMPT.format(
+                user_query=text,
+                products=product_summary,
+            )},
+        ]
+        try:
+            raw = await complete(
+                LLMUseCase.RAG_REPLY,
+                messages,
+                max_tokens=500,
+                temperature=0.3,
             )
+            reply = (raw or "").strip()
+            if reply:
+                return reply
+        except Exception:
+            logger.warning("LLM 分析推荐失败，降级为模板: %s", text[:30], exc_info=True)
 
-        candidates = [{"id": p["id"], "name": p.get("name", "")} for p in products]
-
-        page_size = DEFAULT_PAGE_SIZE
-        page_products = products[:page_size]
-        has_more = len(products) > page_size
-        return HandlerResult(
-            scenario_id=SCENARIO.PRODUCT_SEMANTIC_RECOMMEND,
-            reply=ProductReplyBuilder.product_list(page_products, show_pagination=has_more),
-            pending_directive=PendingDirective.CLEAR,
-            context_update={
-                "product_candidates": candidates,
-                "product_page": 1,
-                "last_visible_products": [
-                    {"index": i + 1, "product_id": str(p["id"]), "name": p.get("name", "")}
-                    for i, p in enumerate(products)
-                ],
-                "last_product_query": text[:200],
-                "last_intent": SCENARIO.PRODUCT_SEMANTIC_RECOMMEND,
-            },
-        )
+        return ProductReplyBuilder.product_list(products[:DEFAULT_PAGE_SIZE])
 
     async def _handle_sku_query(
         self,

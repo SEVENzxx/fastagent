@@ -45,7 +45,6 @@ class SCENARIO:
     PRODUCT_DETAIL = "product.detail"
     PRODUCT_COMPARE = "product.compare"
     PRODUCT_USAGE = "product.usage"
-    PRODUCT_SEMANTIC_RECOMMEND = "product.semantic_recommend"
     PRODUCT_SKU_QUERY = "product.sku_query"
     PRODUCT_ATTRIBUTE_QUERY = "product.attribute_query"
     PRODUCT_PAGINATION = "product.pagination_sort"
@@ -228,12 +227,12 @@ DEFAULT_INTENT_EXAMPLES: tuple[IntentExample, ...] = (
     IntentExample(SCENARIO.PRODUCT_DETAIL, "商品详情", "READ_ONLY", "是否有库存"),
     IntentExample(SCENARIO.PRODUCT_DETAIL, "商品详情", "READ_ONLY", "有可售的吗"),
 
-    #  product.semantic_recommend — 语义推荐
-    IntentExample(SCENARIO.PRODUCT_SEMANTIC_RECOMMEND, "语义推荐", "READ_ONLY", "根据我的需求推荐一下"),
-    IntentExample(SCENARIO.PRODUCT_SEMANTIC_RECOMMEND, "语义推荐", "READ_ONLY", "帮我找适合我的商品"),
-    IntentExample(SCENARIO.PRODUCT_SEMANTIC_RECOMMEND, "语义推荐", "READ_ONLY", "不知道选哪款，帮我推荐"),
-    IntentExample(SCENARIO.PRODUCT_SEMANTIC_RECOMMEND, "语义推荐", "READ_ONLY", "有没有更符合我需求的"),
-    IntentExample(SCENARIO.PRODUCT_SEMANTIC_RECOMMEND, "语义推荐", "READ_ONLY", "按我的使用场景推荐商品"),
+    #  product.filter_search — 语义推荐（合并自 semantic_recommend）
+    IntentExample(SCENARIO.PRODUCT_FILTER_SEARCH, "条件筛选", "READ_ONLY", "根据我的需求推荐一下"),
+    IntentExample(SCENARIO.PRODUCT_FILTER_SEARCH, "条件筛选", "READ_ONLY", "帮我找适合我的商品"),
+    IntentExample(SCENARIO.PRODUCT_FILTER_SEARCH, "条件筛选", "READ_ONLY", "不知道选哪款，帮我推荐"),
+    IntentExample(SCENARIO.PRODUCT_FILTER_SEARCH, "条件筛选", "READ_ONLY", "有没有更符合我需求的"),
+    IntentExample(SCENARIO.PRODUCT_FILTER_SEARCH, "条件筛选", "READ_ONLY", "按我的使用场景推荐商品"),
 
     #  product.sku_query — SKU 查询
     IntentExample(SCENARIO.PRODUCT_SKU_QUERY, "SKU 查询", "READ_ONLY", "查一下这个 SKU"),
@@ -518,7 +517,6 @@ SCENARIO_DESCRIPTIONS: dict[str, str] = {
     SCENARIO.PRODUCT_DETAIL: "商品详情咨询，例如：这个怎么样、多少钱、有货吗",
     SCENARIO.PRODUCT_COMPARE: "商品对比，例如：第一款和第二款有什么区别",
     SCENARIO.PRODUCT_USAGE: "商品适用性咨询，例如：这款适合跑步吗、可以用来游泳吗",
-    SCENARIO.PRODUCT_SEMANTIC_RECOMMEND: "按自然语言需求推荐商品，例如：根据我的需求推荐一下、帮我找适合我的商品",
     SCENARIO.PRODUCT_SKU_QUERY: "按 SKU 或货号精确查询商品，例如：查一下这个 SKU、按货号查一下",
     SCENARIO.PRODUCT_ATTRIBUTE_QUERY: "查询商品规格属性，例如：这款有哪些参数、商品参数给我看一下",
     SCENARIO.PRODUCT_PAGINATION: "翻页/排序，例如：下一页、按价格排序",

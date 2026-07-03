@@ -31,7 +31,6 @@ def register_default_handlers(registry: HandlerRegistry) -> None:
     # Product
     registry.register("product.catalog", ProductHandler())
     registry.register("product.filter_search", ProductHandler())
-    registry.register("product.semantic_recommend", ProductHandler())
     registry.register("product.sku_query", ProductHandler())
     registry.register("product.detail", ProductHandler())
     registry.register("product.compare", ProductHandler())

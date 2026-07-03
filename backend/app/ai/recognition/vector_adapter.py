@@ -18,7 +18,6 @@ logger = logging.getLogger(__name__)
 _SCENARIO_SKILL_MAP: dict[str, tuple[SkillName, RiskLevel]] = {
     "product.catalog": (SkillName.PRODUCT, RiskLevel.READ_ONLY),
     "product.filter_search": (SkillName.PRODUCT, RiskLevel.READ_ONLY),
-    "product.semantic_recommend": (SkillName.PRODUCT, RiskLevel.READ_ONLY),
     "product.detail": (SkillName.PRODUCT, RiskLevel.READ_ONLY),
     "product.usage": (SkillName.PRODUCT, RiskLevel.READ_ONLY),
     "product.compare": (SkillName.PRODUCT, RiskLevel.READ_ONLY),

@@ -73,6 +73,11 @@ class ProductFilterExtractor(ScenarioExtractor):
         if llm_entities.get("query"):
             entities["query_text"] = llm_entities["query"]
 
+        # ── 3.5: 回复模式（template / analysis）──
+        reply_mode = llm_entities.get("reply_mode", "template")
+        if reply_mode in ("template", "analysis"):
+            entities["reply_mode"] = reply_mode
+
         # ── 4: 分类（LLM 输出分类名，代码查表转 ID）──
         cat_name = (llm_entities.get("category_name") or "").strip()
         if cat_name and leaves:
