@@ -738,6 +738,9 @@ async def import_products_csv(
     for product, category_path in zip(products_to_create, indexed_paths):
         await _index_product(product, category_path)
     await db.commit()
+    # 后台异步抽取属性（参考 create_product 的 _try_extract_attrs）
+    for product in products_to_create:
+        asyncio.create_task(_try_extract_attrs(product.tenant_id, product.id))
     return ProductImportResponse(
         success=True,
         total_rows=len(import_rows),
