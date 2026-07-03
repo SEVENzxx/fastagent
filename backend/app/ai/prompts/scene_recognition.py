@@ -30,10 +30,11 @@ _PRINCIPLES = "\n".join([
     '6. "有什么"、"有没有"+"商品类别" → product.filter_search（商品筛选/推荐）',
     '7. "推荐"、"找"、"筛选" 无指代 → product.filter_search',
     '8. 分类浏览（"你们卖什么"、"有哪些分类"）→ product.catalog',
-    '9. "订单"+"取消"、"不想要了" → order.cancel',
-    '10. "有什么优惠/活动/政策" → knowledge.policy',
-    '11. "你好"、"在吗" → template.greeting',
-    '12. "买/下单/购买" + 指代词/商品 → order.create',
+    '9. 询问"什么情况可以取消订单/取消订单规则/能不能取消" → knowledge.policy',
+    '10. 明确要求"取消订单/我要取消/不想要了" → order.cancel',
+    '11. "有什么优惠/活动/政策" → knowledge.policy',
+    '12. "你好"、"在吗" → template.greeting',
+    '13. "买/下单/购买" + 指代词/商品 → order.create',
 ])
 
 _FOOTER = '只输出一行 JSON（不要 markdown 代码块）：\n{"scenario_id": "product.detail", "confidence": 0.85, "reason": "<简短理由>"}'

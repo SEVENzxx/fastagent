@@ -8,7 +8,7 @@
   - 不可取消状态 → 直接结束并回复原因（不中断）
 
 写入约束（P1）：
-  - SQLite 持久化 checkpointer，重启后图状态可恢复
+  - Redis 持久化 checkpointer，重启后图状态可恢复
   - Redis 持久化幂等 key，跨 worker/重启有效
   - execute_cancel 前必须从 IdempotencyService 查重
   - validate_cancelable_node 查 DB 校验订单归属 + 可取消状态
@@ -22,11 +22,11 @@ from __future__ import annotations
 
 import hashlib
 import logging
-from pathlib import Path
 from typing import Any, Optional
 
 from langchain_core.runnables import RunnableConfig
 
+from app.ai.graphs.checkpointer import get_checkpointer as _get_checkpointer
 from app.ai.graphs.common import (
     CONFIRM_OR_CANCEL_PROMPT,
     INVALID_CHOICE_REPLY,
@@ -34,7 +34,6 @@ from app.ai.graphs.common import (
     graph_failed,
 )
 from app.ai.graphs.observability import observe_graph_node
-from app.config import settings
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import interrupt
@@ -42,52 +41,7 @@ from typing_extensions import TypedDict
 
 logger = logging.getLogger(__name__)
 
-
-# ══════════════════════════════════════════════
-# 持久化 Checkpointer
-# ══════════════════════════════════════════════
-
-_CHECKPOINTER_DIR = Path(__file__).resolve().parents[3] / "data" / "checkpoints"
-_CHECKPOINTER = None
 _GRAPH_INSTANCE = None
-
-
-async def _get_checkpointer() -> Any:
-    """返回持久化 SQLite checkpointer。
-
-    AsyncSqliteSaver.from_conn_string() 返回 context manager，
-    这里直接用 aiosqlite.connect() + AsyncSqliteSaver(conn) 获取实例。
-    """
-    global _CHECKPOINTER
-    if _CHECKPOINTER is not None:
-        return _CHECKPOINTER
-
-    if settings.FASTAGENT_TEST_MODE:
-        _CHECKPOINTER = MemorySaver()
-        return _CHECKPOINTER
-
-    import aiosqlite
-
-    from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
-
-    _CHECKPOINTER_DIR.mkdir(parents=True, exist_ok=True)
-    db_path = _CHECKPOINTER_DIR / "order_cancel.db"
-    conn = await aiosqlite.connect(str(db_path))
-    _CHECKPOINTER = AsyncSqliteSaver(conn)
-    return _CHECKPOINTER
-
-
-async def close_checkpointer() -> None:
-    """关闭 SQLite checkpointer 连接并清理全局单例。"""
-    global _CHECKPOINTER, _GRAPH_INSTANCE
-    if _CHECKPOINTER is not None and not settings.FASTAGENT_TEST_MODE:
-        try:
-            if hasattr(_CHECKPOINTER, "conn"):
-                await _CHECKPOINTER.conn.close()
-        except Exception:
-            logger.warning("关闭取消订单 checkpointer 连接失败")
-    _CHECKPOINTER = None
-    _GRAPH_INSTANCE = None
 
 
 # ══════════════════════════════════════════════
@@ -106,6 +60,7 @@ class OrderCancelState(TypedDict, total=False):
 
     # ── 订单解析 ──
     resolved_orders: list[dict[str, Any]]
+    active_order_id: str | None
     selected_order_id: str | None
     selected_order_status: str | None
 
@@ -159,7 +114,26 @@ def _build_idempotency_key(
 _CANCELABLE_STATUSES: frozenset[str] = frozenset({
     "draft",
     "pending_customer_confirm",
+    "customer_confirmed",
+    "paid",
+    "agent_confirmed",
     "pending_approval",
+})
+
+_SHIPPED_OR_LATER_STATUSES: frozenset[str] = frozenset({
+    "shipped",
+    "signed",
+    "refunding",
+    "refunded",
+})
+
+_CANCEL_OPERATION_WORDS: frozenset[str] = frozenset({
+    "取消",
+    "不取消",
+    "算了",
+    "不要了",
+    "no",
+    "n",
 })
 
 
@@ -174,43 +148,13 @@ async def resolve_order_node(
 ) -> dict[str, Any]:
     """解析订单引用。
 
-    从 input_text 中提取订单号。如通过上下文能确定订单则直接选中。
-    多候选时 interrupt 让用户选择。
+    优先使用用户输入中的订单号；如果用户刚查看或创建过订单，则可复用 active_order_id。
+    无法确定订单时中断图流程，等待用户补充订单号，避免裸数字被后续识别链路误判为 SKU。
     """
-    _ = config
     text = state.get("input_text", "")
     resolved_orders = state.get("resolved_orders", [])
 
-    # 恢复调用且已有候选列表
-    if resolved_orders:
-        choice = interrupt(
-            "请选择要取消的订单编号：\n"
-            + _format_order_choices(resolved_orders)
-            + "\n\n输入订单编号选择，输入「取消」放弃操作。"
-        )
-        choice_stripped = choice.strip().lower()
-        if choice_stripped in ("取消", "不取消", "算了", "不要了", "no", "n"):
-            return {"error": "用户取消操作", "reply": "已取消操作，订单保持不变。如需其他帮助请随时告诉我。"}
-
-        try:
-            idx = int(choice_stripped) - 1
-            if 0 <= idx < len(resolved_orders):
-                order = resolved_orders[idx]
-                return {
-                    "selected_order_id": order.get("order_id") or order.get("id", ""),
-                    "selected_order_status": order.get("status", ""),
-                }
-        except (ValueError, IndexError):
-            logger.debug("取消订单：用户序号选择无效")
-        return {"error": INVALID_CHOICE_REPLY, "reply": "请输入有效的订单编号，或输入「取消」放弃操作。"}
-
-    # 首次调用：从文本或上下文提取订单号
-    from app.ai.skills.orders import _extract_order_id as extract_id
-
-    order_id = extract_id(text)
-
-    if order_id is not None:
-        # 在图中生成幂等 key（order_id 此时已知）
+    def _selection_update(order_id: str, status: str | None = None) -> dict[str, Any]:
         thread_id = config.get("configurable", {}).get("thread_id", "") if config else ""
         key = _build_idempotency_key(
             tenant_id=state.get("tenant_id", 0),
@@ -221,25 +165,71 @@ async def resolve_order_node(
         )
         return {
             "selected_order_id": str(order_id),
-            "selected_order_status": None,
+            "selected_order_status": status,
             "idempotency_key": key,
+            "error": None,
+            "reply": "",
         }
+
+    from app.ai.skills.orders import _extract_order_id as extract_id
+
+    if resolved_orders:
+        choice = interrupt(
+            "请选择要取消的订单编号：\n"
+            + _format_order_choices(resolved_orders)
+            + "\n\n输入序号选择，输入「取消」放弃操作。"
+        )
+        choice_stripped = str(choice).strip()
+        if choice_stripped.lower() in _CANCEL_OPERATION_WORDS:
+            return {
+                "error": "用户取消操作",
+                "confirmed": False,
+                "reply": "已取消操作，订单保持不变。如需其他帮助请随时告诉我。",
+            }
+
+        try:
+            idx = int(choice_stripped) - 1
+            if 0 <= idx < len(resolved_orders):
+                order = resolved_orders[idx]
+                return _selection_update(
+                    str(order.get("order_id") or order.get("id", "")),
+                    order.get("status", ""),
+                )
+        except (ValueError, IndexError):
+            logger.debug("取消订单：用户序号选择无效")
+        return {"error": INVALID_CHOICE_REPLY, "reply": "请输入有效的订单序号，或输入「取消」放弃操作。"}
+
+    order_id = extract_id(text)
+    if order_id is not None:
+        return _selection_update(str(order_id))
+
+    active_order_id = state.get("active_order_id")
+    if active_order_id:
+        return _selection_update(str(active_order_id))
+
+    choice = interrupt("请提供要取消的订单号。输入「取消」放弃操作。")
+    choice_stripped = str(choice).strip()
+    if choice_stripped.lower() in _CANCEL_OPERATION_WORDS:
+        return {
+            "error": "用户取消操作",
+            "confirmed": False,
+            "reply": "已取消操作，订单保持不变。如需其他帮助请随时告诉我。",
+        }
+
+    order_id = extract_id(choice_stripped)
+    if order_id is not None:
+        return _selection_update(str(order_id))
 
     return {
         "error": "缺少订单号",
-        "reply": "请提供要取消的订单号。",
+        "reply": "请输入有效的订单号，或输入「取消」放弃操作。",
     }
-
 
 async def validate_cancelable_node(
     state: OrderCancelState,
     config: Optional[RunnableConfig] = None,
 ) -> dict[str, Any]:
-    """校验订单是否可取消 + 订单归属。
-
-    有 DB 时查真实状态 + 校验 contact_id 所有权。
-    无 DB（测试）时按已知状态简单判断。
-    """
+    """校验订单是否可取消，并重新读取 DB 确认订单归属和最新状态。"""
     order_id = state.get("selected_order_id", "")
     if not order_id:
         return {
@@ -256,7 +246,6 @@ async def validate_cancelable_node(
         tenant_id = state.get("tenant_id", 0)
         contact_id = state.get("contact_id")
 
-        # 取消属于写操作：contact_id 为 None 时直接拒绝
         if contact_id is None:
             return {
                 "cancelable": False,
@@ -272,7 +261,6 @@ async def validate_cancelable_node(
                 "reply": f"未找到订单 #{order_id}，请核对订单号。",
             }
 
-        # 所有权校验：订单必须属于当前客户
         if order.contact_id != contact_id:
             logger.warning(
                 "取消订单归属校验失败: order=%s tenant=%s order_contact=%s req_contact=%s",
@@ -288,7 +276,15 @@ async def validate_cancelable_node(
             }
 
         status = order.status
-        order_id = str(order.id)  # 使用真实 DB 主键
+        order_id = str(order.id)
+        if status == "cancelled":
+            return {
+                "cancelable": False,
+                "cancel_reason": "订单已取消。",
+                "reply": "该订单已取消，无需重复取消。",
+                "selected_order_id": order_id,
+                "selected_order_status": status,
+            }
         if status in _CANCELABLE_STATUSES:
             return {
                 "cancelable": True,
@@ -296,28 +292,48 @@ async def validate_cancelable_node(
                 "selected_order_id": order_id,
                 "selected_order_status": status,
             }
+        if status in _SHIPPED_OR_LATER_STATUSES:
+            return {
+                "cancelable": False,
+                "cancel_reason": f"订单已进入发货后状态（{status}）。",
+                "reply": "该订单已发货或进入售后流程，当前不支持自助取消。如需处理请联系人工客服。",
+                "selected_order_id": order_id,
+                "selected_order_status": status,
+            }
         return {
             "cancelable": False,
             "cancel_reason": f"订单当前状态不支持取消（{status}）。",
-            "reply": "该订单当前状态不支持取消。如需帮助请联系人工客服。",
+            "reply": "该订单当前状态暂不支持自助取消。如需帮助请联系人工客服。",
             "selected_order_id": order_id,
             "selected_order_status": status,
         }
 
-    # 无 DB（测试）: 按已知状态判断
     status = state.get("selected_order_status")
     if status is None:
         return {"cancelable": True, "cancel_reason": None}
 
+    if status == "cancelled":
+        return {
+            "cancelable": False,
+            "cancel_reason": "订单已取消。",
+            "reply": "该订单已取消，无需重复取消。",
+        }
+
     if status in _CANCELABLE_STATUSES:
         return {"cancelable": True, "cancel_reason": None}
+
+    if status in _SHIPPED_OR_LATER_STATUSES:
+        return {
+            "cancelable": False,
+            "cancel_reason": f"订单已进入发货后状态（{status}）。",
+            "reply": "该订单已发货或进入售后流程，当前不支持自助取消。如需处理请联系人工客服。",
+        }
 
     return {
         "cancelable": False,
         "cancel_reason": f"订单当前状态不支持取消（{status}）。",
-        "reply": "该订单当前状态不支持取消。如需帮助请联系人工客服。",
+        "reply": "该订单当前状态暂不支持自助取消。如需帮助请联系人工客服。",
     }
-
 
 async def confirm_cancel_node(
     state: OrderCancelState,

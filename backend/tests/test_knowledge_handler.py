@@ -332,6 +332,24 @@ class TestKnowledgePolicy:
         methods = [c["method"] for c in FakeKnowledgeSkill.call_log]
         assert methods == ["search_qa", "search_knowledge"]
 
+    @pytest.mark.asyncio
+    async def test_order_cancel_policy_builtin_reply(self) -> None:
+        """取消订单规则属于系统订单状态机政策，不依赖租户知识库。"""
+        FakeKnowledgeSkill.reset()
+
+        handler = KnowledgeHandler(skill=FakeKnowledgeSkill)
+        ctx = make_context()
+        decision = make_decision("knowledge.policy", text="什么样的情况可以取消订单？")
+
+        result = await handler.execute(decision, ctx)
+
+        assert result.scenario_id == "knowledge.policy"
+        assert result.pending_directive == PendingDirective.CLEAR
+        assert "发货前" in result.reply
+        assert "人工客服" in result.reply
+        assert result.context_update.get("last_knowledge_scope") == "builtin_policy"
+        assert FakeKnowledgeSkill.call_log == []
+
 
 # ══════════════════════════════════════════════
 # 3. 无命中
@@ -369,7 +387,6 @@ class TestKnowledgeNoResult:
         # 只调了 search_qa 和 search_knowledge
         methods = [c["method"] for c in FakeKnowledgeSkill.call_log]
         assert methods == ["search_qa", "search_knowledge"]
-
 
 # ══════════════════════════════════════════════
 # 4. 追问精准续查

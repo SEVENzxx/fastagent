@@ -463,6 +463,57 @@ async def create_refund(
     )
 
 
+async def refund_approve(
+    *,
+    tenant_id: int,
+    contact_id: int | None = None,
+    db: AsyncSession,
+    **kwargs,
+) -> ToolResult:
+    """售后审批通过 — refunding → refunded。
+
+    由后台审核流程调用，审核通过后标记订单为已退款。
+    """
+    order_id = kwargs.get("order_id")
+    if order_id is None:
+        return ToolResult(ok=False, skill_name="refund_approve", error="缺少订单号。")
+    try:
+        order_id = int(order_id)
+    except (TypeError, ValueError):
+        return ToolResult(ok=False, skill_name="refund_approve", error=f"无效订单号：{order_id}")
+
+    order = await order_service.get_order(db, order_id, tenant_id)
+    if order is None:
+        return ToolResult(ok=False, skill_name="refund_approve", error=f"未找到订单 #{order_id}。")
+
+    if order.status == "refunded":
+        return ToolResult(
+            ok=True,
+            skill_name="refund_approve",
+            result={"order_id": str(order.id), "status": "refunded", "message": "订单已退款。"},
+        )
+
+    try:
+        order = await order_service.transition_order_status(db, order_id, tenant_id, "refunded")
+    except ValueError as exc:
+        return ToolResult(ok=False, skill_name="refund_approve", error=str(exc))
+
+    logger.info(
+        "Skill refund_approve 成功：order_id=%s tenant_id=%s new_status=refunded",
+        order_id, tenant_id,
+    )
+    return ToolResult(
+        ok=True,
+        skill_name="refund_approve",
+        result={
+            "order_id": str(order.id),
+            "status": order.status,
+            "status_label": _status_label(order.status),
+            "message": "售后审批通过，退款已完成。",
+        },
+    )
+
+
 async def simulate_payment(
     *,
     tenant_id: int,

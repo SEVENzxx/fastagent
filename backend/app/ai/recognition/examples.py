@@ -420,6 +420,11 @@ DEFAULT_INTENT_EXAMPLES: tuple[IntentExample, ...] = (
     IntentExample(SCENARIO.KNOWLEDGE_POLICY, "政策咨询", "READ_ONLY", "有没有满减活动"),
     IntentExample(SCENARIO.KNOWLEDGE_POLICY, "政策咨询", "READ_ONLY", "现在有什么活动"),
 
+    IntentExample(SCENARIO.KNOWLEDGE_POLICY, "政策咨询", "READ_ONLY", "什么样的情况可以取消订单"),
+    IntentExample(SCENARIO.KNOWLEDGE_POLICY, "政策咨询", "READ_ONLY", "什么情况下可以取消订单"),
+    IntentExample(SCENARIO.KNOWLEDGE_POLICY, "政策咨询", "READ_ONLY", "取消订单的规则是什么"),
+    IntentExample(SCENARIO.KNOWLEDGE_POLICY, "政策咨询", "READ_ONLY", "订单发货后还能取消吗"),
+    IntentExample(SCENARIO.KNOWLEDGE_POLICY, "政策咨询", "READ_ONLY", "哪些订单支持取消"),
     #  knowledge.qa — 知识问答
     IntentExample(SCENARIO.KNOWLEDGE_QA, "知识问答", "READ_ONLY", "支付有哪些方式"),
     IntentExample(SCENARIO.KNOWLEDGE_QA, "知识问答", "READ_ONLY", "支持什么支付"),
@@ -527,7 +532,7 @@ SCENARIO_DESCRIPTIONS: dict[str, str] = {
     SCENARIO.ORDER_CANCEL: "取消订单，例如：取消订单、不想要了",
     SCENARIO.ORDER_CONFIRM: "确认订单，例如：确认、没问题、就这个了",
     SCENARIO.ORDER_REFUND: "退款售后，例如：我要退款、申请售后",
-    SCENARIO.KNOWLEDGE_POLICY: "政策咨询，例如：有什么优惠、什么时候发货",
+    SCENARIO.KNOWLEDGE_POLICY: "政策咨询，例如：有什么优惠、什么时候发货、什么情况下可以取消订单",
     SCENARIO.KNOWLEDGE_QA: "知识问答，例如：怎么付款、可以开发票吗",
     SCENARIO.KNOWLEDGE_PRODUCT_QA: "商品知识，例如：这个保修多久、怎么保养",
     SCENARIO.MEMORY_SAVE: "保存偏好，例如：记住我喜欢黑色",

@@ -52,7 +52,7 @@ async def lifespan(app: FastAPI):
     await close_cached_redis_client()
     from app.ai.context.pending_service import close_cached_pending_redis_client
     await close_cached_pending_redis_client()
-    # 关闭 graph SQLite checkpointer 连接
+    # 关闭 graph checkpointer 连接（Redis 无需显式关闭）
     from app.ai.graphs import close_order_graph_checkpointers
     await close_order_graph_checkpointers()
 

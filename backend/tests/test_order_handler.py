@@ -1113,6 +1113,9 @@ class TestOrderCreationGraph:
         create_call = next(call for call in FakeOrderSkill.call_log if call.get("method") == "create_order_draft")
         assert create_call["receiver_phone"] == "13800138000"
         assert create_call["conversation_id"] == ctx.conversation_id
+        assert result4.context_update["active_order_id"] == "mock_1_1"
+        assert result4.context_update["recent_orders"][0]["id"] == "mock_1_1"
+        assert result4.context_update["recent_orders"][0]["status"] == "customer_confirmed"
 
     @pytest.mark.asyncio
     async def test_create_from_visible_single_candidate_deixis(self) -> None:
@@ -1443,14 +1446,55 @@ class TestOrderCancelGraph:
 
     @pytest.mark.asyncio
     async def test_cancel_no_order_id_in_text(self) -> None:
-        """文本无订单号 → 提示补充。"""
+        """文本无订单号时应进入 Pending，等待用户补充订单号。"""
         handler = OrderHandler(skill=FakeOrderSkill)
         ctx = make_context()
         decision = make_decision("order.cancel", text="我要取消订单")
+        result1 = await handler.execute(decision, ctx)
+
+        assert result1.pending_directive == PendingDirective.SET
+        assert result1.pending_state is not None
+        assert "订单号" in result1.reply
+
+        result2 = await handler.resume(result1.pending_state, "123456789012345", ctx)
+        assert result2.pending_directive == PendingDirective.SET
+        assert result2.pending_state is not None
+        assert "123456789012345" in result2.reply
+
+        result3 = await handler.resume(result2.pending_state, "确认", ctx)
+        assert result3.pending_directive == PendingDirective.CLEAR
+        assert "取消" in result3.reply
+
+    @pytest.mark.asyncio
+    async def test_cancel_uses_active_order_id(self) -> None:
+        """只说“取消订单”时，若上下文有当前订单，应复用 active_order_id。"""
+        handler = OrderHandler(skill=FakeOrderSkill)
+        ctx = make_context(active_order_id="123456789012345")
+        decision = make_decision("order.cancel", text="取消订单")
         result = await handler.execute(decision, ctx)
 
-        assert result.pending_directive == PendingDirective.CLEAR
-        assert "订单号" in result.reply
+        assert result.pending_directive == PendingDirective.SET
+        assert result.pending_state is not None
+        assert "123456789012345" in result.reply
+
+    @pytest.mark.asyncio
+    async def test_cancel_status_policy(self) -> None:
+        """发货前状态允许取消，发货后状态不允许自助取消。"""
+        from app.ai.graphs.order_cancel import validate_cancelable_node
+
+        for status in ("customer_confirmed", "paid", "agent_confirmed"):
+            result = await validate_cancelable_node({
+                "selected_order_id": "1",
+                "selected_order_status": status,
+            })
+            assert result["cancelable"] is True
+
+        shipped = await validate_cancelable_node({
+            "selected_order_id": "1",
+            "selected_order_status": "shipped",
+        })
+        assert shipped["cancelable"] is False
+        assert "人工客服" in shipped["reply"]
 
     @pytest.mark.asyncio
     async def test_cancel_idempotent_resume(self) -> None:

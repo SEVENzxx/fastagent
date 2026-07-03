@@ -11,7 +11,7 @@
   - 汇总确认 → interrupt 展示完整订单摘要，等待最终确认
 
 写入约束（P1）：
-  - SQLite 持久化 checkpointer（非 MemorySaver），重启后图状态可恢复
+  - Redis 持久化 checkpointer（非 MemorySaver），重启后图状态可恢复
   - Redis 持久化幂等 key（非内存 dict），跨 worker/重启有效
   - 汇总确认后按最终业务参数生成提交幂等 key
   - execute_create 前必须从 IdempotencyService 查重，相同 key 只执行一次写操作
@@ -26,11 +26,11 @@ from __future__ import annotations
 import hashlib
 import logging
 import re
-from pathlib import Path
 from typing import Any, Optional
 
 from langchain_core.runnables import RunnableConfig
 
+from app.ai.graphs.checkpointer import get_checkpointer as _get_checkpointer
 from app.ai.graphs.common import (
     CONFIRM_OR_CANCEL_PROMPT,
     INVALID_CHOICE_REPLY,
@@ -38,7 +38,6 @@ from app.ai.graphs.common import (
     graph_failed,
 )
 from app.ai.graphs.observability import observe_graph_node
-from app.config import settings
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import interrupt
@@ -46,52 +45,7 @@ from typing_extensions import TypedDict
 
 logger = logging.getLogger(__name__)
 
-
-# ══════════════════════════════════════════════
-# 持久化 Checkpointer
-# ══════════════════════════════════════════════
-
-_CHECKPOINTER_DIR = Path(__file__).resolve().parents[3] / "data" / "checkpoints"
-_CHECKPOINTER = None
 _GRAPH_INSTANCE = None
-
-
-async def _get_checkpointer() -> Any:
-    """返回持久化 SQLite checkpointer（测试时可用 MemorySaver 替换）。
-
-    AsyncSqliteSaver.from_conn_string() 返回 context manager，
-    这里直接用 aiosqlite.connect() + AsyncSqliteSaver(conn) 获取实例。
-    """
-    global _CHECKPOINTER
-    if _CHECKPOINTER is not None:
-        return _CHECKPOINTER
-
-    if settings.FASTAGENT_TEST_MODE:
-        _CHECKPOINTER = MemorySaver()
-        return _CHECKPOINTER
-
-    import aiosqlite
-
-    from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
-
-    _CHECKPOINTER_DIR.mkdir(parents=True, exist_ok=True)
-    db_path = _CHECKPOINTER_DIR / "order_creation.db"
-    conn = await aiosqlite.connect(str(db_path))
-    _CHECKPOINTER = AsyncSqliteSaver(conn)
-    return _CHECKPOINTER
-
-
-async def close_checkpointer() -> None:
-    """关闭 SQLite checkpointer 连接并清理全局单例。"""
-    global _CHECKPOINTER, _GRAPH_INSTANCE
-    if _CHECKPOINTER is not None and not settings.FASTAGENT_TEST_MODE:
-        try:
-            if hasattr(_CHECKPOINTER, "conn"):
-                await _CHECKPOINTER.conn.close()
-        except Exception:
-            logger.warning("关闭下单 checkpointer 连接失败")
-    _CHECKPOINTER = None
-    _GRAPH_INSTANCE = None
 
 
 # ══════════════════════════════════════════════

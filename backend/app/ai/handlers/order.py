@@ -329,6 +329,7 @@ class OrderHandler(BaseHandler):
             "conversation_id": ctx.conversation_id,
             "contact_id": ctx.contact_id,
             "input_text": text,
+            "active_order_id": ctx.active_order_id,
         }
 
         config = {"configurable": {"thread_id": graph_thread_id}}
@@ -554,6 +555,7 @@ class OrderHandler(BaseHandler):
             scenario_id=scenario_id,
             reply=reply,
             pending_directive=PendingDirective.CLEAR,
+            context_update=_graph_context_update(scenario_id, result, reply),
         )
 
     @staticmethod
@@ -608,7 +610,7 @@ class OrderHandler(BaseHandler):
         if not orders and not _extract_order_number(text):
             return HandlerResult(
                 scenario_id="order.list",
-                reply="请提供订单号以便查询。",
+                reply=OrderReplyBuilder.no_orders(),
                 pending_directive=PendingDirective.CLEAR,
             )
 
@@ -662,14 +664,6 @@ class OrderHandler(BaseHandler):
         count = int(payload.get("count", 0))
 
         if not filtered:
-            # 无匹配订单且用户未提供订单号 → 追问订单号
-            if not _extract_order_number(text):
-                return HandlerResult(
-                    scenario_id="order.filter",
-                    reply="请提供订单号以便查询。",
-                    pending_directive=PendingDirective.CLEAR,
-                    context_update={"last_intent": "order.filter"},
-                )
             return HandlerResult(
                 scenario_id="order.filter",
                 reply="暂无符合条件的订单。",
@@ -858,6 +852,67 @@ class OrderHandler(BaseHandler):
 
 
 # ── 工具函数 ──
+
+
+def _graph_context_update(
+    scenario_id: str,
+    result: Any,
+    reply: str,
+) -> dict[str, Any]:
+    """从订单图执行结果中提取可跨轮复用的订单上下文。"""
+    update: dict[str, Any] = {"last_intent": scenario_id}
+    order_id = _graph_order_id(result, reply)
+    if not order_id:
+        return update
+
+    if scenario_id == "order.create":
+        status = _graph_result_value(result, "status") or "customer_confirmed"
+        status_label = _graph_result_value(result, "status_label") or "待审核发货"
+        update.update({
+            "active_order_id": order_id,
+            "recent_orders": [{
+                "id": order_id,
+                "status": status,
+                "status_label": status_label,
+                "payable_amount": _graph_result_value(result, "payable_amount") or 0,
+            }],
+        })
+        return update
+
+    if scenario_id == "order.cancel":
+        update.update({
+            "active_order_id": order_id,
+            "recent_orders": [{
+                "id": order_id,
+                "status": "cancelled",
+                "status_label": "已取消",
+                "payable_amount": 0,
+            }],
+        })
+
+    return update
+
+
+def _graph_result_value(result: Any, key: str) -> Any:
+    if isinstance(result, dict):
+        value = result.get(key)
+        if value is not None:
+            return value
+    return None
+
+
+def _graph_order_id(result: Any, reply: str) -> str | None:
+    value = _graph_result_value(result, "order_id")
+    if value:
+        return str(value)
+
+    match = re.search(r"订单号[:：]\s*#?([A-Za-z0-9_-]+)", reply)
+    if match:
+        return match.group(1)
+    match = re.search(r"#([A-Za-z0-9_-]+)", reply)
+    if match:
+        return match.group(1)
+    return None
 
 
 def _summarize_orders(orders: list[dict[str, Any]]) -> list[dict[str, Any]]:

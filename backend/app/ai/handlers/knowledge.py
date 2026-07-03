@@ -79,6 +79,17 @@ class KnowledgeHandler(BaseHandler):
                 return result
 
         # ── 路径 2：QA pair 高置信直出 ──
+        if scenario == "knowledge.policy" and _is_order_cancel_policy_question(text):
+            return HandlerResult(
+                scenario_id=scenario,
+                reply=_order_cancel_policy_reply(),
+                pending_directive=PendingDirective.CLEAR,
+                context_update={
+                    "last_knowledge_topic": "订单取消规则",
+                    "last_knowledge_scope": "builtin_policy",
+                    "last_knowledge_refs": [],
+                },
+            )
         qa_result = await self._call_skill("search_qa", tenant_id=ctx.tenant_id, query=text)
         if qa_result.ok:
             items = (qa_result.result or {}).get("items", [])
@@ -266,6 +277,33 @@ class KnowledgeHandler(BaseHandler):
 
 
 # ── 工具函数 ──
+
+
+_CANCEL_POLICY_HINTS: tuple[str, ...] = (
+    "什么",
+    "哪些",
+    "规则",
+    "条件",
+    "情况",
+    "可以",
+    "能不能",
+    "支持",
+    "发货后",
+)
+
+
+def _is_order_cancel_policy_question(text: str) -> bool:
+    """识别订单取消规则咨询，避免被当成取消订单写操作。"""
+    return "订单" in text and "取消" in text and any(hint in text for hint in _CANCEL_POLICY_HINTS)
+
+
+def _order_cancel_policy_reply() -> str:
+    """返回平台订单状态机内置的取消规则。"""
+    return (
+        "订单在发货前可以自助取消，包括待确认、待审核发货、待发货等状态。"
+        "订单已发货、已签收或进入售后/退款流程后，不支持自助取消；"
+        "如需继续处理，请联系人工客服。"
+    )
 
 
 def _build_knowledge_refs(

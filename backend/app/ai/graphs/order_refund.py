@@ -1,7 +1,8 @@
 """OrderRefundGraph — 订单售后 LangGraph 子图。
 
 流程：
-  resolve_order → validate_refundable → collect_reason → confirm_refund → execute_refund → build_result
+  resolve_order → validate_refundable → collect_reason → confirm_refund
+  → execute_refund → wait_agent_approval → build_result
 
 中断点：
   - 订单多候选 → interrupt 让用户选择
@@ -9,21 +10,22 @@
   - 退款确认 → interrupt 等用户确认
 
 写入约束（P1）：
-  - SQLite 持久化 checkpointer（非 MemorySaver），重启后图状态可恢复
+  - Redis 持久化 checkpointer（非 MemorySaver），重启后图状态可恢复
   - Redis 持久化幂等 key，跨 worker/重启有效
   - execute_refund 前必须从 IdempotencyService 查重
   - validate_refundable_node 查 DB 校验订单归属 + 可售后状态
+  - wait_agent_approval 审核通过后状态变更为 refunded
 """
 
 from __future__ import annotations
 
 import hashlib
 import logging
-from pathlib import Path
 from typing import Any, Optional
 
 from langchain_core.runnables import RunnableConfig
 
+from app.ai.graphs.checkpointer import get_checkpointer as _get_checkpointer
 from app.ai.graphs.common import (
     CONFIRM_OR_CANCEL_PROMPT,
     INVALID_CHOICE_REPLY,
@@ -31,7 +33,6 @@ from app.ai.graphs.common import (
     graph_failed,
 )
 from app.ai.graphs.observability import observe_graph_node
-from app.config import settings
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import interrupt
@@ -39,48 +40,7 @@ from typing_extensions import TypedDict
 
 logger = logging.getLogger(__name__)
 
-
-# ══════════════════════════════════════════════
-# 持久化 Checkpointer
-# ══════════════════════════════════════════════
-
-_CHECKPOINTER_DIR = Path(__file__).resolve().parents[3] / "data" / "checkpoints"
-_CHECKPOINTER = None
 _GRAPH_INSTANCE = None
-
-
-async def _get_checkpointer() -> Any:
-    """返回持久化 SQLite checkpointer（测试时可用 MemorySaver 替换）。"""
-    global _CHECKPOINTER
-    if _CHECKPOINTER is not None:
-        return _CHECKPOINTER
-
-    if settings.FASTAGENT_TEST_MODE:
-        _CHECKPOINTER = MemorySaver()
-        return _CHECKPOINTER
-
-    import aiosqlite
-
-    from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
-
-    _CHECKPOINTER_DIR.mkdir(parents=True, exist_ok=True)
-    db_path = _CHECKPOINTER_DIR / "order_refund.db"
-    conn = await aiosqlite.connect(str(db_path))
-    _CHECKPOINTER = AsyncSqliteSaver(conn)
-    return _CHECKPOINTER
-
-
-async def close_checkpointer() -> None:
-    """关闭 SQLite checkpointer 连接并清理全局单例。"""
-    global _CHECKPOINTER, _GRAPH_INSTANCE
-    if _CHECKPOINTER is not None and not settings.FASTAGENT_TEST_MODE:
-        try:
-            if hasattr(_CHECKPOINTER, "conn"):
-                await _CHECKPOINTER.conn.close()
-        except Exception:
-            logger.warning("关闭售后 checkpointer 连接失败")
-    _CHECKPOINTER = None
-    _GRAPH_INSTANCE = None
 
 
 # ══════════════════════════════════════════════
@@ -458,6 +418,67 @@ async def execute_refund_node(
         return graph_exception(exc, idempotency_key)
 
 
+async def wait_agent_approval_node(
+    state: OrderRefundState,
+    config: Optional[RunnableConfig] = None,
+) -> dict[str, Any]:
+    """坐席审核售后节点。
+
+    售后申请已提交（shipped/signed → refunding），
+    等待坐席审批通过后状态变为 refunded。
+
+    auto_approve=True（默认）→ 自动审批通过。
+    auto_approve=False → 中断等待坐席手动审批（预留接口）。
+    """
+    order_id = state.get("order_id")
+    if not order_id:
+        return {}
+
+    auto_approve = True
+    if config and "configurable" in config:
+        auto_approve = config["configurable"].get("auto_approve", True)
+
+    if auto_approve:
+        db = config.get("configurable", {}).get("db") if config else None
+        order_skill = config.get("configurable", {}).get("order_skill") if config else None
+
+        try:
+            if order_skill is not None:
+                result = await order_skill.refund_approve(
+                    tenant_id=state.get("tenant_id", 0),
+                    contact_id=state.get("contact_id"),
+                    db=db,
+                    order_id=order_id,
+                )
+            else:
+                from app.ai.skills.orders import refund_approve
+
+                result = await refund_approve(
+                    tenant_id=state.get("tenant_id", 0),
+                    contact_id=state.get("contact_id"),
+                    db=db,
+                    order_id=order_id,
+                )
+                if db is not None:
+                    await db.commit()
+
+            if not result.ok:
+                logger.warning("售后自动审批失败: %s", result.error)
+                return graph_failed("售后审批", "", result.error)
+
+            logger.info("售后自动审批通过: order_id=%s", order_id)
+            return {}
+
+        except Exception as exc:
+            logger.error("售后自动审批异常: %s", exc)
+            return graph_exception(exc)
+
+    # 非自动审批 → 中断预留（等待坐席通过 admin API 恢复线程）
+    interrupt(
+        f"订单 #{order_id} 售后申请需要坐席审核。请等待客服人员审核确认。"
+    )
+    return {}
+
 
 async def build_result_node(
     state: OrderRefundState,
@@ -530,6 +551,14 @@ def _route_confirm_refund(state: OrderRefundState) -> str:
 
 
 def _route_execute_refund(state: OrderRefundState) -> str:
+    if state.get("error"):
+        return "build_result"
+    return "wait_agent_approval"
+
+
+def _route_wait_agent_approval(state: OrderRefundState) -> str:
+    if state.get("error"):
+        return "build_result"
     return "build_result"
 
 
@@ -551,6 +580,7 @@ def build_order_refund_graph(checkpointer: Any | None = None) -> StateGraph:
     builder.add_node("collect_reason", observe_graph_node("order.refund", "collect_reason", collect_reason_node))
     builder.add_node("confirm_refund", observe_graph_node("order.refund", "confirm_refund", confirm_refund_node))
     builder.add_node("execute_refund", observe_graph_node("order.refund", "execute_refund", execute_refund_node))
+    builder.add_node("wait_agent_approval", observe_graph_node("order.refund", "wait_agent_approval", wait_agent_approval_node))
     builder.add_node("build_result", observe_graph_node("order.refund", "build_result", build_result_node))
 
     builder.add_edge(START, "resolve_order")
@@ -559,6 +589,7 @@ def build_order_refund_graph(checkpointer: Any | None = None) -> StateGraph:
     builder.add_conditional_edges("collect_reason", _route_collect_reason)
     builder.add_conditional_edges("confirm_refund", _route_confirm_refund)
     builder.add_conditional_edges("execute_refund", _route_execute_refund)
+    builder.add_conditional_edges("wait_agent_approval", _route_wait_agent_approval)
     builder.add_edge("build_result", END)
 
     return builder.compile(checkpointer=checkpointer or MemorySaver())
