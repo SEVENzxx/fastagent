@@ -5,6 +5,7 @@ Handler 编排 ScenarioExtractor → ProductSkill → ProductReplyBuilder。
 """
 from __future__ import annotations
 
+import json
 import logging
 import re
 from typing import Any
@@ -96,7 +97,7 @@ class ProductHandler(BaseHandler):
             case SCENARIO.PRODUCT_CATALOG:
                 result = await self._handle_catalog(text, ctx, decision)
             case SCENARIO.PRODUCT_FILTER_SEARCH:
-                result = await self._handle_filter_search(text, ctx)
+                result = await self._handle_filter_search(text, ctx, decision)
             case SCENARIO.PRODUCT_SKU_QUERY:
                 result = await self._handle_sku_query(text, decision, ctx)
             case SCENARIO.PRODUCT_DETAIL:
@@ -240,8 +241,40 @@ class ProductHandler(BaseHandler):
         self,
         text: str,
         ctx: SessionContext,
+        decision: ScenarioDecision | None = None,
     ) -> HandlerResult:
         """商品筛选搜索 — Extractor 抽参数 → Skill 查询 → 模板或LLM推荐。"""
+        # ── 0: 列表级分析上下文 — 不重新搜索，直接用 batch_get_detail 拉详情 ──
+        if decision and decision.entities.get("analysis_mode") == "list_analysis":
+            context_product_ids: list[int] = decision.entities.get("context_product_ids", [])
+            if context_product_ids:
+                products = await self._call_skill(
+                    "batch_get_detail",
+                    tenant_id=ctx.tenant_id,
+                    product_ids=context_product_ids,
+                )
+                products = [p for p in products if p]
+                if not products:
+                    return HandlerResult(
+                        scenario_id=SCENARIO.PRODUCT_FILTER_SEARCH,
+                        reply="您要查看的商品已不存在。",
+                        pending_directive=PendingDirective.CLEAR,
+                    )
+                reply, visible_products = await self._analysis_reply(text, products)
+                return HandlerResult(
+                    scenario_id=SCENARIO.PRODUCT_FILTER_SEARCH,
+                    reply=reply,
+                    pending_directive=PendingDirective.CLEAR,
+                    context_update={
+                        "last_visible_products": [
+                            {"index": i + 1, "product_id": str(p["id"]), "name": p["name"]}
+                            for i, p in enumerate(visible_products)
+                        ],
+                        "last_focus_product_id": None,
+                        "last_intent": SCENARIO.PRODUCT_FILTER_SEARCH,
+                        "last_product_query": text[:200],
+                    },
+                )
         extract_result = await self._filter_extractor.extract(
             text=text, context=ctx, tenant_id=ctx.tenant_id,
         )
@@ -255,6 +288,7 @@ class ProductHandler(BaseHandler):
                 min_price=extracted.get("price_min"),
                 max_price=extracted.get("price_max"),
                 attr_filters=extracted.get("attr_filters") or {},
+                query_text=extracted.get("query_text", ""),
             ),
         )
         if not products:
@@ -292,11 +326,12 @@ class ProductHandler(BaseHandler):
         # ── 按 reply_mode 决定回复方式 ──
         reply_mode = extracted.get("reply_mode", "template")
         if reply_mode == "analysis":
-            reply = await self._analysis_reply(text, products)
+            reply, visible_products = await self._analysis_reply(text, products)
         else:
             reply = ProductReplyBuilder.product_list(
                 page_products, header_suffix=suffix, show_pagination=has_more,
             )
+            visible_products = products
 
         return HandlerResult(
             scenario_id=SCENARIO.PRODUCT_FILTER_SEARCH,
@@ -307,7 +342,7 @@ class ProductHandler(BaseHandler):
                 "product_page": 1,
                 "last_visible_products": [
                     {"index": i + 1, "product_id": str(p["id"]), "name": p["name"]}
-                    for i, p in enumerate(products)
+                    for i, p in enumerate(visible_products)
                 ],
                 "last_focus_product_id": None,
                 "last_product_id": None,
@@ -321,16 +356,20 @@ class ProductHandler(BaseHandler):
         self,
         text: str,
         products: list[dict[str, Any]],
-    ) -> str:
-        """LLM 分析推荐回复 — 对搜到的商品按用户软性需求进行分析推荐。"""
-        product_summary = "\n".join(
-            f"- {p.get('name', '')} ¥{float(p['price']):.0f} {p.get('description', '')[:80]}"
-            for p in products[:20]
+    ) -> tuple[str, list[dict[str, Any]]]:
+        """LLM 分析推荐 — 返回 (回复文本, 推荐的商品列表)。
+
+        LLM 输出结构化 JSON（含 recommended_ids），系统解析后写入 last_visible_products，
+        确保后续序号引用指向推荐的子集而非全量搜索结果。
+        """
+        product_lines = "\n".join(
+            f"{i + 1}. {p.get('name', '')} ¥{float(p['price']):.0f} {p.get('description', '')[:80]}"
+            for i, p in enumerate(products[:20])
         )
         messages = [
             {"role": "system", "content": PRODUCT_RECOMMEND_ANALYSIS_PROMPT.format(
                 user_query=text,
-                products=product_summary,
+                products=product_lines,
             )},
         ]
         try:
@@ -340,13 +379,30 @@ class ProductHandler(BaseHandler):
                 max_tokens=500,
                 temperature=0.3,
             )
-            reply = (raw or "").strip()
-            if reply:
-                return reply
-        except Exception:
-            logger.warning("LLM 分析推荐失败，降级为模板: %s", text[:30], exc_info=True)
+            parsed = json.loads(raw.strip())
+            recommended_ids: list[int] = parsed.get("recommended_ids", [])
+            reply: str = parsed.get("recommendation_reply", "")
 
-        return ProductReplyBuilder.product_list(products[:DEFAULT_PAGE_SIZE])
+            # 校验并过滤出有效推荐
+            recommended = []
+            seen: set[int] = set()
+            for idx in recommended_ids:
+                if 1 <= idx <= len(products) and idx not in seen:
+                    recommended.append(products[idx - 1])
+                    seen.add(idx)
+
+            if reply and recommended:
+                return reply, recommended
+        except Exception:
+            logger.warning(
+                "LLM 分析推荐失败，降级为模板: %s", text[:30], exc_info=True,
+            )
+
+        # 降级：返回模板列表 + 第一页
+        return (
+            ProductReplyBuilder.product_list(products[:DEFAULT_PAGE_SIZE]),
+            products[:DEFAULT_PAGE_SIZE],
+        )
 
     async def _handle_sku_query(
         self,

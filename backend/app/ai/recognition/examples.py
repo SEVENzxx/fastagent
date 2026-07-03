@@ -84,23 +84,12 @@ class IntentExample:
     example_text: str
 DEFAULT_INTENT_EXAMPLES: tuple[IntentExample, ...] = (
 
-    #  product.catalog — 商品分类浏览
-    IntentExample(SCENARIO.PRODUCT_CATALOG, "商品分类浏览", "READ_ONLY", "你们有什么产品"),
-    IntentExample(SCENARIO.PRODUCT_CATALOG, "商品分类浏览", "READ_ONLY", "你们有什么商品"),
-    IntentExample(SCENARIO.PRODUCT_CATALOG, "商品分类浏览", "READ_ONLY", "公司有什么产品"),
-    IntentExample(SCENARIO.PRODUCT_CATALOG, "商品分类浏览", "READ_ONLY", "有什么卖的"),
+    #  product.catalog — 商品分类浏览（仅询问分类结构，不含具体商品）
     IntentExample(SCENARIO.PRODUCT_CATALOG, "商品分类浏览", "READ_ONLY", "你们主要卖什么"),
-    IntentExample(SCENARIO.PRODUCT_CATALOG, "商品分类浏览", "READ_ONLY", "给我看看商品"),
-    IntentExample(SCENARIO.PRODUCT_CATALOG, "商品分类浏览", "READ_ONLY", "我想看看商品"),
     IntentExample(SCENARIO.PRODUCT_CATALOG, "商品分类浏览", "READ_ONLY", "看看你们卖什么"),
-    IntentExample(SCENARIO.PRODUCT_CATALOG, "商品分类浏览", "READ_ONLY", "给我列一下产品"),
-    IntentExample(SCENARIO.PRODUCT_CATALOG, "商品分类浏览", "READ_ONLY", "我想买东西"),
-    IntentExample(SCENARIO.PRODUCT_CATALOG, "商品分类浏览", "READ_ONLY", "想看看有什么可买的"),
-    IntentExample(SCENARIO.PRODUCT_CATALOG, "商品分类浏览", "READ_ONLY", "有什么选择"),
-    IntentExample(SCENARIO.PRODUCT_CATALOG, "商品分类浏览", "READ_ONLY", "给我介绍一下你们的商品"),
-    IntentExample(SCENARIO.PRODUCT_CATALOG, "商品分类浏览", "READ_ONLY", "我想了解一下你们的产品"),
-    IntentExample(SCENARIO.PRODUCT_CATALOG, "商品分类浏览", "READ_ONLY", "你们店里有什么"),
-    IntentExample(SCENARIO.PRODUCT_CATALOG, "商品分类浏览", "READ_ONLY", "有哪些商品可以看"),
+    IntentExample(SCENARIO.PRODUCT_CATALOG, "商品分类浏览", "READ_ONLY", "你们有哪些分类"),
+    IntentExample(SCENARIO.PRODUCT_CATALOG, "商品分类浏览", "READ_ONLY", "有什么分类"),
+    IntentExample(SCENARIO.PRODUCT_CATALOG, "商品分类浏览", "READ_ONLY", "分哪些类别"),
 
     #  product.filter_search — 条件筛选
     IntentExample(SCENARIO.PRODUCT_FILTER_SEARCH, "条件筛选", "READ_ONLY", "有哪些款式"),
@@ -169,6 +158,21 @@ DEFAULT_INTENT_EXAMPLES: tuple[IntentExample, ...] = (
     IntentExample(SCENARIO.PRODUCT_FILTER_SEARCH, "条件筛选", "READ_ONLY", "我想要某种规格的商品"),
     IntentExample(SCENARIO.PRODUCT_FILTER_SEARCH, "条件筛选", "READ_ONLY", "帮我按预算找商品"),
 
+    #  分类浏览兜底（不命中具体分类时归入筛选）
+    IntentExample(SCENARIO.PRODUCT_FILTER_SEARCH, "条件筛选", "READ_ONLY", "你们有什么产品"),
+    IntentExample(SCENARIO.PRODUCT_FILTER_SEARCH, "条件筛选", "READ_ONLY", "你们有什么商品"),
+    IntentExample(SCENARIO.PRODUCT_FILTER_SEARCH, "条件筛选", "READ_ONLY", "公司有什么产品"),
+    IntentExample(SCENARIO.PRODUCT_FILTER_SEARCH, "条件筛选", "READ_ONLY", "有什么卖的"),
+    IntentExample(SCENARIO.PRODUCT_FILTER_SEARCH, "条件筛选", "READ_ONLY", "给我看看商品"),
+    IntentExample(SCENARIO.PRODUCT_FILTER_SEARCH, "条件筛选", "READ_ONLY", "我想看看商品"),
+    IntentExample(SCENARIO.PRODUCT_FILTER_SEARCH, "条件筛选", "READ_ONLY", "给我列一下产品"),
+    IntentExample(SCENARIO.PRODUCT_FILTER_SEARCH, "条件筛选", "READ_ONLY", "想看看有什么可买的"),
+    IntentExample(SCENARIO.PRODUCT_FILTER_SEARCH, "条件筛选", "READ_ONLY", "有什么选择"),
+    IntentExample(SCENARIO.PRODUCT_FILTER_SEARCH, "条件筛选", "READ_ONLY", "给我介绍一下你们的商品"),
+    IntentExample(SCENARIO.PRODUCT_FILTER_SEARCH, "条件筛选", "READ_ONLY", "我想了解一下你们的产品"),
+    IntentExample(SCENARIO.PRODUCT_FILTER_SEARCH, "条件筛选", "READ_ONLY", "你们店里有什么"),
+    IntentExample(SCENARIO.PRODUCT_FILTER_SEARCH, "条件筛选", "READ_ONLY", "有哪些商品可以看"),
+
     #  product.pagination_sort — 翻页与排序
     IntentExample(SCENARIO.PRODUCT_PAGINATION, "翻页排序", "READ_ONLY", "有没有新品"),
     IntentExample(SCENARIO.PRODUCT_PAGINATION, "翻页排序", "READ_ONLY", "最近有什么新品"),
@@ -182,15 +186,10 @@ DEFAULT_INTENT_EXAMPLES: tuple[IntentExample, ...] = (
     IntentExample(SCENARIO.PRODUCT_PAGINATION, "翻页排序", "READ_ONLY", "还有别的吗"),
 
     #  product.detail — 商品详情
-    IntentExample(SCENARIO.PRODUCT_DETAIL, "商品详情", "READ_ONLY", "这个适合什么场景"),
     IntentExample(SCENARIO.PRODUCT_DETAIL, "商品详情", "READ_ONLY", "有什么功能"),
     IntentExample(SCENARIO.PRODUCT_DETAIL, "商品详情", "READ_ONLY", "这款怎么样"),
-    IntentExample(SCENARIO.PRODUCT_DETAIL, "商品详情", "READ_ONLY", "适合送人吗"),
     IntentExample(SCENARIO.PRODUCT_DETAIL, "商品详情", "READ_ONLY", "质量怎么样"),
     IntentExample(SCENARIO.PRODUCT_DETAIL, "商品详情", "READ_ONLY", "有什么特点"),
-    IntentExample(SCENARIO.PRODUCT_DETAIL, "商品详情", "READ_ONLY", "这个好不好用"),
-    IntentExample(SCENARIO.PRODUCT_DETAIL, "商品详情", "READ_ONLY", "这个值得买吗"),
-    IntentExample(SCENARIO.PRODUCT_DETAIL, "商品详情", "READ_ONLY", "适合什么人用"),
     IntentExample(SCENARIO.PRODUCT_DETAIL, "商品详情", "READ_ONLY", "这个靠谱吗"),
     IntentExample(SCENARIO.PRODUCT_DETAIL, "商品详情", "READ_ONLY", "有什么卖点"),
     IntentExample(SCENARIO.PRODUCT_DETAIL, "商品详情", "READ_ONLY", "可以介绍一下这个吗"),
@@ -249,11 +248,9 @@ DEFAULT_INTENT_EXAMPLES: tuple[IntentExample, ...] = (
     IntentExample(SCENARIO.PRODUCT_ATTRIBUTE_QUERY, "商品属性查询", "READ_ONLY", "商品参数给我看一下"),
 
     #  product.compare — 商品对比
-    IntentExample(SCENARIO.PRODUCT_COMPARE, "商品对比", "READ_ONLY", "哪个好用"),
     IntentExample(SCENARIO.PRODUCT_COMPARE, "商品对比", "READ_ONLY", "有什么区别"),
     IntentExample(SCENARIO.PRODUCT_COMPARE, "商品对比", "READ_ONLY", "和另一款有什么区别"),
     IntentExample(SCENARIO.PRODUCT_COMPARE, "商品对比", "READ_ONLY", "这几个怎么选"),
-    IntentExample(SCENARIO.PRODUCT_COMPARE, "商品对比", "READ_ONLY", "哪个性价比高"),
     IntentExample(SCENARIO.PRODUCT_COMPARE, "商品对比", "READ_ONLY", "这款和那款区别大吗"),
 
     #  product.usage — 商品适用性咨询
@@ -277,6 +274,8 @@ DEFAULT_INTENT_EXAMPLES: tuple[IntentExample, ...] = (
     IntentExample(SCENARIO.PRODUCT_USAGE, "商品适用性", "READ_ONLY", "适用于哪些场景"),
     IntentExample(SCENARIO.PRODUCT_USAGE, "商品适用性", "READ_ONLY", "平时可以用在什么地方"),
     IntentExample(SCENARIO.PRODUCT_USAGE, "商品适用性", "READ_ONLY", "这款适合什么情况下用"),
+    #  可用性（好不好用归 usage，不归 detail）
+    IntentExample(SCENARIO.PRODUCT_USAGE, "商品适用性", "READ_ONLY", "这个好不好用"),
 
     #  order.list — 订单列表
     IntentExample(SCENARIO.ORDER_LIST, "订单列表", "READ_ONLY", "查订单"),
@@ -512,11 +511,11 @@ DEFAULT_INTENT_EXAMPLES: tuple[IntentExample, ...] = (
 # ── 场景说明映射（LLM 场景识别 prompt 使用） ──
 
 SCENARIO_DESCRIPTIONS: dict[str, str] = {
-    SCENARIO.PRODUCT_CATALOG: "浏览商品分类列表，例如：有什么耳机",
-    SCENARIO.PRODUCT_FILTER_SEARCH: "按条件筛选商品，例如：500-1000的防水耳机",
-    SCENARIO.PRODUCT_DETAIL: "商品详情咨询，例如：这个怎么样、多少钱、有货吗",
-    SCENARIO.PRODUCT_COMPARE: "商品对比，例如：第一款和第二款有什么区别",
-    SCENARIO.PRODUCT_USAGE: "商品适用性咨询，例如：这款适合跑步吗、可以用来游泳吗",
+    SCENARIO.PRODUCT_CATALOG: "浏览商品分类树，查看有哪些大类，不含具体商品查询，例如：你们卖什么、有哪些分类",
+    SCENARIO.PRODUCT_FILTER_SEARCH: "查找或筛选商品、请求推荐，例如：有什么商品、有什么选择、推荐一下、预算内有哪些",
+    SCENARIO.PRODUCT_DETAIL: "商品详情咨询，聚焦价格、库存、参数、配置、颜色、评价，例如：这个怎么样、多少钱、有货吗",
+    SCENARIO.PRODUCT_COMPARE: "有明确比较对象的商品对比，例如：第一款和第二款有什么区别、这款和那款哪个好",
+    SCENARIO.PRODUCT_USAGE: "商品适用性咨询，适合/用于/能不能用来/好不好用，例如：这款适合跑步吗、可以用来游泳吗",
     SCENARIO.PRODUCT_SKU_QUERY: "按 SKU 或货号精确查询商品，例如：查一下这个 SKU、按货号查一下",
     SCENARIO.PRODUCT_ATTRIBUTE_QUERY: "查询商品规格属性，例如：这款有哪些参数、商品参数给我看一下",
     SCENARIO.PRODUCT_PAGINATION: "翻页/排序，例如：下一页、按价格排序",

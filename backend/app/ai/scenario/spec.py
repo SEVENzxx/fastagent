@@ -124,6 +124,7 @@ SCENARIO_SPECS: dict[str, ScenarioSpec] = {
         scenario_id="product.filter_search",
         allowed_skills=["search_products"],
         allow_llm_entity_extraction=True,
+        allow_vector_search=True,
         risk_level="read_only",
     ),
     "product.sku_query": ScenarioSpec(

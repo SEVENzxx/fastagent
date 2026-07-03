@@ -59,6 +59,12 @@ PRODUCT_RECOMMEND_ANALYSIS_PROMPT = """你是一个商品推荐助手。
 符合条件的商品：
 {products}
 
-请从这些商品中推荐最符合用户需求的 1-3 款，说明推荐理由。
-如果商品都不太符合用户的需求，也要如实说明并给出参考建议。
-回复要简洁自然，直接面向用户。"""
+请输出严格 JSON（不要 Markdown），格式如下：
+{{
+  "recommended_ids": [1, 3, 5],
+  "recommendation_reply": "面向用户的推荐回复"
+}}
+
+规则：
+- recommended_ids: 从上方商品列表中选出最符合用户需求的 1-3 款的序号（行号），不要编造不存在的序号，如果没有特别合适的推荐则回空数组
+- recommendation_reply: 简洁自然的推荐回复，说明推荐理由，直接面向用户"""

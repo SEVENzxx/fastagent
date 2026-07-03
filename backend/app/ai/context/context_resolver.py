@@ -5,7 +5,9 @@
   2. 指代引用（"这款"/"它"/"那个"）→ last_focus_product_id → 意图分类
   3. 省略型（"适合跑步吗"）→ last_focus_product_id + 关键词 → product.usage
 
-输出 ContextResolution(scenario_id, entities, confidence) 或 None。
+新搜索意图检测：
+  如果消息包含"推荐/找/有没有/有什么/预算/筛选"等信号词且不含指代词，
+  视为新搜索意图，跳过上下文绑定，交由 RecognitionPipeline 处理。
 
 与 RecognitionPipeline 的职责边界：
   - ContextResolver 只处理上下文延续，不做新意图识别
@@ -37,16 +39,29 @@ _RE_BARE_NUMBER = re.compile(r"^\s*(\d+)\s*$")
 
 _DEIXIS_PREFIXES: tuple[str, ...] = (
     "这个", "这款", "它", "它们", "那个", "那款",
+    "这些", "上面这些", "这几款", "这里面",
     "刚才那个", "刚刚那个", "刚才那款", "刚刚那款",
 )
 
+# 列表级指代前缀（优先于单品指代，引用 last_visible_products 而非 last_focus_product_id）
+_LIST_DEIXIS_PREFIXES: tuple[str, ...] = (
+    "这些", "上面这些", "这几款", "这里面", "这些商品",
+)
+
+# ── 新搜索意图信号词（不含指代时，不绑定旧焦点）──
+
+_NEW_SEARCH_KEYWORDS: frozenset[str] = frozenset({
+    "推荐", "找找", "有没有", "有什么", "预算",
+    "筛选", "筛一下", "便宜", "价位",
+})
+
 # ── 用法/适用性意图关键词（触发 product.usage）──
 
-_USAGE_KEYWORDS: frozenset[str] = frozenset({"适合", "用来", "用于"})
+_USAGE_KEYWORDS: frozenset[str] = frozenset({"适合", "用来", "用于", "好不好用", "能不能"})
 
 # ── 购买意图关键词（含有这些词时不走序号解析，让 RecognitionPipeline 处理）──
 
-_ORDER_KEYWORDS: frozenset[str] = frozenset({"下单", "买", "订", "购买"})
+_ORDER_KEYWORDS: frozenset[str] = frozenset({"下单", "订", "购买"})
 
 
 def _parse_ordinal(text: str) -> int | None:
@@ -72,6 +87,17 @@ def _is_deixis(text: str) -> bool:
     return any(stripped.startswith(p) for p in _DEIXIS_PREFIXES)
 
 
+def _is_list_deixis(text: str) -> bool:
+    """判断是否以列表级指代词开头（"这些/上面这些/这几款/这些商品"）。
+
+    列表级指代引用 last_visible_products 而非 last_focus_product_id。
+    """
+    stripped = text.strip()
+    if not stripped:
+        return False
+    return any(stripped.startswith(p) for p in _LIST_DEIXIS_PREFIXES)
+
+
 def _contains_deixis(text: str) -> bool:
     """判断文本中是否包含指代词（句中任意位置）。
 
@@ -82,6 +108,14 @@ def _contains_deixis(text: str) -> bool:
     if not stripped:
         return False
     return any(p in stripped for p in _DEIXIS_PREFIXES)
+
+
+def _has_new_search_signal(text: str) -> bool:
+    """判断是否包含新搜索意图信号词。
+
+    当用户已有关注商品但发起新搜索时，不应绑定旧焦点。
+    """
+    return any(kw in text for kw in _NEW_SEARCH_KEYWORDS)
 
 
 def _is_usage_question(text: str) -> bool:
@@ -178,6 +212,40 @@ class ContextResolver:
                 ordinal, len(products),
             )
             return None
+
+        # ── 1.5: 新搜索意图检测 — 有信号词且无指代时，不绑定旧焦点 ──
+        if (
+            context.last_focus_product_id is not None
+            and _has_new_search_signal(stripped)
+            and not _is_deixis(stripped)
+            and not _contains_deixis(stripped)
+        ):
+            logger.info(
+                "【ContextResolver】检测到新搜索信号词，跳过上下文绑定: %s",
+                stripped[:30],
+            )
+            return None
+
+        # ── 1.75: 列表级指代（"这些电脑" → last_visible_products）优先于单品指代 ──
+        if _is_list_deixis(stripped) and context.last_visible_products:
+            products = context.last_visible_products
+            product_ids = [
+                int(p["product_id"]) for p in products if p.get("product_id")
+            ]
+            if product_ids:
+                logger.info(
+                    "【ContextResolver】列表级指代 product_ids=%s count=%d text=%s",
+                    product_ids[:10], len(product_ids), stripped[:20],
+                )
+                return ContextResolution(
+                    scenario_id="product.filter_search",
+                    entities={
+                        "context_product_ids": product_ids,
+                        "analysis_mode": "list_analysis",
+                        "question": stripped,
+                        "reason": "上下文列表级指代",
+                    },
+                )
 
         # ── 2: 指代引用（"这款"/"它"/"那个"）→ last_focus_product_id ──
         if _is_deixis(stripped):
