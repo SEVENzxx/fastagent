@@ -4,7 +4,6 @@
 LLM_ENTITY_EXTRACT_MAX_TOKENS: int = 500         # 实体抽取 LLM 最大 token
 PRODUCT_ATTR_EXTRACT_MAX_TOKENS: int = 1024      # 商品属性抽取 max_tokens
 SCENE_RECOGNITION_MAX_TOKENS: int = 200          # 场景识别 LLM 判决 max_tokens
-SEMANTIC_RECOMMEND_MAX_TOKENS: int = 512         # 语义推荐 LLM max_tokens
 
 # ── Pending ──
 GRAPH_PENDING_TTL_SECONDS: int = 7200            # LangGraph Pending TTL（2 小时）

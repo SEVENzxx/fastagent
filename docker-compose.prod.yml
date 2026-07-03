@@ -62,6 +62,9 @@ services:
         condition: service_healthy
       qdrant:
         condition: service_started
+    networks:
+      - fastagent-prod_default
+      - langfuse_default
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health')\""]
       interval: 30s
@@ -80,6 +83,12 @@ services:
     depends_on:
       backend:
         condition: service_healthy
+
+networks:
+  fastagent-prod_default:
+    external: true
+  langfuse_default:
+    external: true
 
 volumes:
   pgdata_prod:

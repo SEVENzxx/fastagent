@@ -837,31 +837,6 @@ class TestUnimplementedScenarios:
     """未实现场景返回"开发中"。"""
 
     @pytest.mark.asyncio
-    async def test_semantic_recommend_no_products(self) -> None:
-        """语义推荐无匹配商品时返回推荐提示。"""
-        FakeProductSkill.reset()
-        handler = ProductHandler(skill=FakeProductSkill, resolver=FakeResolver())
-        ctx = make_context()
-        decision = make_decision("product.semantic_recommend", text="推荐一款防水耳机")
-        result = await handler.execute(decision, ctx)
-        # LLM 抽取降级为纯文本搜索，product_candidates 为空 → 推荐提示
-        assert "没有找到" in result.reply or "推荐" in result.reply
-        assert result.pending_directive == PendingDirective.CLEAR
-
-    @pytest.mark.asyncio
-    async def test_semantic_recommend_with_results(self) -> None:
-        """语义推荐有匹配商品时返回列表。"""
-        FakeProductSkill.reset()
-        FakeProductSkill.add_product(101, name="防水耳机", price=199.0)
-        handler = ProductHandler(skill=FakeProductSkill, resolver=FakeResolver())
-        ctx = make_context()
-        decision = make_decision("product.semantic_recommend", text="推荐一款防水耳机")
-        result = await handler.execute(decision, ctx)
-        assert result.scenario_id == "product.semantic_recommend"
-        assert "防水耳机" in result.reply
-        assert result.pending_directive == PendingDirective.CLEAR
-
-    @pytest.mark.asyncio
     async def test_sku_query_no_sku(self) -> None:
         """无 SKU 参数时提示输入 SKU。"""
         handler = ProductHandler(skill=FakeProductSkill, resolver=FakeResolver())

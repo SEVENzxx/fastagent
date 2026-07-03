@@ -119,7 +119,7 @@ def fake_skill_registry() -> HandlerRegistry:
         resolver=fake_resolver,
         knowledge_skill=FakeKnowledgeSkill,
     )
-    for sid in ("product.catalog", "product.filter_search", "product.semantic_recommend",
+    for sid in ("product.catalog", "product.filter_search",
                 "product.sku_query", "product.detail", "product.compare",
                 "product.attribute_query", "product.usage", "product.pagination_sort"):
         r.register(sid, product_handler)
@@ -990,30 +990,6 @@ class TestProductFakeSkillContent:
         trace = result.metadata.get("resource_trace", {})
         assert "search_products" in trace.get("skill_calls", [])  # 多候选通过商品搜索写入上下文
         assert isinstance(trace.get("llm_calls"), int)
-
-    @pytest.mark.asyncio
-    async def test_semantic_recommend_fallback_on_llm_failure(
-        self,
-        fake_skill_service: AssistantService,
-        fake_skill_mocks: dict[str, Any],
-    ) -> None:
-        """product.semantic_recommend LLM 抽参失败 → 降级回复，不抛异常。"""
-        from tests.test_product_handler import FakeProductSkill
-
-        FakeProductSkill.reset()
-        FakeProductSkill.add_product(101, name="无线耳机", price=199.0)
-
-        result = await (ScenarioTestBuilder(fake_skill_service, fake_skill_mocks)
-            .user_says("推荐一款无线耳机")
-            .scenario_is("product.semantic_recommend")
-            .run())
-
-        # LLM 抽参失败（SemanticRecommendExtractor 依赖真实 LLM），
-        # handler 应降级返回空结果提示，而非抛异常
-        assert result.metadata["scenario_id"] == "product.semantic_recommend"
-        trace = result.metadata.get("resource_trace", {})
-        assert isinstance(trace.get("llm_calls"), int)
-
 
 # ══════════════════════════════════════════════════════════
 # 4.x 订单 FakeSkill 全链路内容+Trace

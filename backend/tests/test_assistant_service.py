@@ -571,15 +571,6 @@ class TestProductScenario:
         assert "系统异常" not in result.reply
         assert "暂时不可用" not in result.reply
 
-    @pytest.mark.asyncio
-    async def test_semantic_recommend_with_default_registry(self) -> None:
-        """product.semantic_recommend 使用默认 registry，不应返回系统异常。"""
-        service = await self._make_service("product.semantic_recommend", "推荐一款耳机")
-        result = await service.process_message(tenant_id=1, conversation_id=1, text="推荐一款耳机")
-        assert result.reply, "应有回复，不返回系统异常"
-        assert "系统异常" not in result.reply
-        assert "暂时不可用" not in result.reply
-
 
 # ══════════════════════════════════════════════
 # 9. Order 场景（默认 registry，不崩溃）
