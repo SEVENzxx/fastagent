@@ -18,7 +18,6 @@ from app.models.product import Product
 logger = logging.getLogger(__name__)
 
 _LEAF_CATEGORIES_CACHE_PREFIX = "tenant:leaf_cats"
-_ALL_CATEGORIES_CACHE_PREFIX = "tenant:all_cats"
 
 
 async def list_categories(db: AsyncSession, tenant_id: int) -> list[Category]:
@@ -250,41 +249,3 @@ async def _write_categories_to_cache(cache_key: str, leaves: list[tuple[int, str
         await r.set(cache_key, json.dumps(leaves, ensure_ascii=False), ex=TENANT_ATTR_CACHE_TTL)
     except Exception:
         logger.debug("Redis 写入叶子分类缓存失败: key=%s", cache_key)
-
-
-async def get_tenant_category_hierarchy_cached_only(
-    tenant_id: int,
-) -> list[tuple[int, str, int | None]] | None:
-    """读取全部分类（含层级关系）：(id, name, parent_id)，Redis 优先，miss 时查 DB 兜底。
-
-    用于 LLM 参数抽取 prompt，让 LLM 能识别父分类名称并映射到子叶子。
-    """
-    cache_key = f"{_ALL_CATEGORIES_CACHE_PREFIX}:{tenant_id}"
-    try:
-        r = get_redis_client()
-        cached = await r.get(cache_key)
-        if cached:
-            data = json.loads(cached)
-            if isinstance(data, list):
-                return [(int(item[0]), str(item[1]), (int(item[2]) if item[2] is not None else None))
-                        for item in data if isinstance(item, list) and len(item) >= 2]
-    except Exception:
-        logger.debug("Redis 读取全部分类缓存失败: key=%s", cache_key)
-
-    from app.integrations.database import AsyncSessionLocal
-    try:
-        async with AsyncSessionLocal() as db:
-            categories = await list_categories(db, tenant_id)
-            hierarchy = [(c.id, c.name, c.parent_id) for c in categories]
-            try:
-                r = get_redis_client()
-                await r.set(cache_key, json.dumps([[str(id_), name, str(pid) if pid is not None else None]
-                                                   for id_, name, pid in hierarchy],
-                                                  ensure_ascii=False),
-                            ex=TENANT_ATTR_CACHE_TTL)
-            except Exception:
-                pass
-            return hierarchy
-    except Exception:
-        logger.debug("全部分类 DB 查询失败: tenant_id=%s", tenant_id)
-        return None
