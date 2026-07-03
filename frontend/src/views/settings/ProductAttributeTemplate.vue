@@ -79,7 +79,8 @@ function applyJson() {
       ElMessage.error(`第 ${i + 1} 项缺少 key 或 label`)
       return
     }
-    if (item.type === 'enum' && (!item.allowed_values || item.allowed_values.length === 0)) {
+    const values = item.allowed_values || item.allowedValues
+    if (item.type === 'enum' && (!values || values.length === 0)) {
       ElMessage.error(`属性 "${item.key}" 是 enum 类型但未配置 allowed_values`)
       return
     }
