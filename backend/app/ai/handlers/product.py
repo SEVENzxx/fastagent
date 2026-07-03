@@ -255,7 +255,6 @@ class ProductHandler(BaseHandler):
                 min_price=extracted.get("price_min"),
                 max_price=extracted.get("price_max"),
                 attr_filters=extracted.get("attr_filters") or {},
-                query_text=extracted.get("query_text", ""),
             ),
         )
         if not products:
